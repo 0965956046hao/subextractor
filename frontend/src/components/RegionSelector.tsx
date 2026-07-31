@@ -1,0 +1,433 @@
+"use client";
+
+import { useRef, useState, useEffect, useCallback } from "react";
+import type { Region } from "@/lib/api";
+import { getVideoUrl } from "@/lib/api";
+
+interface Props {
+  videoId: string;
+  onConfirmed: (region: Region) => void;
+}
+
+const HANDLE_RADIUS = 6;
+type HandleId = "nw" | "ne" | "sw" | "se" | "n" | "s" | "w" | "e";
+
+function clamp(v: number, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, v));
+}
+function denorm(r: Region, w: number, h: number) {
+  return { x1: r.x1 * w, y1: r.y1 * h, x2: r.x2 * w, y2: r.y2 * h };
+}
+function regionUsable(r: Region | null): r is Region {
+  return !!r && r.x2 - r.x1 >= 0.01 && r.y2 - r.y1 >= 0.01;
+}
+
+const HANDLE_CURSOR: Record<HandleId, string> = {
+  nw: "nwse-resize", ne: "nesw-resize",
+  sw: "nesw-resize", se: "nwse-resize",
+  n: "ns-resize", s: "ns-resize",
+  w: "ew-resize", e: "ew-resize",
+};
+const ALL_HANDLES: HandleId[] = ["nw", "ne", "sw", "se", "n", "s", "w", "e"];
+
+type DragState =
+  | { type: "idle" }
+  | { type: "draw"; startX: number; startY: number }
+  | { type: "move"; startX: number; startY: number; rect: Region }
+  | { type: "resize"; handle: HandleId; startX: number; startY: number; rect: Region };
+
+function fmtTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+export default function RegionSelector({ videoId, onConfirmed }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rectRef = useRef<Region | null>(null);
+  const dragRef = useRef<DragState>({ type: "idle" });
+  const rafRef = useRef<number>(0);
+  const timelineRef = useRef<HTMLDivElement>(null);
+
+  const [size, setSize] = useState({ w: 800, h: 450 });
+  const [playing, setPlaying] = useState(false);
+  const [hasRect, setHasRect] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [seeking, setSeeking] = useState(false);
+
+  // ── Canvas rendering ──
+  const redraw = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const r = rectRef.current;
+    ctx.clearRect(0, 0, c.width, c.height);
+    if (!r) return;
+    const p = denorm(r, c.width, c.height);
+
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.clearRect(p.x1, p.y1, p.x2 - p.x1, p.y2 - p.y1);
+
+    ctx.strokeStyle = "rgba(59,130,246,0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    ctx.strokeRect(p.x1, p.y1, p.x2 - p.x1, p.y2 - p.y1);
+
+    const a = 14;
+    ctx.strokeStyle = "rgba(96,165,250,0.6)";
+    ctx.lineWidth = 2.5;
+    [
+      [p.x1, p.y1, 1, 1], [p.x2, p.y1, -1, 1],
+      [p.x1, p.y2, 1, -1], [p.x2, p.y2, -1, -1],
+    ].forEach(([x, y, dx, dy]) => {
+      ctx.beginPath(); ctx.moveTo(x, y + dy * a);
+      ctx.lineTo(x, y); ctx.lineTo(x + dx * a, y); ctx.stroke();
+    });
+
+    for (const id of ALL_HANDLES) {
+      let cx: number, cy: number;
+      switch (id) {
+        case "nw": cx = p.x1; cy = p.y1; break;
+        case "ne": cx = p.x2; cy = p.y1; break;
+        case "sw": cx = p.x1; cy = p.y2; break;
+        case "se": cx = p.x2; cy = p.y2; break;
+        case "n": cx = (p.x1 + p.x2) / 2; cy = p.y1; break;
+        case "s": cx = (p.x1 + p.x2) / 2; cy = p.y2; break;
+        case "w": cx = p.x1; cy = (p.y1 + p.y2) / 2; break;
+        case "e": cx = p.x2; cy = (p.y1 + p.y2) / 2; break;
+      }
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "rgba(96,165,250,0.6)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, cy, HANDLE_RADIUS, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  }, []);
+
+  const scheduleRedraw = useCallback(() => {
+    if (!rafRef.current) {
+      rafRef.current = requestAnimationFrame(() => { rafRef.current = 0; redraw(); });
+    }
+  }, [redraw]);
+
+  // ── Video metadata ──
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onMeta = () => {
+      const cw = containerRef.current?.clientWidth || 800;
+      const r = v.videoWidth / v.videoHeight;
+      setSize({ w: Math.min(cw, 800), h: Math.min(cw, 800) / r });
+      setDuration(v.duration || 0);
+    };
+    v.addEventListener("loadedmetadata", onMeta);
+    return () => v.removeEventListener("loadedmetadata", onMeta);
+  }, []);
+
+  useEffect(() => {
+    if (size.w > 0 && size.h > 0) { scheduleRedraw(); }
+  }, [size, scheduleRedraw]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onPause = () => { setPlaying(false); scheduleRedraw(); };
+    const onPlay = () => setPlaying(true);
+    const onTime = () => { if (!seeking) setCurrentTime(v.currentTime); };
+    v.addEventListener("pause", onPause);
+    v.addEventListener("play", onPlay);
+    v.addEventListener("timeupdate", onTime);
+    return () => {
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("timeupdate", onTime);
+    };
+  }, [scheduleRedraw, seeking]);
+
+  // ── Pointer events ──
+  const getPos = (cx: number, cy: number) => {
+    const b = canvasRef.current?.getBoundingClientRect();
+    return b ? { x: cx - b.left, y: cy - b.top } : { x: 0, y: 0 };
+  };
+
+  const hitHandle = (px: number, py: number) => {
+    const r = rectRef.current, c = canvasRef.current;
+    if (!r || !c) return null;
+    const p = denorm(r, c.width, c.height);
+    const hs = HANDLE_RADIUS + 4;
+    for (const id of ALL_HANDLES) {
+      let cx: number, cy: number;
+      switch (id) {
+        case "nw": cx = p.x1; cy = p.y1; break;
+        case "ne": cx = p.x2; cy = p.y1; break;
+        case "sw": cx = p.x1; cy = p.y2; break;
+        case "se": cx = p.x2; cy = p.y2; break;
+        case "n": cx = (p.x1 + p.x2) / 2; cy = p.y1; break;
+        case "s": cx = (p.x1 + p.x2) / 2; cy = p.y2; break;
+        case "w": cx = p.x1; cy = (p.y1 + p.y2) / 2; break;
+        case "e": cx = p.x2; cy = (p.y1 + p.y2) / 2; break;
+      }
+      if (Math.abs(px - cx) <= hs && Math.abs(py - cy) <= hs) return id;
+    }
+    return null;
+  };
+
+  const hitRect = (px: number, py: number) => {
+    const r = rectRef.current, c = canvasRef.current;
+    if (!r || !c) return false;
+    const p = denorm(r, c.width, c.height);
+    return px >= p.x1 && px <= p.x2 && py >= p.y1 && py <= p.y2;
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const pos = getPos(e.clientX, e.clientY);
+    (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    const handle = hitHandle(pos.x, pos.y);
+    if (handle && rectRef.current) {
+      dragRef.current = { type: "resize", handle, startX: pos.x, startY: pos.y, rect: { ...rectRef.current } };
+      return;
+    }
+    if (rectRef.current && hitRect(pos.x, pos.y)) {
+      dragRef.current = { type: "move", startX: pos.x, startY: pos.y, rect: { ...rectRef.current } };
+      return;
+    }
+    const n = { x: pos.x / size.w, y: pos.y / size.h };
+    dragRef.current = { type: "draw", startX: pos.x, startY: pos.y };
+    rectRef.current = { x1: n.x, y1: n.y, x2: n.x, y2: n.y };
+    setHasRect(true);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const pos = getPos(e.clientX, e.clientY);
+    const d = dragRef.current;
+    if (d.type === "idle") {
+      const c = canvasRef.current;
+      if (c) { const h = hitHandle(pos.x, pos.y); c.style.cursor = h ? HANDLE_CURSOR[h] : hitRect(pos.x, pos.y) ? "move" : "crosshair"; }
+      return;
+    }
+    if (d.type === "draw") {
+      const n = { x: pos.x / size.w, y: pos.y / size.h };
+      const s = { x: d.startX / size.w, y: d.startY / size.h };
+      rectRef.current = { x1: clamp(Math.min(s.x, n.x)), y1: clamp(Math.min(s.y, n.y)), x2: clamp(Math.max(s.x, n.x)), y2: clamp(Math.max(s.y, n.y)) };
+      setHasRect(true); scheduleRedraw(); return;
+    }
+    const c = canvasRef.current;
+    if (!c) return;
+    const dx = (pos.x - d.startX) / c.width, dy = (pos.y - d.startY) / c.height;
+    const sr = d.rect;
+    if (d.type === "move") {
+      const x1 = clamp(sr.x1 + dx), y1 = clamp(sr.y1 + dy), x2 = clamp(sr.x2 + dx), y2 = clamp(sr.y2 + dy);
+      if (x2 - x1 < 0.01 || y2 - y1 < 0.01) return;
+      rectRef.current = { x1, y1, x2, y2 };
+    } else if (d.type === "resize") {
+      let { x1, y1, x2, y2 } = sr;
+      switch (d.handle) {
+        case "nw": x1 = clamp(sr.x1 + dx); y1 = clamp(sr.y1 + dy); break;
+        case "ne": x2 = clamp(sr.x2 + dx); y1 = clamp(sr.y1 + dy); break;
+        case "sw": x1 = clamp(sr.x1 + dx); y2 = clamp(sr.y2 + dy); break;
+        case "se": x2 = clamp(sr.x2 + dx); y2 = clamp(sr.y2 + dy); break;
+        case "n": y1 = clamp(sr.y1 + dy); break;
+        case "s": y2 = clamp(sr.y2 + dy); break;
+        case "w": x1 = clamp(sr.x1 + dx); break;
+        case "e": x2 = clamp(sr.x2 + dx); break;
+      }
+      if (x2 - x1 < 0.01 || y2 - y1 < 0.01) return;
+      rectRef.current = { x1, y1, x2, y2 };
+    }
+    setHasRect(true); scheduleRedraw();
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+    if (dragRef.current.type === "draw") {
+      const r = rectRef.current;
+      if (r && (r.x2 - r.x1 < 0.01 || r.y2 - r.y1 < 0.01)) { rectRef.current = null; setHasRect(false); }
+    }
+    dragRef.current = { type: "idle" };
+  };
+
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.paused ? v.play() : v.pause();
+  };
+
+  // ── Timeline ──
+  const handleTimelineClick = (e: React.MouseEvent) => {
+    const v = videoRef.current;
+    const bar = timelineRef.current;
+    if (!v || !bar || !duration) return;
+    const rect = bar.getBoundingClientRect();
+    const pct = clamp((e.clientX - rect.left) / rect.width);
+    const newTime = pct * duration;
+    v.currentTime = newTime;
+    setCurrentTime(newTime);
+    scheduleRedraw();
+  };
+
+  const handleTimelinePointerDown = () => {
+    setSeeking(true);
+  };
+
+  const handleTimelinePointerUp = () => {
+    setSeeking(false);
+    scheduleRedraw();
+  };
+
+  // ── Keyboard ──
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === " " || e.key === "Space") { e.preventDefault(); togglePlay(); }
+    else if (e.key === "Enter" && regionUsable(rectRef.current)) onConfirmed(rectRef.current);
+  }, [onConfirmed]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
+
+  const r = rectRef.current;
+  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  return (
+    <div className="space-y-5">
+      {/* Instructions header */}
+      <div className="glass-panel rounded-2xl p-4 sm:p-5 flex items-start justify-between gap-4">
+        <p className="text-sm text-ink-muted leading-relaxed">
+          Scrub the timeline to a moment with visible subtitles, then draw a rectangle over the subtitle region. Drag edges to adjust.
+        </p>
+        <div className="flex gap-2 flex-shrink-0">
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">Space</kbd>
+          <span className="text-[10px] text-ink-light self-center hidden sm:inline">Play</span>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">↵</kbd>
+          <span className="text-[10px] text-ink-light self-center hidden sm:inline">Confirm</span>
+        </div>
+      </div>
+
+      {/* Video container with double-bezel */}
+      <div className="double-bezel">
+        <div className="double-bezel-inner overflow-hidden">
+          <div
+            ref={containerRef}
+            className="relative bg-black select-none mx-auto"
+            style={{ width: size.w, height: size.h, maxWidth: "100%" }}
+          >
+            <video
+              ref={videoRef}
+              src={getVideoUrl(videoId)}
+              className="absolute inset-0 w-full h-full object-contain"
+              controls={false}
+              playsInline
+              preload="auto"
+            />
+            <canvas
+              ref={canvasRef}
+              width={size.w}
+              height={size.h}
+              className="absolute inset-0 touch-none"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerLeave={onPointerUp}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Playback controls — below the video frame */}
+      <div className="glass-panel rounded-2xl px-3 py-2.5 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={togglePlay}
+            aria-label={playing ? "Pause" : "Play"}
+            className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center
+                       hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300
+                       ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer"
+          >
+            {playing ? (
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+            ) : (
+              <svg className="w-4 h-4 ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            )}
+          </button>
+          <button
+            onClick={() => { videoRef.current?.pause(); }}
+            className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium
+                       bg-black/[0.03] text-ink-muted hover:bg-black/[0.06] hover:text-ink
+                       transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]
+                       active:scale-[0.97] cursor-pointer"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><rect x="2" y="3" width="20" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            Capture
+          </button>
+        </div>
+        <span className="text-[11px] font-mono text-ink-light tabular-nums tracking-tight">
+          {fmtTime(currentTime)} <span className="opacity-40">/</span> {fmtTime(duration)}
+        </span>
+      </div>
+
+      {/* ── TIMELINE ── */}
+      <div
+        ref={timelineRef}
+        className="relative h-8 flex items-center cursor-pointer group select-none"
+        onPointerDown={handleTimelinePointerDown}
+        onPointerUp={handleTimelinePointerUp}
+        onMouseDown={handleTimelineClick}
+        onMouseMove={(e) => {
+          if (e.buttons !== 1) return;
+          const v = videoRef.current;
+          const bar = timelineRef.current;
+          if (!v || !bar || !duration) return;
+          const rect = bar.getBoundingClientRect();
+          const pct2 = clamp((e.clientX - rect.left) / rect.width);
+          v.currentTime = pct2 * duration;
+          setCurrentTime(v.currentTime);
+        }}
+        onMouseLeave={handleTimelinePointerUp}
+      >
+        {/* Track */}
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-black/[0.06] overflow-hidden">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-150"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        {/* Handle */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-white border-2 border-blue-500 shadow-sm transition-opacity duration-200 opacity-0 group-hover:opacity-100 pointer-events-none"
+          style={{ left: `calc(${pct}% - 7px)` }}
+        />
+        {/* Time labels */}
+        <div className="absolute -bottom-5 inset-x-0 flex justify-between text-[10px] font-mono text-ink-light pointer-events-none">
+          <span>{fmtTime(currentTime)}</span>
+          <span>{fmtTime(duration)}</span>
+        </div>
+      </div>
+
+      <div className="h-2" /> {/* spacer for timeline labels */}
+
+      {/* Confirm bar */}
+      {regionUsable(r) && (
+        <div className="glass-panel rounded-2xl p-4 sm:p-5" style={{ animation: "fade-in 0.9s cubic-bezier(0.32,0.72,0,1) forwards" }}>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <span className="text-xs sm:text-sm text-ink-muted font-mono tracking-tight">
+              x: {r.x1.toFixed(3)} y: {r.y1.toFixed(3)} &rarr; x: {r.x2.toFixed(3)} y: {r.y2.toFixed(3)}
+            </span>
+            <button onClick={() => onConfirmed(r)} className="btn-island-primary group text-sm">
+              Extract Subtitles
+              <span className="btn-island-icon">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
+                </svg>
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

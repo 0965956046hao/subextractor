@@ -1,0 +1,24 @@
+import asyncio
+
+from fastapi import Request, HTTPException
+
+from app.services.ocr_engine import OCREngine
+
+
+def get_ocr_engine(request: Request) -> OCREngine:
+    engine: OCREngine | None = request.app.state.ocr_engine
+    if engine is None:
+        raise HTTPException(503, "OCR engine not initialized")
+    return engine
+
+
+def get_jobs(request: Request) -> dict:
+    return request.app.state.jobs
+
+
+def get_ws_clients(request: Request) -> dict:
+    return request.app.state.ws_clients
+
+
+def get_job_queue(request: Request) -> asyncio.Queue:
+    return request.app.state.job_queue

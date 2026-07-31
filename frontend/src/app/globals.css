@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  ::selection {
+    background-color: rgba(59, 130, 246, 0.18);
+    color: #1a1a1a;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.08);
+    border-radius: 2px;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #f8f8f6;
+    color: #1a1a1a;
+  }
+}
+
+@layer components {
+  .double-bezel {
+    @apply relative overflow-hidden;
+    background: rgba(0, 0, 0, 0.03);
+    padding: 1px;
+    border-radius: 2rem;
+  }
+  .double-bezel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      rgba(0, 0, 0, 0.06) 0%,
+      rgba(0, 0, 0, 0.02) 50%,
+      transparent 100%
+    );
+    -webkit-mask: linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .double-bezel-inner {
+    background: #ffffff;
+    border-radius: calc(2rem - 1px);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.8);
+    height: 100%;
+  }
+
+  .btn-island {
+    @apply inline-flex items-center gap-3 rounded-full font-medium text-sm
+           transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]
+           active:scale-[0.97] cursor-pointer;
+  }
+  .btn-island-primary {
+    @apply btn-island px-8 py-3.5 bg-blue-600 text-white
+           hover:bg-blue-500 shadow-sm;
+  }
+  .btn-island-secondary {
+    @apply btn-island px-7 py-3 bg-black/[0.03] text-ink-muted
+           hover:bg-black/[0.06] hover:text-ink;
+  }
+  .btn-island-icon {
+    @apply w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0
+           transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]
+           bg-white/20 group-hover:bg-white/30
+           group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:scale-105;
+  }
+
+  .glass-panel {
+    @apply bg-white/80 border border-black/[0.05] backdrop-blur-2xl;
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3.5 py-1
+           text-[10px] uppercase tracking-[0.2em] font-medium
+           bg-black/[0.04] text-ink-muted;
+  }
+
+  .tag {
+    @apply px-3 py-1 rounded-full text-[11px] font-medium text-ink-muted
+           bg-black/[0.03] ring-1 ring-black/[0.06];
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
