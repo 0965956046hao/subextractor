@@ -27,7 +27,10 @@ async def lifespan(app: FastAPI):
     logger.info("SubTitle Extractor v2 starting...")
     logger.info("")
     logger.info("  temp_dir: %s", settings.temp_dir)
-    logger.info("  extract_fps: %d", settings.extract_fps)
+    logger.info(
+        "  extract_fps: %d (%s)", settings.extract_fps,
+        "every frame" if settings.extract_fps <= 0 else f"~{settings.extract_fps} fps",
+    )
     logger.info("  ocr_lang: %s", settings.ocr_lang)
     logger.info("")
     logger.info("Initializing OCR engine...")

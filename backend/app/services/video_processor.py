@@ -48,14 +48,14 @@ def stream_frames(
     video_path: str,
     fps: int | None = None,
 ) -> list[tuple[np.ndarray, float]]:
-    target_fps = fps or settings.extract_fps
+    target_fps = fps if fps is not None and fps > 0 else None
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = max(1, int(round(video_fps / target_fps)))
+    step = 1 if target_fps is None else max(1, int(round(video_fps / target_fps)))
 
     logger.info(
         "  source: %.2f fps, %d frames, step=%d -> ~%d target frames",
@@ -78,7 +78,10 @@ def stream_frames(
     pbar.close()
 
     cap.release()
-    logger.info("  extracted %d frames at ~%d fps", len(frames), target_fps)
+    logger.info(
+        "  extracted %d frames (%s)",
+        len(frames), "every frame" if step == 1 else f"~{target_fps} fps",
+    )
     return frames
 
 
@@ -86,18 +89,19 @@ def stream_frames_generator(
     video_path: str,
     fps: int | None = None,
 ):
-    target_fps = fps or settings.extract_fps
+    target_fps = fps if fps is not None and fps > 0 else None
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = max(1, int(round(video_fps / target_fps)))
+    step = 1 if target_fps is None else max(1, int(round(video_fps / target_fps)))
 
     logger.info(
-        "  video: %.2f fps, %d total frames, step=%d",
+        "  video: %.2f fps, %d total frames, step=%d (%s)",
         video_fps, total_frames, step,
+        "every frame" if step == 1 else f"~{target_fps} fps",
     )
 
     idx = 0
@@ -117,7 +121,10 @@ def stream_frames_generator(
     finally:
         pbar.close()
         cap.release()
-        logger.info("  extracted %d frames at ~%d fps", extracted, target_fps)
+        logger.info(
+            "  extracted %d frames (%s)",
+            extracted, "every frame" if step == 1 else f"~{target_fps} fps",
+        )
 
 
 def crop_region(frame: np.ndarray, region: dict) -> np.ndarray:
@@ -151,8 +158,8 @@ def hamming_distance(h1: int, h2: int) -> int:
 def crops_visually_similar(
     a: np.ndarray,
     b: np.ndarray,
-    diff_thresh: int = 30,
-    ratio_thresh: float = 0.005,
+    diff_thresh: int = 12,
+    ratio_thresh: float = 0.0008,
 ) -> bool:
     if a.shape != b.shape or a.size == 0:
         return False
@@ -184,3 +191,21 @@ def cleanup_temp_keep_srt(video_id: str):
         if p.exists():
             shutil.rmtree(p)
             logger.info("  cleaned %s/%s", subdir, video_id)
+
+
+def cleanup_old_uploads():
+    """Remove videos/frames of every upload except the most recent one (SRTs kept)."""
+    import shutil
+    videos_root = settings.temp_dir / "videos"
+    if not videos_root.exists():
+        return
+    video_dirs = sorted(
+        (d for d in videos_root.iterdir() if d.is_dir()),
+        key=lambda d: d.stat().st_mtime,
+    )
+    for d in video_dirs[:-1]:
+        shutil.rmtree(d)
+        frames_dir = settings.temp_dir / "frames" / d.name
+        if frames_dir.exists():
+            shutil.rmtree(frames_dir)
+        logger.info("  cleaned old upload %s", d.name)

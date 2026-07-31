@@ -1,3 +1,6 @@
+import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -15,6 +18,65 @@ MEDIA_TYPES = {
     ".mkv": "video/x-matroska",
     ".webm": "video/webm",
 }
+
+
+@router.get("/api/videos")
+async def list_videos():
+    srt_root = settings.temp_dir / "srt"
+    videos = []
+    if srt_root.exists():
+        for srt_dir in sorted(
+            srt_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True
+        ):
+            if not srt_dir.is_dir():
+                continue
+            srt_path = srt_dir / "subtitles.srt"
+            if not srt_path.exists():
+                continue
+            video_id = srt_dir.name
+            vdir = settings.temp_dir / "videos" / video_id
+            has_video = (
+                any(f.stem.startswith("video") for f in vdir.iterdir())
+                if vdir.exists()
+                else False
+            )
+            filename = video_id
+            meta_path = vdir / "meta.json"
+            if meta_path.exists():
+                try:
+                    filename = json.loads(meta_path.read_text("utf-8")).get(
+                        "filename", video_id
+                    )
+                except Exception:
+                    pass
+            content = srt_path.read_text(encoding="utf-8")
+            entries = sum(1 for block in content.split("\n\n") if "-->" in block)
+            videos.append({
+                "video_id": video_id,
+                "filename": filename,
+                "has_video": has_video,
+                "entries": entries,
+                "created_at": datetime.fromtimestamp(
+                    srt_path.stat().st_mtime, tz=timezone.utc
+                ).isoformat(),
+            })
+    return {"videos": videos}
+
+
+@router.delete("/api/video/{video_id}")
+async def delete_video(video_id: str):
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    srt_dir = settings.temp_dir / "srt" / video_id
+    video_dir = settings.temp_dir / "videos" / video_id
+    removed_any = False
+    for d in (srt_dir, video_dir):
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            removed_any = True
+    if not removed_any:
+        raise HTTPException(404, "Video not found")
+    return {"deleted": video_id}
 
 
 def _get_video_path(video_id: str) -> Path:

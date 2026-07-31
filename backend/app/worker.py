@@ -6,15 +6,12 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
-from app.services.video_processor import (
-    stream_frames_generator,
-    crop_region,
-    cleanup_temp_keep_srt,
-)
+from app.services.video_processor import stream_frames_generator, crop_region
 from app.services.ocr_engine import OCREngine
-from app.services.subtitle_generator import generate_srt
+from app.services.subtitle_generator import generate_srt, sec_to_srt
 
 logger = logging.getLogger(__name__)
+
 
 _executor = ThreadPoolExecutor(max_workers=1)
 
@@ -58,6 +55,31 @@ def _notify_sync(loop: asyncio.AbstractEventLoop, ws_clients: dict, job_id: str,
     asyncio.run_coroutine_threadsafe(coro, loop)
 
 
+def job_log(
+    job: dict,
+    ws_clients: dict,
+    loop: asyncio.AbstractEventLoop,
+    message: str,
+    level: str = "info",
+):
+    entry = {"message": message, "ts": time.time(), "level": level}
+    job.setdefault("logs", []).append(entry)
+    logger.info("job %s: [%s] %s", job["job_id"], level, message)
+    _notify_sync(loop, ws_clients, job["job_id"], {"type": "log", **entry})
+
+
+async def job_log_async(
+    job: dict,
+    ws_clients: dict,
+    message: str,
+    level: str = "info",
+):
+    entry = {"message": message, "ts": time.time(), "level": level}
+    job.setdefault("logs", []).append(entry)
+    logger.info("job %s: [%s] %s", job["job_id"], level, message)
+    await notify_ws(ws_clients, job["job_id"], {"type": "log", **entry})
+
+
 def process_job_sync(
     video_path: str,
     region: dict,
@@ -71,32 +93,62 @@ def process_job_sync(
     logger.info("job %s: extracting frames...", job_id)
     t0 = time.time()
 
-    frames: list[tuple] = []
-    for frame, ts in stream_frames_generator(video_path, target_fps):
-        crop = crop_region(frame, region)
-        frames.append((crop, ts))
+    import cv2
 
-    t1 = time.time()
-    logger.info("job %s: %d frames in %.1fs", job_id, len(frames), t1 - t0)
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    cap.release()
 
-    total = len(frames)
+    if target_fps and target_fps > 0:
+        total_crops = max(1, round(total_frames * min(target_fps, video_fps) / video_fps))
+    else:
+        total_crops = total_frames
+
+    job_log(job, ws_clients, loop, "Đang đọc từng khung hình của video…")
+
+    crops = (
+        (crop_region(frame, region), ts)
+        for frame, ts in stream_frames_generator(video_path, target_fps)
+    )
+
     job["progress"] = 0
+    last_pct_log = 0
 
-    def progress_cb(idx: int, _total: int):
-        if idx % max(1, total // 100) == 0:
-            pct = int((idx + 1) / total * 100) if total else 0
+    def progress_cb(idx: int, total: int):
+        nonlocal last_pct_log
+        if total and idx % max(1, total // 100) == 0:
+            pct = min(100, int((idx + 1) / total * 100))
             job["progress"] = pct
+            if pct >= last_pct_log + 10:
+                last_pct_log = pct
+                job_log(
+                    job, ws_clients, loop,
+                    f"Đã nhận dạng được khoảng {pct}% của video…",
+                    "info",
+                )
             _notify_sync(loop, ws_clients, job_id, {
                 "type": "progress", "progress": pct, "phase": "ocr",
             })
 
+    job_log(job, ws_clients, loop, "Bắt đầu nhận dạng chữ viết trong video…")
     logger.info("job %s: running OCR...", job_id)
+
+    def text_cb(start: float, end: float, text: str):
+        job_log(
+            job, ws_clients, loop,
+            f"[{sec_to_srt(start)} → {sec_to_srt(end)}] {text}",
+            "text",
+        )
+
     srt_content = generate_srt(
-        frames, region, ocr_engine,
+        crops, region, ocr_engine,
         progress_callback=progress_cb,
+        text_callback=text_cb,
+        total_frames=total_crops,
     )
     t2 = time.time()
-    logger.info("job %s: OCR done in %.1fs", job_id, t2 - t1)
+    logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)
     return srt_content
 
 
@@ -113,13 +165,14 @@ async def run_job(
     try:
         job["status"] = "processing"
         job["phase"] = "frames"
+        await job_log_async(job, ws_clients, "Bắt đầu xử lý video…")
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 0, "phase": "frames",
         })
 
         video_path = job["video_path"]
         region = job["region"]
-        target_fps = job.get("fps") or settings.extract_fps
+        target_fps = job.get("fps") or settings.extract_fps or None
 
         ocr_engine.reset_cache()
 
@@ -143,6 +196,7 @@ async def run_job(
         logger.info("job %s: saving SRT...  |  total %.1fs", job_id, t_end - t_start)
 
         job["phase"] = "saving"
+        await job_log_async(job, ws_clients, "Đang lưu file phụ đề…")
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 100, "phase": "saving",
         })
@@ -154,10 +208,15 @@ async def run_job(
         srt_path.write_text(srt_content, encoding="utf-8")
 
         size_kb = srt_path.stat().st_size / 1024
-        cleanup_temp_keep_srt(video_id)
+        line_count = srt_content.count("-->")
         job["status"] = "done"
         job["progress"] = 100
         job["srt_path"] = str(srt_path)
+        await job_log_async(
+            job, ws_clients,
+            f"Hoàn tất! Đã nhận dạng {line_count} dòng phụ đề và lưu file SRT.",
+            "success",
+        )
         await notify_ws(ws_clients, job_id, {
             "type": "done", "video_id": video_id,
         })
@@ -167,6 +226,11 @@ async def run_job(
         logger.error("job %s: TIMEOUT after %ds", job_id, settings.job_timeout)
         job["status"] = "error"
         job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(
+            job, ws_clients,
+            f"Quá thời gian xử lý ({settings.job_timeout} giây). Vui lòng thử lại với video ngắn hơn.",
+            "error",
+        )
         await notify_ws(ws_clients, job_id, {
             "type": "error", "message": "Job timed out",
         })
@@ -174,6 +238,11 @@ async def run_job(
         logger.exception("job %s: FAILED  |  %s", job_id, e)
         job["status"] = "error"
         job["error"] = str(e)
+        await job_log_async(
+            job, ws_clients,
+            f"Có lỗi xảy ra khi xử lý: {e}",
+            "error",
+        )
         await notify_ws(ws_clients, job_id, {
             "type": "error", "message": str(e),
         })

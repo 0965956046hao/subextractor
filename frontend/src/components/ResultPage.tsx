@@ -1,61 +1,147 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { startProcess, getDownloadUrl, createWsUrl } from "@/lib/api";
-import type { Region } from "@/lib/api";
+import { startProcess, getJobStatus, createWsUrl } from "@/lib/api";
+import type { Region, LogEntry } from "@/lib/api";
+import TranscriptPlayer from "./TranscriptPlayer";
 
 interface Props {
   videoId: string;
   region: Region;
   onReset: () => void;
+  onDone?: () => void;
+  onViewLibrary?: () => void;
 }
 
 type Phase = "submitting" | "queued" | "frames" | "ocr" | "saving" | "done" | "error";
 
-const STAGES: { phase: Phase; label: string }[] = [
-  { phase: "submitting", label: "Submitting" },
-  { phase: "queued", label: "Queued" },
-  { phase: "frames", label: "Extracting frames" },
-  { phase: "ocr", label: "Running OCR" },
-  { phase: "saving", label: "Saving SRT" },
-];
+const STATUS_LABELS: Record<Phase, string> = {
+  submitting: "Đang gửi yêu cầu xử lý…",
+  queued: "Đang xếp hàng chờ xử lý…",
+  frames: "Đang đọc các khung hình của video…",
+  ocr: "Đang nhận dạng chữ viết trong video…",
+  saving: "Đang lưu file phụ đề…",
+  done: "Hoàn tất! Phụ đề đã sẵn sàng.",
+  error: "Có lỗi xảy ra trong quá trình xử lý.",
+};
 
-function StageRow({ phase, label, current, index }: { phase: Phase; label: string; current: Phase; index: number }) {
-  const curIdx = STAGES.findIndex((s) => s.phase === current);
-  const phaseIdx = STAGES.findIndex((s) => s.phase === phase);
-  const isDone = phaseIdx < curIdx;
-  const isActive = phase === current;
+function fmtTime(ts: number): string {
+  if (!ts) return "";
+  return new Date(ts * 1000).toLocaleTimeString("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
 
+const LOG_STYLE: Record<string, { icon: React.ReactNode; fg: string; bg: string }> = {
+  info: {
+    fg: "text-blue-500",
+    bg: "bg-blue-500/10 ring-blue-500/20",
+    icon: (
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+        <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="0.5" fill="currentColor" /><path d="M12 11v5" />
+      </svg>
+    ),
+  },
+  success: {
+    fg: "text-emerald-500",
+    bg: "bg-emerald-500/10 ring-emerald-500/20",
+    icon: (
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" /><polyline points="8 12.5 11 15.5 16 9.5" />
+      </svg>
+    ),
+  },
+  warn: {
+    fg: "text-amber-500",
+    bg: "bg-amber-500/10 ring-amber-500/20",
+    icon: (
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+    ),
+  },
+  text: {
+    fg: "text-violet-600",
+    bg: "bg-violet-500/10 ring-violet-500/20",
+    icon: (
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+      </svg>
+    ),
+  },
+  error: {
+    fg: "text-red-500",
+    bg: "bg-red-500/10 ring-red-500/20",
+    icon: (
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+        <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
+      </svg>
+    ),
+  },
+};
+
+function LogRow({ log, index }: { log: LogEntry; index: number }) {
+  const style = LOG_STYLE[log.level] ?? LOG_STYLE.info;
   return (
     <div
-      className="flex items-center gap-4"
+      className="flex items-start gap-3 px-3 py-2 rounded-xl bg-white/60 ring-1 ring-black/[0.03]"
       style={{
-        animation: `fade-in 0.7s cubic-bezier(0.32,0.72,0,1) ${index * 120}ms forwards`,
-        opacity: 0, transform: "translateY(16px)",
+        animation: `fade-in-right 0.5s cubic-bezier(0.32,0.72,0,1) ${Math.min(index * 40, 300)}ms forwards`,
+        opacity: 0,
       }}
     >
-      <div
-        className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
-          ${isDone ? "bg-emerald-500/15 text-emerald-600 ring-1 ring-emerald-500/30" :
-            isActive ? "bg-blue-600 text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]" :
-            "bg-black/[0.02] text-ink-light ring-1 ring-black/[0.06]"}`}
-      >
-        {isDone ? (
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        ) : (
-          <span className="text-xs font-medium">{String(index + 1)}</span>
+      <span className={`w-6 h-6 rounded-full ring-1 flex items-center justify-center flex-shrink-0 mt-0.5 ${style.bg} ${style.fg}`}>
+        {style.icon}
+      </span>
+      <p className={`text-[13px] leading-snug flex-1 pt-0.5 ${log.level === "text" ? "font-medium text-violet-700" : "text-ink"}`}>{log.message}</p>
+      <span className="text-[10px] font-mono text-ink-light tabular-nums flex-shrink-0 mt-1">
+        {fmtTime(log.ts)}
+      </span>
+    </div>
+  );
+}
+
+function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [logs]);
+
+  return (
+    <div className="rounded-2xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden mt-8">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.05] bg-white/40">
+        <span
+          className={`w-2 h-2 rounded-full transition-colors duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+            active ? "bg-blue-500 animate-pulse" : "bg-emerald-500"
+          }`}
+        />
+        <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
+          Nhật ký &amp; nội dung trích xuất
+        </span>
+        <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
+          {logs.length} sự kiện
+        </span>
+      </div>
+      <div ref={containerRef} className="max-h-[380px] overflow-y-auto p-3 space-y-1.5">
+        {logs.map((log, i) => (
+          <LogRow key={`${log.ts}-${i}`} log={log} index={i} />
+        ))}
+        {logs.length === 0 && (
+          <div className="flex items-center gap-2.5 px-3 py-3">
+            <svg className="w-4 h-4 text-blue-500 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
+              <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <p className="text-[13px] text-ink-light">Đang chờ máy chủ phản hồi…</p>
+          </div>
         )}
       </div>
-      <span
-        className={`text-sm transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]
-          ${isDone ? "text-emerald-600/70" : isActive ? "text-ink font-medium" : "text-ink-light"}`}
-      >
-        {label}
-      </span>
-      {isActive && <svg className="w-3.5 h-3.5 text-blue-500 ml-auto animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" /><path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>}
-      {isDone && <svg className="w-3.5 h-3.5 text-emerald-500/60 ml-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>}
     </div>
   );
 }
@@ -73,14 +159,23 @@ function SuccessIcon() {
   );
 }
 
-export default function ResultPage({ videoId, region, onReset }: Props) {
+export default function ResultPage({ videoId, region, onReset, onDone, onViewLibrary }: Props) {
   const [phase, setPhase] = useState<Phase>("submitting");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const seenRef = useRef(new Set<string>());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number>(0);
   const submittedVideoRef = useRef<string | null>(null);
+  const doneNotifiedRef = useRef(false);
+
+  const appendLog = useCallback((message: string, level = "info", ts?: number) => {
+    const key = `${ts ?? 0}-${message}`;
+    if (seenRef.current.has(key)) return;
+    seenRef.current.add(key);
+    setLogs((prev) => [...prev, { message, level, ts: ts ?? Date.now() / 1000 }]);
+  }, []);
 
   const connectWs = useCallback((id: string) => {
     wsRef.current?.close();
@@ -91,116 +186,150 @@ export default function ResultPage({ videoId, region, onReset }: Props) {
         const data = JSON.parse(e.data);
         switch (data.type) {
           case "progress": setProgress(data.progress); setPhase(data.phase as Phase); break;
+          case "log": appendLog(data.message, data.level || "info", data.ts); break;
           case "done": setPhase("done"); setProgress(100); break;
-          case "error": setPhase("error"); setError(data.message || "Processing failed"); break;
+          case "error": setPhase("error"); setError(data.message || "Xử lý thất bại"); break;
         }
       } catch { /* ignore */ }
     };
     ws.onclose = () => {
       if (reconnectRef.current < 5) {
         reconnectRef.current += 1;
+        appendLog("Mất kết nối tạm thời, đang thử kết nối lại…", "warn");
         setTimeout(() => connectWs(id), 2000);
       }
     };
     ws.onerror = () => ws.close();
-  }, []);
+  }, [appendLog]);
 
   useEffect(() => {
     if (submittedVideoRef.current === videoId) return;
     submittedVideoRef.current = videoId;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     (async () => {
       try {
+        appendLog("Đang gửi yêu cầu xử lý đến máy chủ…");
         const job = await startProcess(videoId, region);
-        setJobId(job.job_id); setPhase("queued"); connectWs(job.job_id);
+        setPhase("queued");
+        connectWs(job.job_id);
+        pollTimer = setInterval(async () => {
+          try {
+            const st = await getJobStatus(job.job_id);
+            if (st.logs) st.logs.forEach((l) => appendLog(l.message, l.level || "info", l.ts));
+            if (st.status === "done") { setPhase("done"); setProgress(100); stopPolling(); }
+            else if (st.status === "error") { setPhase("error"); setError(st.error || "Xử lý thất bại"); stopPolling(); }
+            else { setProgress(st.progress); setPhase((st.phase as Phase) || "queued"); }
+          } catch (err: unknown) {
+            const axiosErr = err as { response?: { status?: number; data?: { detail?: string } } };
+            if (axiosErr.response?.status === 404) {
+              stopPolling();
+              setPhase("error");
+              setError("Job no longer exists (server may have restarted). Please try again.");
+            }
+          }
+        }, 4000);
       } catch (err: unknown) {
         const axiosErr = err as { response?: { data?: { detail?: string } } };
         const msg = axiosErr.response?.data?.detail || (err instanceof Error ? err.message : "Failed to start");
         setPhase("error"); setError(msg);
+        appendLog(`Không thể bắt đầu xử lý: ${msg}`, "error");
       }
     })();
-    return () => wsRef.current?.close();
-  }, [videoId, region, connectWs]);
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+    return () => { wsRef.current?.close(); if (pollTimer) clearInterval(pollTimer); };
+  }, [videoId, region, connectWs, appendLog]);
+
+  useEffect(() => {
+    if (phase === "done" && !doneNotifiedRef.current) {
+      doneNotifiedRef.current = true;
+      onDone?.();
+    }
+  }, [phase, onDone]);
 
   const isProcessing = phase !== "done" && phase !== "error";
 
   return (
     <div className="space-y-6">
-      <div className="double-bezel">
-        <div className="double-bezel-inner p-6 sm:p-8">
-          <div className="text-center mb-6">
-            {phase === "done" ? <SuccessIcon /> : isProcessing ? (
-              <svg className="w-6 h-6 text-blue-500 animate-spin mx-auto" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
-                <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            ) : null}
-            <p className="text-sm text-ink-muted mt-3">
-              {isProcessing
-                ? phase === "submitting" ? "Submitting job…" : phase === "queued" ? "Waiting in queue…"
-                  : phase === "frames" ? "Extracting video frames…" : phase === "ocr" ? "Running OCR recognition…"
-                  : phase === "saving" ? "Saving subtitle file…" : "Processing…"
-                : phase === "done" ? "Extraction complete" : "Error"}
-            </p>
-          </div>
-
-          <div className="max-w-sm mx-auto mb-8">
-            <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
-                  ${phase === "error" ? "bg-red-500" : phase === "done" ? "bg-gradient-to-r from-emerald-500 to-emerald-400" : "bg-gradient-to-r from-blue-600 to-blue-400"}`}
-                style={{ width: `${Math.max(progress, 2)}%` }}
-              />
-            </div>
-            <p className="text-center text-xs font-mono text-ink-light mt-2">{progress}%</p>
-          </div>
-
-          <div className="max-w-[240px] mx-auto space-y-4">
-            {STAGES.map((s, i) => <StageRow key={s.phase} phase={s.phase} label={s.label} current={phase} index={i} />)}
-          </div>
-
-          {error && (
-            <div className="mt-6 p-4 rounded-2xl bg-red-500/10 ring-1 ring-red-500/15" style={{ animation: "fade-in 0.7s cubic-bezier(0.32,0.72,0,1) forwards" }}>
-              <div className="flex items-start gap-3">
-                <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                  <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+      {isProcessing || phase === "error" ? (
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-6 sm:p-8">
+            <div className="text-center mb-6">
+              {phase === "error" ? (
+                <svg className="w-6 h-6 text-red-500 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                  <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
                 </svg>
-                <p className="text-sm text-red-600/80">{error}</p>
+              ) : (
+                <svg className="w-6 h-6 text-blue-500 animate-spin mx-auto" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
+                  <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              )}
+              <p className="text-sm text-ink mt-3 font-medium">{STATUS_LABELS[phase]}</p>
+            </div>
+
+            <div className="max-w-sm mx-auto">
+              <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
+                    ${phase === "error" ? "bg-red-500" : "bg-gradient-to-r from-blue-600 to-blue-400"}`}
+                  style={{ width: `${Math.max(progress, 2)}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-[11px] text-ink-light">Tiến trình xử lý</p>
+                <p className="text-xs font-mono text-ink-light tabular-nums">{progress}%</p>
               </div>
             </div>
-          )}
-        </div>
-      </div>
 
-      {phase === "done" && (
-        <div className="double-bezel" style={{ animation: "fade-in 0.9s cubic-bezier(0.32,0.72,0,1) 0.5s forwards", opacity: 0 }}>
-          <div className="double-bezel-inner p-6 sm:p-8 text-center space-y-5">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20">
-              <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                <path d="M22 11.08V12a10 10 0 11-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
-              </svg>
-              <span className="text-xs font-medium text-emerald-600/80">Success</span>
-            </div>
-            <a href={getDownloadUrl(jobId || videoId)} download="subtitles.srt" className="btn-island-primary group text-base px-10 py-4">
-              <span className="tracking-tight">Download .SRT</span>
+            <LogFeed logs={logs} active={isProcessing} />
+
+            {error && (
+              <div className="mt-6 p-4 rounded-2xl bg-red-500/10 ring-1 ring-red-500/15" style={{ animation: "fade-in 0.7s cubic-bezier(0.32,0.72,0,1) forwards" }}>
+                <div className="flex items-start gap-3">
+                  <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                    <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <p className="text-sm text-red-600/80">{error}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="text-center" style={{ animation: "scale-in 0.7s cubic-bezier(0.32,0.72,0,1) forwards" }}>
+            <SuccessIcon />
+            <p className="text-sm text-ink-muted mt-3">Trích xuất hoàn tất</p>
+          </div>
+
+          <div style={{ animation: "fade-in 0.9s cubic-bezier(0.32,0.72,0,1) 0.3s forwards", opacity: 0 }}>
+            <TranscriptPlayer videoId={videoId} />
+          </div>
+
+          <div className="flex items-center justify-center gap-3">
+            {onViewLibrary && (
+              <button onClick={onViewLibrary} className="btn-island-primary group text-sm">
+                <span className="tracking-tight">Xem thư viện</span>
+                <span className="btn-island-icon">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+                  </svg>
+                </span>
+              </button>
+            )}
+            <button onClick={onReset} className="btn-island-secondary group text-sm">
+              <span className="tracking-tight">Trích xuất video khác</span>
               <span className="btn-island-icon">
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                  <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
                 </svg>
               </span>
-            </a>
-            <p className="text-xs text-ink-light">Compatible with all video players</p>
+            </button>
           </div>
         </div>
       )}
-
-      <div className="text-center">
-        <button onClick={onReset} disabled={isProcessing} className="btn-island-secondary group text-xs">
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
-          </svg>
-          Process another video
-        </button>
-      </div>
     </div>
   );
 }

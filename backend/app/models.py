@@ -14,9 +14,16 @@ class ProcessRequest(BaseModel):
     fps: int | None = None
 
 
+class LogEntry(BaseModel):
+    message: str
+    ts: float = 0
+    level: str = "info"
+
+
 class JobStatus(BaseModel):
     job_id: str
     status: str
     phase: str = ""
     progress: int = 0
     error: str | None = None
+    logs: list[LogEntry] = []

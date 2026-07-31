@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterable
 
 from rapidfuzz import fuzz
 from tqdm import tqdm
@@ -21,20 +22,27 @@ def clean_text(text: str) -> str:
 
 
 def generate_srt(
-    frames: list[tuple[str, float]],
+    frames: Iterable[tuple[object, float]],
     region: dict,
     ocr_engine,
     progress_callback=None,
+    text_callback=None,
+    total_frames: int | None = None,
 ) -> str:
+    """Build SRT from a stream of (crop, timestamp) frames.
+
+    A subtitle boundary is placed at the midpoint between the last frame that
+    still showed the old text and the first frame that shows the new text,
+    so timestamps stay accurate even at high sampling rates.
+    """
     entries: list[tuple[float, float, str]] = []
     prev_text = ""
+    prev_ts = 0.0
     start_time = 0.0
     stable_count = 0
     min_stable = 2
 
-    total = len(frames)
-    logger.info("  processing %d frames with OCR...", total)
-    pbar = tqdm(total=total, desc="  ocr", unit="fr", leave=False)
+    pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
     for i, (crop, timestamp) in enumerate(frames):
         text = ocr_engine.ocr_region_cached(crop)
@@ -43,42 +51,51 @@ def generate_srt(
 
         if i == 0:
             prev_text = text
+            prev_ts = timestamp
             start_time = timestamp
             stable_count = 1
             if text:
                 logger.debug("  [%s] %s", sec_to_srt(timestamp), text[:80])
             if progress_callback:
-                progress_callback(i, total)
+                progress_callback(i, total_frames or i + 1)
             continue
 
         similarity = fuzz.ratio(text, prev_text) / 100.0
 
         if similarity < settings.similarity_threshold:
             if prev_text.strip() and stable_count >= min_stable:
-                entries.append((start_time, timestamp, prev_text.strip()))
+                boundary = (prev_ts + timestamp) / 2.0
+                entries.append((start_time, boundary, prev_text.strip()))
+                if text_callback:
+                    text_callback(start_time, boundary, prev_text.strip())
                 logger.info(
                     "  subtitle: %s --> %s  |  %s",
-                    sec_to_srt(start_time), sec_to_srt(timestamp),
+                    sec_to_srt(start_time), sec_to_srt(boundary),
                     prev_text.strip()[:80],
                 )
+                start_time = boundary
+            else:
+                start_time = timestamp
             prev_text = text
-            start_time = timestamp
+            prev_ts = timestamp
             stable_count = 1
         else:
+            prev_ts = timestamp
             stable_count += 1
 
         if progress_callback:
-            progress_callback(i, total)
+            progress_callback(i, total_frames or i + 1)
 
     pbar.close()
     ocr_engine.log_stats()
 
     if prev_text.strip():
-        end_t = frames[-1][1] if frames else start_time
-        entries.append((start_time, end_t, prev_text.strip()))
+        entries.append((start_time, prev_ts, prev_text.strip()))
+        if text_callback:
+            text_callback(start_time, prev_ts, prev_text.strip())
         logger.info(
             "  subtitle: %s --> %s  |  %s",
-            sec_to_srt(start_time), sec_to_srt(end_t),
+            sec_to_srt(start_time), sec_to_srt(prev_ts),
             prev_text.strip()[:80],
         )
 

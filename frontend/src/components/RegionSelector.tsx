@@ -54,6 +54,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
   const [size, setSize] = useState({ w: 800, h: 450 });
   const [playing, setPlaying] = useState(false);
   const [hasRect, setHasRect] = useState(false);
+  const [rect, setRect] = useState<Region | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [seeking, setSeeking] = useState(false);
@@ -200,7 +201,12 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
     dragRef.current = { type: "draw", startX: pos.x, startY: pos.y };
     rectRef.current = { x1: n.x, y1: n.y, x2: n.x, y2: n.y };
     setHasRect(true);
+    setRect(rectRef.current);
   };
+
+  const syncRect = useCallback(() => {
+    setRect(rectRef.current ? { ...rectRef.current } : null);
+  }, []);
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const pos = getPos(e.clientX, e.clientY);
@@ -214,7 +220,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
       const n = { x: pos.x / size.w, y: pos.y / size.h };
       const s = { x: d.startX / size.w, y: d.startY / size.h };
       rectRef.current = { x1: clamp(Math.min(s.x, n.x)), y1: clamp(Math.min(s.y, n.y)), x2: clamp(Math.max(s.x, n.x)), y2: clamp(Math.max(s.y, n.y)) };
-      setHasRect(true); scheduleRedraw(); return;
+      setHasRect(true); syncRect(); scheduleRedraw(); return;
     }
     const c = canvasRef.current;
     if (!c) return;
@@ -239,7 +245,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
       if (x2 - x1 < 0.01 || y2 - y1 < 0.01) return;
       rectRef.current = { x1, y1, x2, y2 };
     }
-    setHasRect(true); scheduleRedraw();
+    setHasRect(true); syncRect(); scheduleRedraw();
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -249,6 +255,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
       if (r && (r.x2 - r.x1 < 0.01 || r.y2 - r.y1 < 0.01)) { rectRef.current = null; setHasRect(false); }
     }
     dragRef.current = { type: "idle" };
+    syncRect();
   };
 
   const togglePlay = () => {
@@ -290,7 +297,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const r = rectRef.current;
+  const r = rect;
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (

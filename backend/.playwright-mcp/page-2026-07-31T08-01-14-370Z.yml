@@ -1,0 +1,31 @@
+- generic [active] [ref=f1e1]:
+  - main [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]: Video OCR Pipeline
+      - heading "SubTitle Extractor" [level=1] [ref=f1e6]: SubTitleExtractor
+      - paragraph [ref=f1e7]: Upload a video, select the subtitle region, and extract clean SRT text with AI-powered OCR.
+    - generic [ref=f1e11]:
+      - generic [ref=f1e12]: Upload
+      - generic [ref=f1e19]: Select Region
+      - generic [ref=f1e27]:
+        - generic [ref=f1e28]: "03"
+        - generic [ref=f1e31]: Extract
+    - generic [ref=f1e95]:
+      - generic [ref=f1e97]:
+        - paragraph [ref=f1e102]: Extracting video frames…
+        - paragraph [ref=f1e106]: 0%
+        - generic [ref=f1e107]:
+          - generic [ref=f1e108]: Submitting
+          - generic [ref=f1e115]: Queued
+          - generic [ref=f1e122]:
+            - generic [ref=f1e123]: "3"
+            - generic [ref=f1e125]: Extracting frames
+          - generic [ref=f1e129]:
+            - generic [ref=f1e130]: "4"
+            - generic [ref=f1e132]: Running OCR
+          - generic [ref=f1e133]:
+            - generic [ref=f1e134]: "5"
+            - generic [ref=f1e136]: Saving SRT
+      - button "Process another video" [disabled] [ref=f1e138] [cursor=pointer]
+    - paragraph [ref=f1e53]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=f1e54]

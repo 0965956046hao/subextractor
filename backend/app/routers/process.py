@@ -4,7 +4,7 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
 
 from app.config import settings
-from app.models import ProcessRequest, JobStatus
+from app.models import ProcessRequest, JobStatus, LogEntry
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue
 from app.services.video_processor import resolve_video_path
 from app.worker import enqueue_job
@@ -59,6 +59,7 @@ async def get_status(
         phase=job.get("phase", ""),
         progress=job.get("progress", 0),
         error=job.get("error"),
+        logs=[LogEntry(**entry) for entry in job.get("logs", [])],
     )
 
 
@@ -82,6 +83,8 @@ async def ws_progress(
             "progress": job.get("progress", 0),
             "phase": job.get("phase", ""),
         })
+        for entry in job.get("logs", []):
+            await websocket.send_json({"type": "log", **entry})
         if job["status"] == "done":
             await websocket.send_json({
                 "type": "done",

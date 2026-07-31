@@ -42,11 +42,34 @@ export function getFrameUrl(videoId: string): string {
   return `/api/frame/${videoId}`;
 }
 
+export interface VideoMeta {
+  video_id: string;
+  filename: string;
+  has_video: boolean;
+  entries: number;
+  created_at: string;
+}
+
+export async function listVideos(): Promise<VideoMeta[]> {
+  const res = await api.get<{ videos: VideoMeta[] }>("/videos");
+  return res.data.videos;
+}
+
+export async function deleteVideo(videoId: string): Promise<void> {
+  await api.delete(`/video/${videoId}`);
+}
+
 export interface Region {
   x1: number;
   y1: number;
   x2: number;
   y2: number;
+}
+
+export interface LogEntry {
+  message: string;
+  ts: number;
+  level: string;
 }
 
 export interface JobStatus {
@@ -55,6 +78,7 @@ export interface JobStatus {
   phase: string;
   progress: number;
   error: string | null;
+  logs?: LogEntry[];
 }
 
 export async function startProcess(
@@ -80,6 +104,11 @@ export function createWsUrl(jobId: string): string {
   return `${proto}//${window.location.host}/api/ws/${jobId}`;
 }
 
-export function getDownloadUrl(videoId: string): string {
-  return `/api/download/${videoId}`;
+export function getDownloadUrl(videoId: string, format: "srt" | "txt" = "srt"): string {
+  return `/api/download/${videoId}?format=${format}`;
+}
+
+export async function getSrtContent(videoId: string): Promise<string> {
+  const res = await api.get<{ content: string }>(`/srt/${videoId}`);
+  return res.data.content;
 }

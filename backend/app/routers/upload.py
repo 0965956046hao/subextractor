@@ -1,3 +1,4 @@
+import json
 import uuid
 from pathlib import Path
 
@@ -36,5 +37,12 @@ async def upload_video(file: UploadFile = File(...)):
         if video_path.exists():
             video_path.unlink()
         raise HTTPException(500, f"Upload failed: {e}")
+
+    try:
+        (video_dir / "meta.json").write_text(
+            json.dumps({"filename": file.filename}), encoding="utf-8"
+        )
+    except Exception:
+        pass
 
     return {"video_id": video_id}

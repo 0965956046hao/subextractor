@@ -26,6 +26,7 @@ class OCREngine:
         self._prev_text: str = ""
         self._total_calls = 0
         self._cache_hits = 0
+        self._hit_streak = 0
         self._warmup()
         logger.info("  OCR engine ready")
 
@@ -54,11 +55,14 @@ class OCREngine:
             return ""
         if (
             self._prev_crop is not None
+            and self._hit_streak < settings.ocr_cache_max_streak
             and crops_visually_similar(self._prev_crop, crop)
         ):
             self._cache_hits += 1
+            self._hit_streak += 1
             return self._prev_text
         self._total_calls += 1
+        self._hit_streak = 0
         text = self.ocr_image(crop)
         self._prev_crop = crop
         self._prev_text = text
@@ -75,6 +79,7 @@ class OCREngine:
         self._prev_text = ""
         self._total_calls = 0
         self._cache_hits = 0
+        self._hit_streak = 0
 
     def log_stats(self):
         total = self._total_calls + self._cache_hits
