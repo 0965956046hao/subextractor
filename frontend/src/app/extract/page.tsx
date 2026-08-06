@@ -7,7 +7,8 @@ import UploadPage from "@/components/UploadPage";
 import RegionSelector from "@/components/RegionSelector";
 import ResultPage from "@/components/ResultPage";
 import { AnimatedBlock } from "@/lib/animation";
-import type { Region } from "@/lib/api";
+import { OCR_LANGS, OCR_TYPES } from "@/lib/api";
+import type { Region, OcrLang, OcrType } from "@/lib/api";
 
 type Step = "upload" | "select" | "result";
 
@@ -81,10 +82,65 @@ function BentoStepIndicator({ current }: { current: Step }) {
   );
 }
 
+function LangSelector({ value, onChange }: { value: OcrLang; onChange: (v: OcrLang) => void }) {
+  return (
+    <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
+      <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
+        Ngôn ngữ OCR
+      </span>
+      <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
+        {OCR_LANGS.map((l) => (
+          <button
+            key={l.value}
+            onClick={() => onChange(l.value)}
+            className={`px-4 py-1.5 rounded-full text-[13px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
+              ${
+                value === l.value
+                  ? "bg-blue-600 text-white shadow-[0_6px_16px_-6px_rgba(59,130,246,0.5)]"
+                  : "text-ink-muted hover:text-ink"
+              }`}
+          >
+            {l.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EngineSelector({ value, onChange }: { value: OcrType; onChange: (v: OcrType) => void }) {
+  return (
+    <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
+      <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
+        OCR Engine
+      </span>
+      <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
+        {OCR_TYPES.map((t) => (
+          <button
+            key={t.value}
+            onClick={() => onChange(t.value)}
+            title={t.hint}
+            className={`px-4 py-1.5 rounded-full text-[13px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
+              ${
+                value === t.value
+                  ? "bg-violet-600 text-white shadow-[0_6px_16px_-6px_rgba(139,92,246,0.5)]"
+                  : "text-ink-muted hover:text-ink"
+              }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function ExtractPage() {
   const [step, setStep] = useState<Step>("upload");
   const [videoId, setVideoId] = useState<string>("");
   const [region, setRegion] = useState<Region | null>(null);
+  const [lang, setLang] = useState<OcrLang>("ch");
+  const [ocrType, setOcrType] = useState<OcrType>("rapid");
   const router = useRouter();
 
   return (
@@ -133,18 +189,24 @@ export default function ExtractPage() {
             />
           )}
           {step === "select" && (
-            <RegionSelector
-              videoId={videoId}
-              onConfirmed={(r) => {
-                setRegion(r);
-                setStep("result");
-              }}
-            />
+            <>
+              <EngineSelector value={ocrType} onChange={setOcrType} />
+              <LangSelector value={lang} onChange={setLang} />
+              <RegionSelector
+                videoId={videoId}
+                onConfirmed={(r) => {
+                  setRegion(r);
+                  setStep("result");
+                }}
+              />
+            </>
           )}
           {step === "result" && videoId && region && (
             <ResultPage
               videoId={videoId}
               region={region}
+              lang={lang}
+              ocrType={ocrType}
               onReset={() => {
                 setVideoId("");
                 setRegion(null);

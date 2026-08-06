@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     extract_fps: int = 10
     ocr_lang: str = "ch"
     similarity_threshold: float = 0.85
+    merge_similarity: float = 0.9
+    subtitle_flash_seconds: float = 2.0
     max_upload_size: int = 500 * 1024 * 1024
     job_timeout: int = 1800
     ocr_cache_max_streak: int = 15

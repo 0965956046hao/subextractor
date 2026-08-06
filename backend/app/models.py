@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -8,10 +10,15 @@ class Region(BaseModel):
     y2: float = Field(ge=0, le=1)
 
 
+OcrType = Literal["rapid", "apple"]
+
+
 class ProcessRequest(BaseModel):
     video_id: str
     region: Region
     fps: int | None = None
+    lang: str = "ch"
+    ocr_type: OcrType = "rapid"
 
 
 class LogEntry(BaseModel):

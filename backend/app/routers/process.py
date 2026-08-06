@@ -37,6 +37,8 @@ async def start_processing(
         video_id=req.video_id,
         region=region,
         fps=req.fps,
+        lang=req.lang,
+        ocr_type=req.ocr_type,
     )
     await job_queue.put(job["job_id"])
     return JobStatus(

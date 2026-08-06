@@ -81,14 +81,31 @@ export interface JobStatus {
   logs?: LogEntry[];
 }
 
+export type OcrLang = "ch" | "en" | "latin";
+
+export const OCR_LANGS: { value: OcrLang; label: string; hint: string }[] = [
+  { value: "ch", label: "Tiếng Trung", hint: "Chinese + English" },
+  { value: "latin", label: "Tiếng Việt", hint: "Vietnamese / Latin" },
+  { value: "en", label: "Tiếng Anh", hint: "English" },
+];
+
+export type OcrType = "rapid" | "apple";
+
+export const OCR_TYPES: { value: OcrType; label: string; hint: string }[] = [
+  { value: "rapid", label: "RapidOCR", hint: "Nhanh, chạy mọi nền tảng" },
+  { value: "apple", label: "Apple Vision", hint: "macOS, tối ưu cho chữ in" },
+];
+
 export async function startProcess(
   videoId: string,
   region: Region,
+  lang: OcrLang = "ch",
+  ocrType: OcrType = "rapid",
   signal?: AbortSignal
 ): Promise<JobStatus> {
   const res = await api.post<JobStatus>(
     "/process",
-    { video_id: videoId, region },
+    { video_id: videoId, region, lang, ocr_type: ocrType },
     { signal }
   );
   return res.data;

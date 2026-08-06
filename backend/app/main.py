@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.services.ocr_engine import OCREngine
+from app.services.apple_ocr_engine import AppleOCREngine
 from app.routers import upload, video, process, download
 from app.worker import worker_loop
 
@@ -33,15 +34,23 @@ async def lifespan(app: FastAPI):
     )
     logger.info("  ocr_lang: %s", settings.ocr_lang)
     logger.info("")
-    logger.info("Initializing OCR engine...")
+    logger.info("Initializing OCR engines...")
     ocr_engine = OCREngine()
     app.state.ocr_engine = ocr_engine
+    ocr_engines: dict = {"rapid": ocr_engine}
+    try:
+        apple_engine = AppleOCREngine()
+        ocr_engines["apple"] = apple_engine
+        app.state.apple_ocr_engine = apple_engine
+    except Exception as e:
+        logger.warning("Apple Vision OCR disabled: %s", e)
+    app.state.ocr_engines = ocr_engines
     app.state.jobs: dict = {}
     app.state.ws_clients: dict = {}
     app.state.job_queue: asyncio.Queue = asyncio.Queue()
 
     worker = asyncio.create_task(
-        worker_loop(app.state.jobs, app.state.ws_clients, ocr_engine, app.state.job_queue)
+        worker_loop(app.state.jobs, app.state.ws_clients, ocr_engines, app.state.job_queue)
     )
     logger.info("")
     logger.info("Server ready  >>>  http://localhost:8000")

@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { startProcess, getJobStatus, createWsUrl } from "@/lib/api";
-import type { Region, LogEntry } from "@/lib/api";
+import type { Region, LogEntry, OcrLang, OcrType } from "@/lib/api";
 import TranscriptPlayer from "./TranscriptPlayer";
 
 interface Props {
   videoId: string;
   region: Region;
+  lang?: OcrLang;
+  ocrType?: OcrType;
   onReset: () => void;
   onDone?: () => void;
   onViewLibrary?: () => void;
@@ -159,7 +161,7 @@ function SuccessIcon() {
   );
 }
 
-export default function ResultPage({ videoId, region, onReset, onDone, onViewLibrary }: Props) {
+export default function ResultPage({ videoId, region, lang = "ch", ocrType = "rapid", onReset, onDone, onViewLibrary }: Props) {
   const [phase, setPhase] = useState<Phase>("submitting");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
@@ -209,7 +211,7 @@ export default function ResultPage({ videoId, region, onReset, onDone, onViewLib
     (async () => {
       try {
         appendLog("Đang gửi yêu cầu xử lý đến máy chủ…");
-        const job = await startProcess(videoId, region);
+        const job = await startProcess(videoId, region, lang, ocrType);
         setPhase("queued");
         connectWs(job.job_id);
         pollTimer = setInterval(async () => {
@@ -239,7 +241,7 @@ export default function ResultPage({ videoId, region, onReset, onDone, onViewLib
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     }
     return () => { wsRef.current?.close(); if (pollTimer) clearInterval(pollTimer); };
-  }, [videoId, region, connectWs, appendLog]);
+  }, [videoId, region, lang, ocrType, connectWs, appendLog]);
 
   useEffect(() => {
     if (phase === "done" && !doneNotifiedRef.current) {

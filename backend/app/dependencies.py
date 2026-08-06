@@ -12,6 +12,10 @@ def get_ocr_engine(request: Request) -> OCREngine:
     return engine
 
 
+def get_ocr_engines(request: Request) -> dict:
+    return request.app.state.ocr_engines
+
+
 def get_jobs(request: Request) -> dict:
     return request.app.state.jobs
 

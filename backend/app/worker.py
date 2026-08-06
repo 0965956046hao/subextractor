@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
 from app.services.video_processor import stream_frames_generator, crop_region
-from app.services.ocr_engine import OCREngine
+from app.services.ocr_engine import BaseOCREngine
 from app.services.subtitle_generator import generate_srt, sec_to_srt
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,8 @@ def enqueue_job(
     video_id: str,
     region: dict,
     fps: int | None = None,
+    lang: str = "ch",
+    ocr_type: str = "rapid",
 ) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -30,6 +32,8 @@ def enqueue_job(
         "video_id": video_id,
         "region": region,
         "fps": fps,
+        "lang": lang,
+        "ocr_type": ocr_type,
         "status": "queued",
         "phase": "",
         "progress": 0,
@@ -37,7 +41,7 @@ def enqueue_job(
         "srt_path": None,
     }
     jobs[job_id] = job
-    logger.info("job %s: queued  |  %s", job_id, video_path)
+    logger.info("job %s: queued (lang=%s, ocr=%s)  |  %s", job_id, lang, ocr_type, video_path)
     return job
 
 
@@ -84,7 +88,7 @@ def process_job_sync(
     video_path: str,
     region: dict,
     target_fps: int,
-    ocr_engine: OCREngine,
+    ocr_engine: BaseOCREngine,
     ws_clients: dict,
     job_id: str,
     loop: asyncio.AbstractEventLoop,
@@ -155,7 +159,7 @@ def process_job_sync(
 async def run_job(
     jobs: dict,
     ws_clients: dict,
-    ocr_engine: OCREngine,
+    ocr_engines: dict[str, "BaseOCREngine"],
     job_id: str,
 ):
     job = jobs.get(job_id)
@@ -173,8 +177,20 @@ async def run_job(
         video_path = job["video_path"]
         region = job["region"]
         target_fps = job.get("fps") or settings.extract_fps or None
+        lang = job.get("lang") or settings.ocr_lang
+        ocr_type = job.get("ocr_type") or "rapid"
 
-        ocr_engine.reset_cache()
+        ocr_engine = ocr_engines.get(ocr_type)
+        if ocr_engine is None:
+            raise RuntimeError(
+                f"OCR engine '{ocr_type}' không khả dụng trên máy chủ này"
+            )
+        ocr_engine.set_lang(lang)
+        await job_log_async(
+            job, ws_clients,
+            f"Đang xử lý bằng {ocr_engine.name} (ngôn ngữ: {lang})",
+            "info",
+        )
 
         loop = asyncio.get_event_loop()
 
@@ -196,6 +212,7 @@ async def run_job(
         logger.info("job %s: saving SRT...  |  total %.1fs", job_id, t_end - t_start)
 
         job["phase"] = "saving"
+        await job_log_async(job, ws_clients, "Đang lọc ký tự thừa và gộp phụ đề lần cuối…")
         await job_log_async(job, ws_clients, "Đang lưu file phụ đề…")
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 100, "phase": "saving",
@@ -251,14 +268,14 @@ async def run_job(
 async def worker_loop(
     jobs: dict,
     ws_clients: dict,
-    ocr_engine: OCREngine,
+    ocr_engines: dict[str, "BaseOCREngine"],
     queue: asyncio.Queue,
 ):
     logger.info("Worker loop started")
     while True:
         job_id = await queue.get()
         try:
-            await run_job(jobs, ws_clients, ocr_engine, job_id)
+            await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:
             logger.exception("Unhandled worker error for job %s: %s", job_id, e)
         finally:
