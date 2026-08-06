@@ -1,4 +1,6 @@
+import json
 import re
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -13,6 +15,24 @@ def _srt_path(video_id: str):
     if not srt_path.exists():
         raise HTTPException(404, "SRT file not found. Process the video first.")
     return srt_path
+
+
+def _original_name(video_id: str) -> str | None:
+    meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8")).get("filename")
+    except Exception:
+        return None
+
+
+def _download_name(video_id: str, ext: str) -> str:
+    original = _original_name(video_id)
+    if original:
+        stem = Path(original).stem or original
+        return f"{stem}.original.{ext}"
+    return f"subtitles.{ext}"
 
 
 def _srt_to_txt(content: str) -> str:
@@ -38,13 +58,13 @@ async def download_subtitles(
             txt,
             media_type="text/plain",
             headers={
-                "Content-Disposition": 'attachment; filename="subtitles.txt"'
+                "Content-Disposition": f'attachment; filename="{_download_name(video_id, "txt")}"'
             },
         )
     return FileResponse(
         str(srt_path),
         media_type="application/x-subrip",
-        filename="subtitles.srt",
+        filename=_download_name(video_id, "srt"),
     )
 
 
