@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import TranscriptPlayer from "@/components/TranscriptPlayer";
 import { AnimatedBlock } from "@/lib/animation";
-import { listVideos, getJobStatus } from "@/lib/api";
+import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
 import type { VideoMeta, LogEntry } from "@/lib/api";
 
 function formatDate(iso: string): string {
@@ -45,15 +45,21 @@ const LOG_LEVEL_STYLE: Record<string, string> = {
 
 function JobProgress({
   jobId,
+  videoId,
   onCompleted,
+  onCancelled,
 }: {
   jobId: string;
+  videoId: string;
   onCompleted: () => void;
+  onCancelled?: () => void;
 }) {
   const [progress, setProgress] = useState(0);
   const [phase, setPhase] = useState("queued");
   const [error, setError] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [cancelled, setCancelled] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -76,6 +82,11 @@ function JobProgress({
           onCompleted();
           return;
         }
+        if (st.status === "cancelled") {
+          setCancelled(true);
+          onCancelled?.();
+          return;
+        }
         if (st.status === "error") {
           setError(st.error || "Xử lý thất bại");
           return;
@@ -91,12 +102,51 @@ function JobProgress({
       mountedRef.current = false;
       if (timer) clearTimeout(timer);
     };
-  }, [jobId, onCompleted]);
+  }, [jobId, onCompleted, onCancelled]);
+
+  const handleCancel = useCallback(async () => {
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelJob(jobId);
+      setCancelled(true);
+      onCancelled?.();
+    } catch {
+      setCancelling(false);
+    }
+  }, [jobId, cancelling, onCancelled]);
 
   const pct = Math.max(0, Math.min(100, progress));
   const statusText = error ? "Có lỗi xảy ra" : phase
     ? (PHASE_LABELS[phase] ?? "Đang xử lý…")
     : "Đang xử lý…";
+
+  if (cancelled) {
+    return (
+      <div className="double-bezel">
+        <div className="double-bezel-inner p-6 sm:p-10 text-center">
+          <svg className="w-6 h-6 text-amber-500 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+            <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+          </svg>
+          <p className="text-sm text-ink mt-3 font-medium">Đã hủy xử lý video</p>
+          <p className="text-[13px] text-ink-light mt-1.5 max-w-sm mx-auto">
+            Phụ đề chưa được lưu. Bạn có thể xử lý lại từ đầu bất cứ lúc nào.
+          </p>
+          <Link
+            href={`/extract?video_id=${videoId}`}
+            className="btn-island-primary group mt-6 text-sm inline-flex"
+          >
+            <span className="tracking-tight">Xử lý lại</span>
+            <span className="btn-island-icon">
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            </span>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="double-bezel">
@@ -131,6 +181,26 @@ function JobProgress({
             <p className="text-[11px] text-ink-light">Tiến trình xử lý</p>
             <p className="text-xs font-mono text-ink-light tabular-nums">{error ? "0" : progress}%</p>
           </div>
+        </div>
+
+        <div className="flex items-center justify-center mt-6">
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {cancelling ? (
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
+                <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+              </svg>
+            )}
+            <span>{cancelling ? "Đang hủy…" : "Hủy xử lý (không lưu)"}</span>
+          </button>
         </div>
 
         {logs.length > 0 && (
@@ -187,6 +257,7 @@ export default function VideoDetailPage() {
 
   const isActive =
     (meta?.status === "queued" || meta?.status === "processing") && !!meta.job_id;
+  const isCancelled = meta?.status === "cancelled";
 
   const handleCompleted = useCallback(() => {
     setReloadKey((k) => k + 1);
@@ -235,6 +306,14 @@ export default function VideoDetailPage() {
                   Extracted {formatDate(meta.created_at)}
                 </span>
               )}
+              {entries !== null && (
+                <Link
+                  href={`/extract?video_id=${videoId}`}
+                  className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
+                >
+                  Xử lý lại
+                </Link>
+              )}
               <button
                 onClick={() => setReloadKey((k) => k + 1)}
                 className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
@@ -248,7 +327,32 @@ export default function VideoDetailPage() {
 
       {isActive && meta?.job_id ? (
         <AnimatedBlock delay={200}>
-          <JobProgress key={meta.job_id} jobId={meta.job_id} onCompleted={handleCompleted} />
+          <JobProgress key={meta.job_id} jobId={meta.job_id} videoId={videoId} onCompleted={handleCompleted} onCancelled={handleCompleted} />
+        </AnimatedBlock>
+      ) : isCancelled ? (
+        <AnimatedBlock delay={200}>
+          <div className="double-bezel">
+            <div className="double-bezel-inner p-6 sm:p-10 text-center">
+              <svg className="w-6 h-6 text-amber-500 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+              </svg>
+              <p className="text-sm text-ink mt-3 font-medium">Đã hủy xử lý video</p>
+              <p className="text-[13px] text-ink-light mt-1.5 max-w-sm mx-auto">
+                Phụ đề chưa được lưu. Bạn có thể xử lý lại từ đầu bất cứ lúc nào.
+              </p>
+              <Link
+                href={`/extract?video_id=${videoId}`}
+                className="btn-island-primary group mt-6 text-sm inline-flex"
+              >
+                <span className="tracking-tight">Xử lý lại</span>
+                <span className="btn-island-icon">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                </span>
+              </Link>
+            </div>
+          </div>
         </AnimatedBlock>
       ) : meta && meta.status === "done" ? (
         <AnimatedBlock delay={200}>

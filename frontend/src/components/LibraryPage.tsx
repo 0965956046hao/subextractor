@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { listVideos, getFrameUrl, deleteVideo } from "@/lib/api";
+import { listVideos, getFrameUrl, deleteVideo, cancelJob } from "@/lib/api";
 import type { VideoMeta } from "@/lib/api";
 import { AnimatedBlock } from "@/lib/animation";
 
@@ -91,6 +91,15 @@ export default function LibraryPage() {
       setError(err instanceof Error ? err.message : "Failed to delete");
     }
   }, []);
+
+  const handleCancel = useCallback(async (jobId: string) => {
+    try {
+      await cancelJob(jobId);
+      refreshActive();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to cancel");
+    }
+  }, [refreshActive]);
 
   const stats = useMemo(() => {
     if (!videos || videos.length === 0) return null;
@@ -258,15 +267,15 @@ export default function LibraryPage() {
 
             {view === "grid" ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8">
-                {featured && <VideoCard video={featured} featured index={0} onDelete={handleDelete} />}
+                {featured && <VideoCard video={featured} featured index={0} onDelete={handleDelete} onCancel={handleCancel} />}
                 {rest.map((v, i) => (
-                  <VideoCard key={v.video_id} video={v} index={i + 1} onDelete={handleDelete} />
+                  <VideoCard key={v.video_id} video={v} index={i + 1} onDelete={handleDelete} onCancel={handleCancel} />
                 ))}
               </div>
             ) : (
               <div className="space-y-4">
                 {videos.map((v, i) => (
-                  <VideoRow key={v.video_id} video={v} index={i} onDelete={handleDelete} />
+                  <VideoRow key={v.video_id} video={v} index={i} onDelete={handleDelete} onCancel={handleCancel} />
                 ))}
               </div>
             )}
@@ -346,8 +355,21 @@ function useReveal(index: number, distance = 30) {
   return { ref: (node: HTMLDivElement | null) => setEl(node), style };
 }
 
-function JobStatusBlock({ video }: { video: VideoMeta }) {
+function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (jobId: string) => void }) {
   if (!video.status || video.status === "done") return null;
+
+  if (video.status === "cancelled") {
+    return (
+      <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/20 text-[11px] font-medium text-amber-600/90 truncate">
+          <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+            <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+          </svg>
+          Đã hủy — xử lý lại
+        </span>
+      </div>
+    );
+  }
 
   if (video.status === "error") {
     return (
@@ -378,11 +400,26 @@ function JobStatusBlock({ video }: { video: VideoMeta }) {
           style={{ width: `${Math.max(pct, 3)}%` }}
         />
       </div>
+      {onCancel && video.job_id && (
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onCancel(video.job_id!);
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 mt-2 rounded-full text-[11px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 cursor-pointer active:scale-95"
+        >
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+          </svg>
+          Hủy xử lý
+        </button>
+      )}
     </div>
   );
 }
 
-function VideoRow({ video, index, onDelete }: { video: VideoMeta; index: number; onDelete: (videoId: string) => void }) {
+function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; index: number; onDelete: (videoId: string) => void; onCancel: (jobId: string) => void }) {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -447,7 +484,7 @@ function VideoRow({ video, index, onDelete }: { video: VideoMeta; index: number;
               {video.filename}
             </h3>
             {video.status && video.status !== "done" ? (
-              <JobStatusBlock video={video} />
+              <JobStatusBlock video={video} onCancel={onCancel} />
             ) : (
               <div className="flex items-center gap-2.5 mt-2 flex-wrap">
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">
@@ -514,11 +551,13 @@ function VideoCard({
   featured = false,
   index,
   onDelete,
+  onCancel,
 }: {
   video: VideoMeta;
   featured?: boolean;
   index: number;
   onDelete: (videoId: string) => void;
+  onCancel: (jobId: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
 
@@ -612,7 +651,7 @@ function VideoCard({
                 {video.filename}
               </h3>
               {video.status && video.status !== "done" ? (
-                <JobStatusBlock video={video} />
+                <JobStatusBlock video={video} onCancel={onCancel} />
               ) : (
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">

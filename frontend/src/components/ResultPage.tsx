@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { startProcess, getJobStatus, createWsUrl } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { startProcess, getJobStatus, createWsUrl, cancelJob } from "@/lib/api";
 import type { Region, LogEntry, OcrLang, OcrType } from "@/lib/api";
 import TranscriptPlayer from "./TranscriptPlayer";
 
@@ -15,7 +16,7 @@ interface Props {
   onViewLibrary?: () => void;
 }
 
-type Phase = "submitting" | "queued" | "frames" | "ocr" | "saving" | "done" | "error";
+type Phase = "submitting" | "queued" | "frames" | "ocr" | "saving" | "done" | "error" | "cancelled";
 
 const STATUS_LABELS: Record<Phase, string> = {
   submitting: "Đang gửi yêu cầu xử lý…",
@@ -25,6 +26,7 @@ const STATUS_LABELS: Record<Phase, string> = {
   saving: "Đang lưu file phụ đề…",
   done: "Hoàn tất! Phụ đề đã sẵn sàng.",
   error: "Có lỗi xảy ra trong quá trình xử lý.",
+  cancelled: "Đã hủy xử lý video.",
 };
 
 function fmtTime(ts: number): string {
@@ -166,11 +168,14 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [cancelling, setCancelling] = useState(false);
   const seenRef = useRef(new Set<string>());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number>(0);
   const submittedVideoRef = useRef<string | null>(null);
   const doneNotifiedRef = useRef(false);
+  const jobIdRef = useRef<string | null>(null);
+  const router = useRouter();
 
   const appendLog = useCallback((message: string, level = "info", ts?: number) => {
     const key = `${ts ?? 0}-${message}`;
@@ -190,6 +195,7 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
           case "progress": setProgress(data.progress); setPhase(data.phase as Phase); break;
           case "log": appendLog(data.message, data.level || "info", data.ts); break;
           case "done": setPhase("done"); setProgress(100); break;
+          case "cancelled": setPhase("cancelled"); setProgress(0); break;
           case "error": setPhase("error"); setError(data.message || "Xử lý thất bại"); break;
         }
       } catch { /* ignore */ }
@@ -212,6 +218,7 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
       try {
         appendLog("Đang gửi yêu cầu xử lý đến máy chủ…");
         const job = await startProcess(videoId, region, lang, ocrType);
+        jobIdRef.current = job.job_id;
         setPhase("queued");
         connectWs(job.job_id);
         pollTimer = setInterval(async () => {
@@ -219,6 +226,7 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
             const st = await getJobStatus(job.job_id);
             if (st.logs) st.logs.forEach((l) => appendLog(l.message, l.level || "info", l.ts));
             if (st.status === "done") { setPhase("done"); setProgress(100); stopPolling(); }
+            else if (st.status === "cancelled") { setPhase("cancelled"); setProgress(0); stopPolling(); }
             else if (st.status === "error") { setPhase("error"); setError(st.error || "Xử lý thất bại"); stopPolling(); }
             else { setProgress(st.progress); setPhase((st.phase as Phase) || "queued"); }
           } catch (err: unknown) {
@@ -250,11 +258,61 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
     }
   }, [phase, onDone]);
 
-  const isProcessing = phase !== "done" && phase !== "error";
+  const handleCancel = useCallback(async () => {
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      if (jobIdRef.current) await cancelJob(jobIdRef.current);
+      setPhase("cancelled");
+      setProgress(0);
+      wsRef.current?.close();
+    } catch {
+      setCancelling(false);
+    }
+  }, [cancelling]);
+
+  const isProcessing = phase !== "done" && phase !== "error" && phase !== "cancelled";
+
+  const reprocessUrl = `/extract?video_id=${videoId}`;
 
   return (
     <div className="space-y-6">
-      {isProcessing || phase === "error" ? (
+      {phase === "cancelled" ? (
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-6 sm:p-10 text-center">
+            <svg className="w-6 h-6 text-amber-500 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+              <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+            </svg>
+            <p className="text-sm text-ink mt-3 font-medium">Đã hủy xử lý video</p>
+            <p className="text-[13px] text-ink-light mt-1.5 max-w-sm mx-auto">
+              Phụ đề chưa được lưu. Bạn có thể xử lý lại từ đầu.
+            </p>
+            <div className="flex items-center justify-center gap-3 mt-6">
+              <button
+                onClick={() => router.push(reprocessUrl)}
+                className="btn-island-primary group text-sm"
+              >
+                <span className="tracking-tight">Xử lý lại</span>
+                <span className="btn-island-icon">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                </span>
+              </button>
+              {onViewLibrary && (
+                <button onClick={onViewLibrary} className="btn-island-secondary group text-sm">
+                  <span className="tracking-tight">Về thư viện</span>
+                  <span className="btn-island-icon">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+                    </svg>
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : isProcessing || phase === "error" ? (
         <div className="double-bezel">
           <div className="double-bezel-inner p-6 sm:p-8">
             <div className="text-center mb-6">
@@ -283,6 +341,26 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
                 <p className="text-[11px] text-ink-light">Tiến trình xử lý</p>
                 <p className="text-xs font-mono text-ink-light tabular-nums">{progress}%</p>
               </div>
+            </div>
+
+            <div className="flex items-center justify-center mt-6">
+              <button
+                onClick={handleCancel}
+                disabled={cancelling || phase === "error"}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {cancelling ? (
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
+                    <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+                  </svg>
+                )}
+                <span>{cancelling ? "Đang hủy…" : "Hủy xử lý (không lưu)"}</span>
+              </button>
             </div>
 
             <LogFeed logs={logs} active={isProcessing} />

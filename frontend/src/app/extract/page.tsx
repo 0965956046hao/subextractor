@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import UploadPage from "@/components/UploadPage";
@@ -136,12 +136,22 @@ function EngineSelector({ value, onChange }: { value: OcrType; onChange: (v: Ocr
 }
 
 export default function ExtractPage() {
+  const router = useRouter();
+
   const [step, setStep] = useState<Step>("upload");
   const [videoId, setVideoId] = useState<string>("");
   const [region, setRegion] = useState<Region | null>(null);
   const [lang, setLang] = useState<OcrLang>("ch");
   const [ocrType, setOcrType] = useState<OcrType>("apple");
-  const router = useRouter();
+
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("video_id");
+    if (v) {
+      setVideoId(v);
+      setRegion(null);
+      setStep("select");
+    }
+  }, []);
 
   return (
     <main className="min-h-[100dvh] max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">

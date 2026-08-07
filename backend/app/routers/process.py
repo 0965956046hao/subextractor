@@ -47,6 +47,25 @@ async def start_processing(
     )
 
 
+@router.post("/api/process/{job_id}/cancel", response_model=JobStatus)
+async def cancel_job(
+    job_id: str,
+    jobs: dict = Depends(get_jobs),
+):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    job["cancelled"] = True
+    job["status"] = "cancelled"
+    logger.info("job %s: cancel requested", job_id)
+    return JobStatus(
+        job_id=job_id,
+        status=job["status"],
+        phase=job.get("phase", ""),
+        progress=job.get("progress", 0),
+    )
+
+
 @router.get("/api/status/{job_id}", response_model=JobStatus)
 async def get_status(
     job_id: str,

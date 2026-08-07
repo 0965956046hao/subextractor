@@ -31,18 +31,27 @@ def _meta_filename(video_id: str) -> str | None:
         return None
 
 
+def _srt_exists(video_id: str) -> bool:
+    return (settings.temp_dir / "srt" / video_id / "subtitles.srt").exists()
+
+
 @router.get("/api/videos")
 async def list_videos(jobs: dict = Depends(get_jobs)):
     videos = []
 
-    # ── Active jobs (queued / processing / error) ──
+    # ── Active jobs (queued / processing / error / cancelled) ──
     active = []
+    active_rows_by_video: dict[str, dict] = {}
     for job_id, job in reversed(list(jobs.items())):
         status = job.get("status")
-        if status not in ("queued", "processing", "error"):
+        if status not in ("queued", "processing", "error", "cancelled"):
             continue
         video_id = job.get("video_id")
         if not video_id:
+            continue
+        if job.get("cancelled") and _srt_exists(video_id):
+            continue
+        if video_id in active_rows_by_video:
             continue
         vdir = settings.temp_dir / "videos" / video_id
         has_video = (
@@ -50,7 +59,7 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             if vdir.exists()
             else False
         )
-        active.append({
+        row = {
             "video_id": video_id,
             "filename": _meta_filename(video_id) or video_id,
             "has_video": has_video,
@@ -61,7 +70,9 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             "phase": job.get("phase", ""),
             "job_id": job_id,
             "error": job.get("error") if status == "error" else None,
-        })
+        }
+        active_rows_by_video[video_id] = row
+        active.append(row)
     videos.extend(active)
 
     # ── Completed videos (have SRT on disk) ──
@@ -78,6 +89,9 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
                 continue
             video_id = srt_dir.name
             if video_id in seen:
+                continue
+            row = active_rows_by_video.get(video_id)
+            if row and row["status"] not in ("cancelled",):
                 continue
             seen.add(video_id)
             vdir = settings.temp_dir / "videos" / video_id
@@ -108,8 +122,9 @@ async def delete_video(video_id: str):
         raise HTTPException(400, "Invalid video_id")
     srt_dir = settings.temp_dir / "srt" / video_id
     video_dir = settings.temp_dir / "videos" / video_id
+    frames_dir = settings.temp_dir / "frames" / video_id
     removed_any = False
-    for d in (srt_dir, video_dir):
+    for d in (srt_dir, video_dir, frames_dir):
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
             removed_any = True

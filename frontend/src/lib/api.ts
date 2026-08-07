@@ -42,7 +42,7 @@ export function getFrameUrl(videoId: string): string {
   return `/api/frame/${videoId}`;
 }
 
-export type VideoStatus = "queued" | "processing" | "done" | "error";
+export type VideoStatus = "queued" | "processing" | "done" | "error" | "cancelled";
 
 export interface VideoMeta {
   video_id: string;
@@ -121,6 +121,10 @@ export async function startProcess(
 export async function getJobStatus(jobId: string): Promise<JobStatus> {
   const res = await api.get<JobStatus>(`/status/${jobId}`);
   return res.data;
+}
+
+export async function cancelJob(jobId: string): Promise<void> {
+  await api.post(`/process/${jobId}/cancel`);
 }
 
 export function createWsUrl(jobId: string): string {

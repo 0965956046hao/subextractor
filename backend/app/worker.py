@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=1)
 
 
+class JobCancelled(Exception):
+    """Raised when the user requests to permanently cancel a running job."""
+
+
 def enqueue_job(
     jobs: dict,
     video_path: str,
@@ -121,6 +125,8 @@ def process_job_sync(
 
     def progress_cb(idx: int, total: int):
         nonlocal last_pct_log
+        if job.get("cancelled"):
+            raise JobCancelled()
         if total and idx % max(1, total // 100) == 0:
             pct = min(100, int((idx + 1) / total * 100))
             job["progress"] = pct
@@ -167,6 +173,8 @@ async def run_job(
         return
 
     try:
+        if job.get("cancelled"):
+            raise JobCancelled()
         job["status"] = "processing"
         job["phase"] = "frames"
         await job_log_async(job, ws_clients, "Bắt đầu xử lý video…")
@@ -214,6 +222,8 @@ async def run_job(
         job["phase"] = "saving"
         await job_log_async(job, ws_clients, "Đang lọc ký tự thừa và gộp phụ đề lần cuối…")
         await job_log_async(job, ws_clients, "Đang lưu file phụ đề…")
+        if job.get("cancelled"):
+            raise JobCancelled()
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 100, "phase": "saving",
         })
@@ -239,6 +249,18 @@ async def run_job(
         })
         logger.info("job %s: done  |  %.1fKB  |  %.1fs total", job_id, size_kb, time.time() - t_start)
 
+    except JobCancelled:
+        logger.info("job %s: cancelled by user", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(
+            job, ws_clients,
+            "Đã hủy xử lý video (không lưu phụ đề).",
+            "warn",
+        )
+        await notify_ws(ws_clients, job_id, {
+            "type": "cancelled",
+        })
     except asyncio.TimeoutError:
         logger.error("job %s: TIMEOUT after %ds", job_id, settings.job_timeout)
         job["status"] = "error"
