@@ -1,0 +1,115 @@
+- generic [active] [ref=f1e1]:
+  - main [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]: SubTitle Extractor
+      - link "New Extractor" [ref=f1e10] [cursor=pointer]:
+        - /url: /extract
+    - generic [ref=f1e14]:
+      - generic [ref=f1e15]: Extracted Library
+      - heading "Your subtitles, ready to relive" [level=1] [ref=f1e18]: Your subtitles,ready to relive
+      - paragraph [ref=f1e20]: Every video you’ve extracted lives here — open one to watch, read the transcript, and download clean SRT text.
+      - link "Start a new extractor" [ref=f1e23] [cursor=pointer]:
+        - /url: /extract
+      - generic [ref=f1e29]:
+        - generic [ref=f1e30]: 8 videos
+        - generic [ref=f1e31]: 356 subtitle lines
+        - generic [ref=f1e32]: latest Aug 7, 2026
+    - generic [ref=f1e33]:
+      - generic [ref=f1e34]:
+        - generic [ref=f1e35]: 8 videos
+        - generic [ref=f1e36]:
+          - button "Xem dạng lưới" [ref=f1e37] [cursor=pointer]
+          - button "Xem dạng danh sách" [ref=f1e43] [cursor=pointer]
+      - generic [ref=f1e45]:
+        - link "queue_F.mp4 Delete queue_F.mp4 Đang chờ xử lý… 0% Hủy xử lý Latest extraction" [ref=f1e46] [cursor=pointer]:
+          - /url: /video/bb413e159a39
+          - generic [ref=f1e48]:
+            - generic [ref=f1e49]:
+              - img "queue_F.mp4" [ref=f1e50]
+              - button "Delete" [ref=f1e60]
+            - generic [ref=f1e63]:
+              - generic [ref=f1e64]:
+                - heading "queue_F.mp4" [level=3] [ref=f1e65]
+                - generic [ref=f1e66]:
+                  - generic [ref=f1e67]:
+                    - generic [ref=f1e68]: Đang chờ xử lý…
+                    - generic [ref=f1e70]: 0%
+                  - button "Hủy xử lý" [ref=f1e73]
+              - generic [ref=f1e77]: Latest extraction
+        - link "queue_E.mp4 Delete queue_E.mp4 Đang xử lý… 24% Hủy xử lý" [ref=f1e80] [cursor=pointer]:
+          - /url: /video/1abc396cf5cc
+          - generic [ref=f1e82]:
+            - generic [ref=f1e83]:
+              - img "queue_E.mp4" [ref=f1e84]
+              - button "Delete" [ref=f1e94]
+            - generic [ref=f1e98]:
+              - heading "queue_E.mp4" [level=3] [ref=f1e99]
+              - generic [ref=f1e100]:
+                - generic [ref=f1e101]:
+                  - generic [ref=f1e102]: Đang xử lý…
+                  - generic [ref=f1e104]: 24%
+                - button "Hủy xử lý" [ref=f1e107]
+        - link [ref=f1e111] [cursor=pointer]:
+          - /url: /video/583c80ad74bd
+          - generic [ref=f1e113]:
+            - generic [ref=f1e114]:
+              - img "queue_D.mp4" [ref=f1e115]
+              - button "Delete" [ref=f1e120]
+            - generic [ref=f1e124]:
+              - heading "queue_D.mp4" [level=3] [ref=f1e125]
+              - generic [ref=f1e126]: Đã hủy — xử lý lại
+        - link [ref=f1e131] [cursor=pointer]:
+          - /url: /video/14f317721b0f
+          - generic [ref=f1e133]:
+            - generic [ref=f1e134]:
+              - img "queue_C.mp4" [ref=f1e135]
+              - button "Delete" [ref=f1e140]
+            - generic [ref=f1e144]:
+              - heading "queue_C.mp4" [level=3] [ref=f1e145]
+              - generic [ref=f1e146]: Đã hủy — xử lý lại
+        - link "queue_B.mp4 Delete queue_B.mp4 1 lines Aug 7, 2026 · 04:17 PM" [ref=f1e151] [cursor=pointer]:
+          - /url: /video/64eeef68136e
+          - generic [ref=f1e153]:
+            - generic [ref=f1e154]:
+              - img "queue_B.mp4" [ref=f1e155]
+              - button "Delete" [ref=f1e160]
+            - generic [ref=f1e164]:
+              - heading "queue_B.mp4" [level=3] [ref=f1e165]
+              - generic [ref=f1e166]:
+                - generic [ref=f1e167]: 1 lines
+                - generic [ref=f1e171]: Aug 7, 2026 · 04:17 PM
+        - link "queue_A.mp4 Delete queue_A.mp4 1 lines Aug 7, 2026 · 04:16 PM" [ref=f1e172] [cursor=pointer]:
+          - /url: /video/dcbf462244c9
+          - generic [ref=f1e174]:
+            - generic [ref=f1e175]:
+              - img "queue_A.mp4" [ref=f1e176]
+              - button "Delete" [ref=f1e181]
+            - generic [ref=f1e185]:
+              - heading "queue_A.mp4" [level=3] [ref=f1e186]
+              - generic [ref=f1e187]:
+                - generic [ref=f1e188]: 1 lines
+                - generic [ref=f1e192]: Aug 7, 2026 · 04:16 PM
+        - 'link "窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4 Delete 窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4 34 lines Aug 7, 2026 · 03:24 PM" [ref=f1e193] [cursor=pointer]':
+          - /url: /video/2838163194a5
+          - generic [ref=f1e195]:
+            - generic [ref=f1e196]:
+              - 'img "窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4" [ref=f1e197]'
+              - button "Delete" [ref=f1e202]
+            - generic [ref=f1e206]:
+              - 'heading "窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4" [level=3] [ref=f1e207]'
+              - generic [ref=f1e208]:
+                - generic [ref=f1e209]: 34 lines
+                - generic [ref=f1e213]: Aug 7, 2026 · 03:24 PM
+        - 'link "我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4 Delete 我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4 320 lines Aug 7, 2026 · 02:07 PM" [ref=f1e214] [cursor=pointer]':
+          - /url: /video/b2260eabc0bb
+          - generic [ref=f1e216]:
+            - generic [ref=f1e217]:
+              - 'img "我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4" [ref=f1e218]'
+              - button "Delete" [ref=f1e223]
+            - generic [ref=f1e227]:
+              - 'heading "我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4" [level=3] [ref=f1e228]'
+              - generic [ref=f1e229]:
+                - generic [ref=f1e230]: 320 lines
+                - generic [ref=f1e234]: Aug 7, 2026 · 02:07 PM
+    - paragraph [ref=f1e236]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=f1e237]

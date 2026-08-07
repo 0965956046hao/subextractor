@@ -192,7 +192,7 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
       try {
         const data = JSON.parse(e.data);
         switch (data.type) {
-          case "progress": setProgress(data.progress); setPhase(data.phase as Phase); break;
+          case "progress": setProgress(data.progress); setPhase((data.phase as Phase) || "queued"); break;
           case "log": appendLog(data.message, data.level || "info", data.ts); break;
           case "done": setPhase("done"); setProgress(100); break;
           case "cancelled": setPhase("cancelled"); setProgress(0); break;

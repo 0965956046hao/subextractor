@@ -59,6 +59,8 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             if vdir.exists()
             else False
         )
+        if not has_video and not _srt_exists(video_id):
+            continue
         row = {
             "video_id": video_id,
             "filename": _meta_filename(video_id) or video_id,
