@@ -1,0 +1,17 @@
+- generic [active] [ref=e1]:
+  - main [ref=e80]:
+    - link "Back to library" [ref=e82] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e89]:
+      - generic [ref=e90]: Extracted Video
+      - heading "test_long.mp4" [level=1] [ref=e91]
+      - generic [ref=e92]:
+        - generic [ref=e93]: Đang xử lý… 60%
+        - generic [ref=e95]: Extracted Aug 7, 2026
+        - button "Làm mới trạng thái" [ref=e96] [cursor=pointer]
+    - generic [ref=e99]:
+      - paragraph [ref=e104]: Đang đọc các khung hình của video…
+      - generic [ref=e108]:
+        - paragraph [ref=e109]: Tiến trình xử lý
+        - paragraph [ref=e110]: 66%
+  - alert [ref=e78]

@@ -3,10 +3,11 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.config import settings
+from app.dependencies import get_jobs
 from app.services.video_processor import resolve_video_path
 
 router = APIRouter()
@@ -20,10 +21,52 @@ MEDIA_TYPES = {
 }
 
 
+def _meta_filename(video_id: str) -> str | None:
+    meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8")).get("filename")
+    except Exception:
+        return None
+
+
 @router.get("/api/videos")
-async def list_videos():
-    srt_root = settings.temp_dir / "srt"
+async def list_videos(jobs: dict = Depends(get_jobs)):
     videos = []
+
+    # ── Active jobs (queued / processing / error) ──
+    active = []
+    for job_id, job in reversed(list(jobs.items())):
+        status = job.get("status")
+        if status not in ("queued", "processing", "error"):
+            continue
+        video_id = job.get("video_id")
+        if not video_id:
+            continue
+        vdir = settings.temp_dir / "videos" / video_id
+        has_video = (
+            any(f.stem.startswith("video") for f in vdir.iterdir())
+            if vdir.exists()
+            else False
+        )
+        active.append({
+            "video_id": video_id,
+            "filename": _meta_filename(video_id) or video_id,
+            "has_video": has_video,
+            "entries": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "progress": job.get("progress", 0),
+            "phase": job.get("phase", ""),
+            "job_id": job_id,
+            "error": job.get("error") if status == "error" else None,
+        })
+    videos.extend(active)
+
+    # ── Completed videos (have SRT on disk) ──
+    srt_root = settings.temp_dir / "srt"
+    seen: set[str] = set()
     if srt_root.exists():
         for srt_dir in sorted(
             srt_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True
@@ -34,21 +77,16 @@ async def list_videos():
             if not srt_path.exists():
                 continue
             video_id = srt_dir.name
+            if video_id in seen:
+                continue
+            seen.add(video_id)
             vdir = settings.temp_dir / "videos" / video_id
             has_video = (
                 any(f.stem.startswith("video") for f in vdir.iterdir())
                 if vdir.exists()
                 else False
             )
-            filename = video_id
-            meta_path = vdir / "meta.json"
-            if meta_path.exists():
-                try:
-                    filename = json.loads(meta_path.read_text("utf-8")).get(
-                        "filename", video_id
-                    )
-                except Exception:
-                    pass
+            filename = _meta_filename(video_id) or video_id
             content = srt_path.read_text(encoding="utf-8")
             entries = sum(1 for block in content.split("\n\n") if "-->" in block)
             videos.append({
@@ -59,6 +97,7 @@ async def list_videos():
                 "created_at": datetime.fromtimestamp(
                     srt_path.stat().st_mtime, tz=timezone.utc
                 ).isoformat(),
+                "status": "done",
             })
     return {"videos": videos}
 

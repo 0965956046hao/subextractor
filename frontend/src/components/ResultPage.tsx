@@ -161,7 +161,7 @@ function SuccessIcon() {
   );
 }
 
-export default function ResultPage({ videoId, region, lang = "ch", ocrType = "rapid", onReset, onDone, onViewLibrary }: Props) {
+export default function ResultPage({ videoId, region, lang = "ch", ocrType = "apple", onReset, onDone, onViewLibrary }: Props) {
   const [phase, setPhase] = useState<Phase>("submitting");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");

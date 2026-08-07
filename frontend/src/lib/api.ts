@@ -42,12 +42,19 @@ export function getFrameUrl(videoId: string): string {
   return `/api/frame/${videoId}`;
 }
 
+export type VideoStatus = "queued" | "processing" | "done" | "error";
+
 export interface VideoMeta {
   video_id: string;
   filename: string;
   has_video: boolean;
   entries: number;
   created_at: string;
+  status?: VideoStatus;
+  progress?: number;
+  phase?: string;
+  job_id?: string;
+  error?: string | null;
 }
 
 export async function listVideos(): Promise<VideoMeta[]> {
@@ -92,15 +99,15 @@ export const OCR_LANGS: { value: OcrLang; label: string; hint: string }[] = [
 export type OcrType = "rapid" | "apple";
 
 export const OCR_TYPES: { value: OcrType; label: string; hint: string }[] = [
-  { value: "rapid", label: "RapidOCR", hint: "Nhanh, chạy mọi nền tảng" },
   { value: "apple", label: "Apple Vision", hint: "macOS, tối ưu cho chữ in" },
+  { value: "rapid", label: "RapidOCR", hint: "Nhanh, chạy mọi nền tảng" },
 ];
 
 export async function startProcess(
   videoId: string,
   region: Region,
   lang: OcrLang = "ch",
-  ocrType: OcrType = "rapid",
+  ocrType: OcrType = "apple",
   signal?: AbortSignal
 ): Promise<JobStatus> {
   const res = await api.post<JobStatus>(

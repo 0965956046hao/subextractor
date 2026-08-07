@@ -18,7 +18,7 @@ class ProcessRequest(BaseModel):
     region: Region
     fps: int | None = None
     lang: str = "ch"
-    ocr_type: OcrType = "rapid"
+    ocr_type: OcrType = "apple"
 
 
 class LogEntry(BaseModel):
