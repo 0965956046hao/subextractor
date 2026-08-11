@@ -34,3 +34,16 @@ class JobStatus(BaseModel):
     progress: int = 0
     error: str | None = None
     logs: list[LogEntry] = []
+
+
+class SrtEntry(BaseModel):
+    index: int
+    start: float
+    end: float
+    startLabel: str
+    endLabel: str
+    text: str
+
+
+class UpdateSrtRequest(BaseModel):
+    content: str

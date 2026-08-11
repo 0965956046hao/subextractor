@@ -3,21 +3,25 @@ import time
 import asyncio
 import logging
 import functools
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
-from app.services.video_processor import stream_frames_generator, crop_region
+from app.services.video_processor import stream_frames_generator, crop_region, resolve_video_path
 from app.services.ocr_engine import BaseOCREngine
 from app.services.subtitle_generator import generate_srt, sec_to_srt
+from app.services.tool_services import (
+    run_hardcode_sync,
+    run_align_sync,
+    JobCancelled,
+    notify_ws_sync,
+    _srt_path,
+)
 
 logger = logging.getLogger(__name__)
 
 
 _executor = ThreadPoolExecutor(max_workers=1)
-
-
-class JobCancelled(Exception):
-    """Raised when the user requests to permanently cancel a running job."""
 
 
 def enqueue_job(
@@ -38,6 +42,7 @@ def enqueue_job(
         "fps": fps,
         "lang": lang,
         "ocr_type": ocr_type,
+        "job_type": "ocr",
         "status": "queued",
         "phase": "",
         "progress": 0,
@@ -287,6 +292,135 @@ async def run_job(
         })
 
 
+async def run_hardcode_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        job["status"] = "processing"
+        job["phase"] = "hardcode"
+        await job_log_async(job, ws_clients, "Bắt đầu encode phụ đề vào video (hardcode)…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "hardcode",
+        })
+
+        video_path = job["video_path"]
+        video_id = job.get("video_id", job_id)
+        srt_path = str(_srt_path(video_id))
+
+        out_dir = settings.temp_dir / "hardcoded" / video_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = str(out_dir / f"{Path(video_path).stem}_hardcoded.mp4")
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_hardcode_sync,
+            video_path, srt_path, out_path,
+            job, ws_clients, loop, job_id,
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        job["output_path"] = out_path
+
+        size_mb = Path(out_path).stat().st_size / (1024 * 1024)
+        await job_log_async(
+            job, ws_clients,
+            f"Hoàn tất! Video đã được gắn phụ đề cứng ({size_mb:.1f} MB).",
+            "success",
+        )
+        await notify_ws(ws_clients, job_id, {
+            "type": "done", "video_id": video_id, "filename": Path(out_path).name,
+        })
+
+    except JobCancelled:
+        logger.info("hardcode job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy encode phụ đề.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
+    except asyncio.TimeoutError:
+        logger.error("hardcode job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("hardcode job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi hardcode: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
+async def run_align_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        job["status"] = "processing"
+        job["phase"] = "align"
+        await job_log_async(job, ws_clients, "Bắt đầu căn chỉnh phụ đề bằng AI (Whisper)…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "align",
+        })
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_align_sync,
+            job, ws_clients, loop, job_id,
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(
+            job, ws_clients,
+            "Hoàn tất! Phụ đề đã được căn chỉnh với âm thanh video.",
+            "success",
+        )
+
+    except JobCancelled:
+        logger.info("align job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy căn chỉnh phụ đề.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
+    except asyncio.TimeoutError:
+        logger.error("align job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("align job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi căn chỉnh: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
 async def worker_loop(
     jobs: dict,
     ws_clients: dict,
@@ -296,8 +430,16 @@ async def worker_loop(
     logger.info("Worker loop started")
     while True:
         job_id = await queue.get()
+        job = jobs.get(job_id)
         try:
-            await run_job(jobs, ws_clients, ocr_engines, job_id)
+            if job:
+                job_type = job.get("job_type", "ocr")
+                if job_type == "hardcode":
+                    await run_hardcode_job(jobs, ws_clients, job_id)
+                elif job_type == "align":
+                    await run_align_job(jobs, ws_clients, job_id)
+                else:
+                    await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:
             logger.exception("Unhandled worker error for job %s: %s", job_id, e)
         finally:

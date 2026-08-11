@@ -140,3 +140,44 @@ export async function getSrtContent(videoId: string): Promise<string> {
   const res = await api.get<{ content: string }>(`/srt/${videoId}`);
   return res.data.content;
 }
+
+export interface SrtEntry {
+  index: number;
+  start: number;
+  end: number;
+  startLabel: string;
+  endLabel: string;
+  text: string;
+}
+
+export async function getSrtEntries(videoId: string): Promise<SrtEntry[]> {
+  const res = await api.get<{ entries: SrtEntry[] }>(`/srt/${videoId}/entries`);
+  return res.data.entries;
+}
+
+export async function updateSrt(videoId: string, content: string): Promise<void> {
+  await api.put(`/srt/${videoId}`, { content });
+}
+
+export async function muxSubtitles(videoId: string): Promise<JobStatus> {
+  const res = await api.post<JobStatus>(`/mux/${videoId}`);
+  return res.data;
+}
+
+export function getMuxedDownloadUrl(videoId: string): string {
+  return `/api/download/muxed/${videoId}`;
+}
+
+export async function hardcodeSubtitles(videoId: string): Promise<JobStatus> {
+  const res = await api.post<JobStatus>(`/hardcode/${videoId}`);
+  return res.data;
+}
+
+export function getHardcodedDownloadUrl(videoId: string): string {
+  return `/api/download/hardcoded/${videoId}`;
+}
+
+export async function alignSubtitles(videoId: string): Promise<JobStatus> {
+  const res = await api.post<JobStatus>(`/align/${videoId}`);
+  return res.data;
+}

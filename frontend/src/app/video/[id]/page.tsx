@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TranscriptPlayer from "@/components/TranscriptPlayer";
+import TimelineEditor from "@/components/TimelineEditor";
 import { AnimatedBlock } from "@/lib/animation";
 import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
 import type { VideoMeta, LogEntry } from "@/lib/api";
@@ -230,6 +231,8 @@ function JobProgress({
   );
 }
 
+type ViewMode = "transcript" | "timeline";
+
 export default function VideoDetailPage() {
   const params = useParams<{ id: string }>();
   const videoId = params.id;
@@ -237,6 +240,7 @@ export default function VideoDetailPage() {
   const [meta, setMeta] = useState<VideoMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  const [viewMode, setViewMode] = useState<ViewMode>("transcript");
 
   const loadMeta = useCallback(async () => {
     try {
@@ -356,7 +360,39 @@ export default function VideoDetailPage() {
         </AnimatedBlock>
       ) : meta && meta.status === "done" ? (
         <AnimatedBlock delay={200}>
-          <TranscriptPlayer videoId={videoId} />
+          {/* View mode toggle */}
+          <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
+            <div className="flex items-center gap-1 p-0.5 rounded-full bg-black/[0.04] ring-1 ring-black/[0.06]">
+              <button
+                onClick={() => setViewMode("transcript")}
+                className={`px-4 py-1.5 rounded-full text-[12px] font-medium tracking-tight transition-all duration-300 cursor-pointer ${
+                  viewMode === "transcript"
+                    ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                    : "text-ink-muted hover:text-ink"
+                }`}
+              >
+                Transcript
+              </button>
+              <button
+                onClick={() => setViewMode("timeline")}
+                className={`px-4 py-1.5 rounded-full text-[12px] font-medium tracking-tight transition-all duration-300 cursor-pointer ${
+                  viewMode === "timeline"
+                    ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                    : "text-ink-muted hover:text-ink"
+                }`}
+              >
+                Timeline
+              </button>
+            </div>
+            <span className="text-[10px] font-mono text-ink-light tabular-nums">
+              {meta.entries} subtitle lines
+            </span>
+          </div>
+          {viewMode === "transcript" ? (
+            <TranscriptPlayer videoId={videoId} />
+          ) : (
+            <TimelineEditor videoId={videoId} duration={60} />
+          )}
         </AnimatedBlock>
       ) : (
         <AnimatedBlock delay={200}>
