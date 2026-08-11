@@ -391,7 +391,7 @@ export default function VideoDetailPage() {
           {viewMode === "transcript" ? (
             <TranscriptPlayer videoId={videoId} />
           ) : (
-            <TimelineEditor videoId={videoId} duration={60} />
+            <TimelineEditor videoId={videoId} />
           )}
         </AnimatedBlock>
       ) : (
