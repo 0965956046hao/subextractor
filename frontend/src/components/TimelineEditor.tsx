@@ -282,6 +282,48 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
     };
   }, []);
 
+  /* ---- TTS audio sync ---- */
+  const ttsAudioRefs = useRef<Map<number, HTMLAudioElement>>(new Map());
+  const [ttsActiveIndex, setTtsActiveIndex] = useState<number | null>(null);
+  useEffect(() => {
+    if (ttsClips.length === 0) return;
+    setTtsActiveIndex(null);
+    const check = () => {
+      const v = videoRef.current;
+      if (!v) return;
+      const t = v.currentTime;
+      const isPlaying = !v.paused;
+      let found = false;
+      ttsClips.forEach((clip, i) => {
+        const active = t >= clip.start && t < clip.end;
+        if (active && isPlaying) {
+          found = true;
+          setTtsActiveIndex(i);
+          if (!ttsAudioRefs.current.has(i)) {
+            const audio = new Audio(clip.url);
+            audio.currentTime = Math.max(0, t - clip.start);
+            audio.play().catch(() => {});
+            ttsAudioRefs.current.set(i, audio);
+          }
+        } else if (!isPlaying || !active) {
+          const audio = ttsAudioRefs.current.get(i);
+          if (audio) {
+            audio.pause();
+            ttsAudioRefs.current.delete(i);
+          }
+        }
+      });
+      if (!found) setTtsActiveIndex(null);
+    };
+    const interval = setInterval(check, 100);
+    return () => {
+      clearInterval(interval);
+      ttsAudioRefs.current.forEach(a => { a.pause(); });
+      ttsAudioRefs.current.clear();
+      setTtsActiveIndex(null);
+    };
+  }, [ttsClips]);
+
   /* ---- keyboard shortcuts ---- */
   const togglePlayRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -1307,23 +1349,30 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                 {ttsClips.map((clip, i) => {
                   const left = clip.start * pixelsPerSec;
                   const width = Math.max((clip.end - clip.start) * pixelsPerSec, 4);
+                  const isActive = ttsActiveIndex === i;
                   return (
                     <div
                       key={i}
-                      className="absolute top-1 bottom-1 rounded-md bg-cyan-500/30 ring-1 ring-cyan-500/40 hover:bg-cyan-500/50 cursor-pointer flex items-center justify-center z-10"
+                      className={`absolute top-1 bottom-1 rounded-md flex items-center justify-center z-10 cursor-pointer transition-all duration-150 ${
+                        isActive
+                          ? "bg-cyan-500/60 ring-2 ring-cyan-500/60 shadow-md"
+                          : "bg-cyan-500/20 ring-1 ring-cyan-500/30 hover:bg-cyan-500/40"
+                      }`}
                       style={{ left, width }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        const audio = new Audio(clip.url);
-                        audio.play().catch(() => {});
-                        // seek video to this clip
+                        // stop active audio
+                        ttsAudioRefs.current.forEach(a => { a.pause(); });
+                        ttsAudioRefs.current.clear();
+                        setTtsActiveIndex(null);
+                        // seek and play
                         const v = videoRef.current;
-                        if (v) { v.currentTime = clip.start; setCurrentTime(clip.start); }
+                        if (v) { v.currentTime = clip.start; setCurrentTime(clip.start); v.play?.().catch(() => {}); }
                       }}
                       title={`🎙️ ${fmtTime(clip.start)} - ${fmtTime(clip.end)}`}
                     >
-                      <span className="text-[8px] font-medium text-cyan-700/70 select-none pointer-events-none">
-                        🎙️ {i + 1}
+                      <span className={`text-[8px] font-medium select-none pointer-events-none ${isActive ? "text-cyan-900" : "text-cyan-700/70"}`}>
+                        🎙️ {i + 1} {isActive ? "▶" : ""}
                       </span>
                     </div>
                   );
