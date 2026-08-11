@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -7,6 +8,17 @@ from app.config import settings
 from app.services.tool_services import parse_srt, entries_to_srt, _srt_path, _video_path
 
 logger = logging.getLogger(__name__)
+
+
+def _read_user_config() -> dict:
+    cf = settings.temp_dir / "user_config.json"
+    if cf.exists():
+        try:
+            return json.loads(cf.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
 
 CHINESE_TO_VIETNAMESE_PROMPT = """You are a professional translator specializing in Chinese historical drama subtitles. 
 
@@ -23,6 +35,20 @@ Here is the SRT to translate:
 
 """
 
+GENERIC_TRANSLATE_PROMPT = """You are a professional subtitle translator. Translate the following SRT subtitles from {source_lang_name} to {target_lang_name}.
+
+Rules:
+1. Read the FULL context first before translating
+2. Use natural sentence structure, not word-for-word translation
+3. Keep the original SRT format: index, timestamps, and translated text
+4. Keep each translated line roughly the same length
+5. DO NOT add any explanation or notes
+6. Output ONLY the translated SRT content in valid SRT format
+
+Here is the SRT to translate:
+
+"""
+
 
 def _get_gemini_client():
     """Lazy-load Gemini client when needed."""
@@ -33,13 +59,17 @@ def _get_gemini_client():
             "google-genai not installed. Run: pip install google-genai"
         )
 
-    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or _read_user_config().get("gemini_api_key", "")
     if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY not set. Set STE_GEMINI_API_KEY in .env or export GEMINI_API_KEY"
-        )
+        raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
     return genai.Client(api_key=api_key)
+
+
+LANG_NAMES = {
+    "zh": "Chinese", "en": "English", "vi": "Vietnamese",
+    "ja": "Japanese", "ko": "Korean", "fr": "French",
+}
 
 
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False) -> str:
@@ -61,6 +91,14 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
 
     model = _get_gemini_client()
 
+    # Build prompt based on language pair
+    if source_lang == "zh" and target_lang == "vi":
+        base_prompt = CHINESE_TO_VIETNAMESE_PROMPT
+    else:
+        sn = LANG_NAMES.get(source_lang, source_lang)
+        tn = LANG_NAMES.get(target_lang, target_lang)
+        base_prompt = GENERIC_TRANSLATE_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
+
     # Send in batches of 50 entries to stay within context limits
     batch_size = 50
     translated_entries = []
@@ -68,7 +106,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     for batch_start in range(0, len(entries), batch_size):
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
-        prompt = CHINESE_TO_VIETNAMESE_PROMPT + batch_srt
+        prompt = base_prompt + batch_srt
         logger.info("Sending batch %d-%d to Gemini", batch_start + 1, min(batch_start + batch_size, len(entries)))
 
         try:
@@ -133,7 +171,12 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             "phase": "translating",
         })
 
-        result = translate_srt(video_id, use_custom_srt=job.get("use_custom_srt", False))
+        result = translate_srt(
+            video_id,
+            source_lang=job.get("source_lang", "zh"),
+            target_lang=job.get("target_lang", "vi"),
+            use_custom_srt=job.get("use_custom_srt", False),
+        )
 
         job["progress"] = 100
         job["phase"] = "done"

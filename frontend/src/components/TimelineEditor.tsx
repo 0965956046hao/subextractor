@@ -150,7 +150,19 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
   const [toolJob, setToolJob] = useState<{
     type: string; jobId: string; status: string; progress: number; error: string;
   } | null>(null);
-  const [ttsClips, setTtsClips] = useState<{url:string;start:number;end:number}[]>([]);
+  const [ttsClips, setTtsClips] = useState<{url:string;start:number;end:number;speed:number}[]>([]);
+  const [videoMuted, setVideoMuted] = useState(false);
+  const [ttsVoice, setTtsVoice] = useState("vi-VN-Standard-A");
+  const [transSrcLang, setTransSrcLang] = useState("zh");
+  const [transDstLang, setTransDstLang] = useState("vi");
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsGeminiKey, setSettingsGeminiKey] = useState("");
+  const [settingsTtsJson, setSettingsTtsJson] = useState("");
+  const [settingsStatus, setSettingsStatus] = useState("");
+  const [hasApiKeys, setHasApiKeys] = useState(false);
+  const [ttsApplyAll, setTtsApplyAll] = useState(false);
+  const [editingClipSpeed, setEditingClipSpeed] = useState<number | null>(null);
+  const [ttsSpeedApplyAll, setTtsSpeedApplyAll] = useState(false);
 
   useEffect(() => {
     if (selectedIndex !== null) setShowStylePanel(true);
@@ -202,12 +214,75 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
+  /* ---- load project state ---- */
+  useEffect(() => {
+    if (loading) return;
+    fetch(`/api/project/${videoId}/load`).then(r => r.json()).then(d => {
+      if (d.tracks?.length > 0) {
+        setTracks(d.tracks);
+        setSaved(true);
+      }
+      if (d.tts_clips?.length > 0) {
+        setTtsClips(d.tts_clips);
+      }
+      if (d.videoMuted !== undefined) {
+        setVideoMuted(d.videoMuted);
+        const v = videoRef.current;
+        if (v) v.muted = d.videoMuted;
+      }
+      if (d.ttsVoice) setTtsVoice(d.ttsVoice);
+      if (d.snapping !== undefined) setSnapping(d.snapping);
+      if (d.zoom) setZoom(d.zoom);
+    }).catch(() => {});
+  }, [loading, videoId]);
+
   /* ---- fetch available SRT files ---- */
   useEffect(() => {
     fetch(`/api/srt/${videoId}/available`).then(r => r.json()).then(d => {
       if (d.files?.length > 1) setAvailableSrtFiles(d.files);
     }).catch(() => {});
   }, [videoId]);
+
+  /* ---- check API config ---- */
+  useEffect(() => {
+    fetch("/api/config").then(r => r.json()).then(d => {
+      setHasApiKeys(d.has_gemini_key && d.has_tts_credentials);
+    }).catch(() => {});
+  }, []);
+
+  const openSettings = async () => {
+    setShowSettings(true);
+    setSettingsStatus("");
+    try {
+      const res = await fetch("/api/config");
+      const d = await res.json();
+      setSettingsGeminiKey(d.has_gemini_key ? "••••••••" : "");
+    } catch { /* ignore */ }
+  };
+
+  const saveSettings = async () => {
+    setSettingsStatus("Đang lưu...");
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          gemini_api_key: settingsGeminiKey && settingsGeminiKey !== "••••••••" ? settingsGeminiKey : "",
+          google_tts_json: settingsTtsJson || "",
+        }),
+      });
+      const d = await res.json();
+      if (d.error) {
+        setSettingsStatus(d.error);
+      } else {
+        setSettingsStatus("Đã lưu!");
+        setTimeout(() => { setShowSettings(false); setSettingsStatus(""); }, 1500);
+        setHasApiKeys(true);
+      }
+    } catch {
+      setSettingsStatus("Lỗi kết nối");
+    }
+  };
 
   useEffect(() => {
     fetch(`/api/tts/${videoId}/available`).then(r => r.json()).then(d => {
@@ -301,6 +376,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
           setTtsActiveIndex(i);
           if (!ttsAudioRefs.current.has(i)) {
             const audio = new Audio(clip.url);
+            audio.playbackRate = clip.speed;
             audio.currentTime = Math.max(0, t - clip.start);
             audio.play().catch(() => {});
             ttsAudioRefs.current.set(i, audio);
@@ -322,6 +398,14 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
       ttsAudioRefs.current.clear();
       setTtsActiveIndex(null);
     };
+  }, [ttsClips]);
+
+  // Sync playbackRate when per-clip speed changes
+  useEffect(() => {
+    ttsAudioRefs.current.forEach((a, i) => {
+      const clip = ttsClips[i];
+      if (clip) a.playbackRate = clip.speed;
+    });
   }, [ttsClips]);
 
   /* ---- keyboard shortcuts ---- */
@@ -384,13 +468,15 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
             // Load TTS audio clips into timeline using selected track's timestamps
             const track = selectedTrack ? tracks.find(t => t.id === selectedTrack) : tracks[0];
             if (track) {
+              const voiceKey = ttsVoice.replace(/-/g, "_");
               const clips = track.entries.map((entry, i) => ({
-                url: `/api/tts-audio/${videoId}/${String(i + 1).padStart(4, "0")}.mp3`,
+                url: `/api/tts-audio/${videoId}/${voiceKey}/${String(i + 1).padStart(4, "0")}.mp3`,
                 start: entry.start,
                 end: entry.end,
+                speed: 1.0,
               }));
               setTtsClips(clips);
-              setToast(`Đã tải ${clips.length} audio clip vào timeline. Click để nghe.`);
+              setToast(`Đã tải ${clips.length} audio clip vào timeline. Click để chỉnh tốc độ.`);
               setTimeout(() => setToast(null), 3000);
             }
           }
@@ -409,12 +495,26 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
   const saveSrt = useCallback(async () => {
     if (saved) return;
     try {
+      // Save SRT
       const allEntries = tracks.flatMap((t) => t.entries);
-      const content = entriesToSrt(allEntries);
-      await updateSrt(videoId, content);
+      await updateSrt(videoId, entriesToSrt(allEntries));
+      // Save full project state
+      await fetch(`/api/project/${videoId}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tracks,
+          ttsClips: ttsClips.map(c => ({ url: c.url, start: c.start, end: c.end, speed: c.speed })),
+          videoMuted,
+          ttsVoice,
+          snapping,
+          zoom,
+          applyAll,
+        }),
+      });
       setSaved(true);
     } catch { /* silent */ }
-  }, [tracks, videoId, saved]);
+  }, [tracks, videoId, saved, ttsClips, videoMuted, ttsVoice, snapping, zoom, applyAll]);
 
   /* ---- helpers ---- */
   const getTrackEntries = (trackId: string): SrtEntry[] =>
@@ -579,7 +679,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
         const res = await fetch(`/api/tts/${videoId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ srt_content: srtContent, track_name: trackName }),
+          body: JSON.stringify({ srt_content: srtContent, track_name: trackName, voice: ttsVoice }),
         });
         const data = await res.json();
         setToolJob({ type, jobId: data.job_id, status: data.status, progress: data.progress, error: data.error || "" });
@@ -588,7 +688,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
         const res = await fetch(`/api/translate/${videoId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ srt_content: srtContent, track_name: trackName }),
+          body: JSON.stringify({ srt_content: srtContent, track_name: trackName, source_lang: transSrcLang, target_lang: transDstLang }),
         });
         const data = await res.json();
         setToolJob({ type, jobId: data.job_id, status: data.status, progress: data.progress, error: data.error || "" });
@@ -757,6 +857,22 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                 <svg className="w-3.5 h-3.5 ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
               )}
             </button>
+            <button
+              onClick={() => {
+                const v = videoRef.current;
+                if (v) { v.muted = !v.muted; setVideoMuted(v.muted); }
+              }}
+              title={videoMuted ? "Bật tiếng" : "Tắt tiếng video gốc"}
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-300 cursor-pointer ${
+                videoMuted ? "bg-red-500/10 text-red-500 ring-1 ring-red-500/25" : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06]"
+              }`}
+            >
+              {videoMuted ? (
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+              ) : (
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+              )}
+            </button>
             <span className="text-xs font-mono tabular-nums text-ink-muted min-w-[90px]">
               {fmtTime(currentTime)} / {fmtTime(duration)}
             </span>
@@ -803,25 +919,23 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
             {availableTtsFiles.length > 0 && (
               <select
                 onChange={async (e) => {
+                  const file = availableTtsFiles.find(f => f.id === e.target.value);
                   e.target.value = "";
-                  // download dubbed video
-                  window.open(`/api/download/dubbed/${videoId}`, "_blank");
-                  // load original SRT as "Voice" track
-                  try {
-                    const res = await fetch(`/api/srt/${videoId}/load/original`);
-                    const data = await res.json();
-                    const parsed: SrtEntry[] = (data.entries as ApiSrtEntry[]).map((e: ApiSrtEntry) => ({
-                      index: e.index, start: e.start, end: e.end,
-                      startLabel: e.startLabel, endLabel: e.endLabel, text: e.text,
+                  if (!file) return;
+                  // Load TTS audio clips from the selected subdirectory
+                  const track = selectedTrack ? tracks.find(t => t.id === selectedTrack) : tracks[0];
+                  if (track) {
+                    const subdir = file.id === "legacy" ? "" : file.id + "/";
+                    const clips = track.entries.map((entry, i) => ({
+                      url: `/api/tts-audio/${videoId}/${subdir}${String(i + 1).padStart(4, "0")}.mp3`,
+                      start: entry.start,
+                      end: entry.end,
+                      speed: 1.0,
                     }));
-                    if (parsed.length > 0) {
-                      const tid = newTrackId();
-                      setTracks((prev) => [...prev, { id: tid, name: "Voice (TTS)", entries: parsed }]);
-                      setSaved(false);
-                      setToast(`Đã tải ${parsed.length} phụ đề từ file lồng tiếng`);
-                      setTimeout(() => setToast(null), 3000);
-                    }
-                  } catch { /* ignore */ }
+                    setTtsClips(clips);
+                    setToast(`Đã tải ${clips.length} audio clip vào timeline`);
+                    setTimeout(() => setToast(null), 3000);
+                  }
                 }}
                 className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer appearance-none pr-7"
                 style={{backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%230895b0' opacity='0.5'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center"}}
@@ -840,6 +954,13 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
               <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               Thêm phụ đề
             </button>
+            <select value={transSrcLang} onChange={e => setTransSrcLang(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-ink cursor-pointer">
+              <option value="zh">Trung</option><option value="en">Anh</option><option value="ja">Nhật</option><option value="ko">Hàn</option>
+            </select>
+            <span className="text-[10px] text-ink-light">→</span>
+            <select value={transDstLang} onChange={e => setTransDstLang(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-ink cursor-pointer">
+              <option value="vi">Việt</option><option value="en">Anh</option><option value="zh">Trung</option>
+            </select>
             <button
               onClick={() => runToolJob("translate")}
               disabled={!!toolJob}
@@ -853,6 +974,30 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
               className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Lồng tiếng (TTS)
+            </button>
+            <div className="flex items-center gap-1">
+              <span className="text-[9px] text-ink-light">Giọng:</span>
+              <select value={ttsVoice} onChange={e => setTtsVoice(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-ink cursor-pointer">
+                <option value="vi-VN-Standard-A">Nữ A</option>
+                <option value="vi-VN-Standard-B">Nam B</option>
+                <option value="vi-VN-Standard-C">Nữ C</option>
+                <option value="vi-VN-Standard-D">Nam D</option>
+                <option value="vi-VN-Wavenet-A">WaveNet Nữ A</option>
+                <option value="vi-VN-Wavenet-B">WaveNet Nam B</option>
+                <option value="vi-VN-Wavenet-C">WaveNet Nữ C</option>
+                <option value="vi-VN-Wavenet-D">WaveNet Nam D</option>
+              </select>
+            </div>
+            <button
+              onClick={openSettings}
+              title="Cấu hình API Keys"
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-300 cursor-pointer ${
+                hasApiKeys ? "bg-emerald-500/10 text-emerald-600 ring-1 ring-emerald-500/25" : "bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/25"
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+              </svg>
             </button>
             <button
               onClick={saveSrt}
@@ -1216,6 +1361,11 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
             <div className="flex-1 flex items-center px-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-600/70">Audio</span>
             </div>
+            {ttsClips.length > 0 && (
+              <div className="h-16 flex items-center px-2 border-t border-black/[0.04]">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-600/70">TTS Voice</span>
+              </div>
+            )}
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden" style={{ scrollBehavior: "auto" }}>
@@ -1332,9 +1482,8 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
               ))}
 
               {/* ---- Audio Track ---- */}
-              <div className="h-16 relative bg-emerald-500/[0.02] cursor-pointer" onClick={seekTimeline}>
-                {/* waveform background */}
-                <div className="absolute inset-x-0 bottom-1 top-1 flex items-end pointer-events-none">
+              <div className="h-16 relative bg-emerald-500/[0.02] cursor-pointer flex items-end" onClick={seekTimeline}>
+                <div className="absolute inset-x-0 bottom-1 top-1 flex items-end">
                   {Array.from({ length: Math.ceil(duration * 2) }, (_, i) => {
                     const t = i / 2;
                     const x = t * pixelsPerSec;
@@ -1345,39 +1494,104 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                     return (<div key={i} className="absolute rounded-t-[1px]" style={{ left: x, width: barW, height: `${Math.max(2, h * 54)}px`, background: nearSub ? "rgba(16,185,129,0.3)" : "rgba(16,185,129,0.15)" }} />);
                   })}
                 </div>
-                {/* TTS audio clips */}
-                {ttsClips.map((clip, i) => {
-                  const left = clip.start * pixelsPerSec;
-                  const width = Math.max((clip.end - clip.start) * pixelsPerSec, 4);
-                  const isActive = ttsActiveIndex === i;
-                  return (
-                    <div
-                      key={i}
-                      className={`absolute top-1 bottom-1 rounded-md flex items-center justify-center z-10 cursor-pointer transition-all duration-150 ${
-                        isActive
-                          ? "bg-cyan-500/60 ring-2 ring-cyan-500/60 shadow-md"
-                          : "bg-cyan-500/20 ring-1 ring-cyan-500/30 hover:bg-cyan-500/40"
-                      }`}
-                      style={{ left, width }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // stop active audio
-                        ttsAudioRefs.current.forEach(a => { a.pause(); });
-                        ttsAudioRefs.current.clear();
-                        setTtsActiveIndex(null);
-                        // seek and play
-                        const v = videoRef.current;
-                        if (v) { v.currentTime = clip.start; setCurrentTime(clip.start); v.play?.().catch(() => {}); }
-                      }}
-                      title={`🎙️ ${fmtTime(clip.start)} - ${fmtTime(clip.end)}`}
-                    >
-                      <span className={`text-[8px] font-medium select-none pointer-events-none ${isActive ? "text-cyan-900" : "text-cyan-700/70"}`}>
-                        🎙️ {i + 1} {isActive ? "▶" : ""}
-                      </span>
-                    </div>
-                  );
-                })}
               </div>
+
+              {/* ---- TTS Voice Track (only when clips loaded) ---- */}
+              {ttsClips.length > 0 && (
+                <div className="h-16 relative bg-cyan-500/[0.03] cursor-pointer" onClick={seekTimeline}>
+                  <div className="absolute inset-x-0 bottom-2 top-2 flex items-center opacity-30 pointer-events-none">
+                    {Array.from({ length: Math.ceil(duration * 2) }, (_, i) => {
+                      const x = (i / 2) * pixelsPerSec;
+                      if (x > totalWidth + 2) return null;
+                      const barW = Math.max(1, pixelsPerSec / 2 - 0.5);
+                      return (<div key={i} className="absolute rounded-t-[1px]" style={{ left: x, width: barW, height: `${Math.max(2, 20)}px`, background: "rgba(6,182,212,0.2)" }} />);
+                    })}
+                  </div>
+                  {ttsClips.map((clip, i) => {
+                    const left = clip.start * pixelsPerSec;
+                    const width = Math.max((clip.end - clip.start) * pixelsPerSec, 4);
+                    const isActive = ttsActiveIndex === i;
+                    return (
+                      <div
+                        key={i}
+                        className={`absolute top-1 bottom-1 rounded-md flex items-center justify-center z-10 transition-all duration-150 ${
+                          isActive
+                            ? "bg-cyan-500/60 ring-2 ring-cyan-500/60 shadow-md"
+                            : "bg-cyan-500/20 ring-1 ring-cyan-500/30 hover:bg-cyan-500/40 cursor-pointer"
+                        }`}
+                        style={{ left, width }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          ttsAudioRefs.current.forEach(a => { a.pause(); });
+                          ttsAudioRefs.current.clear();
+                          setTtsActiveIndex(null);
+                          const v = videoRef.current;
+                          if (v) { v.currentTime = clip.start; setCurrentTime(clip.start); v.play?.().catch(() => {}); }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setEditingClipSpeed(i);
+                        }}
+                        title={`🎙️ ${fmtTime(clip.start)} - ${fmtTime(clip.end)} | Chuột phải: chỉnh tốc độ (${clip.speed}x)`}
+                      >
+                        <span className={`text-[8px] font-medium select-none pointer-events-none ${isActive ? "text-cyan-900" : "text-cyan-700/70"}`}>
+                          🎙️ {i + 1} {isActive ? "▶" : ""}
+                        </span>
+                        {clip.speed !== 1.0 && (
+                          <span className="absolute -top-1 -right-1 bg-cyan-600 text-white text-[7px] rounded px-1 font-bold select-none pointer-events-none">{clip.speed}x</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {/* Speed editor popup */}
+                  {editingClipSpeed !== null && ttsClips[editingClipSpeed] && (() => {
+                    const clip = ttsClips[editingClipSpeed];
+                    const i = editingClipSpeed;
+                    const popLeft = clip.start * pixelsPerSec;
+                    return (
+                      <div
+                        className="absolute -top-16 z-50 bg-white rounded-xl shadow-xl ring-1 ring-black/[0.1] px-3 py-2 flex items-center gap-2 whitespace-nowrap"
+                        style={{ left: Math.max(0, popLeft - 60), zIndex: 60 }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <span className="text-[9px] font-medium text-ink-muted">Tốc độ:</span>
+                        <input
+                          type="number"
+                          min={0.25}
+                          max={4}
+                          step={0.05}
+                          value={clip.speed}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value) || 1;
+                            setTtsClips(prev => prev.map((c, j) => {
+                              if (ttsSpeedApplyAll || j === i) return { ...c, speed: Math.max(0.25, Math.min(4, v)) };
+                              return c;
+                            }));
+                          }}
+                          className="w-14 rounded border border-black/[0.1] bg-white px-1.5 py-0.5 text-[10px] text-center focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                        />
+                        <label className="flex items-center gap-1 cursor-pointer select-none">
+                          <input type="checkbox" checked={ttsSpeedApplyAll} onChange={e => setTtsSpeedApplyAll(e.target.checked)} className="w-3 h-3 accent-cyan-600" />
+                          <span className="text-[8px] text-ink-muted">All</span>
+                        </label>
+                        <button
+                          onClick={() => {
+                            setTtsClips(prev => prev.filter((_, j) => j !== i));
+                            setEditingClipSpeed(null);
+                            ttsAudioRefs.current.get(i)?.pause();
+                            ttsAudioRefs.current.delete(i);
+                          }}
+                          className="text-[10px] text-red-500 hover:text-red-600 font-medium cursor-pointer"
+                        >
+                          Xoá
+                        </button>
+                        <button onClick={() => setEditingClipSpeed(null)} className="text-[10px] text-ink-light hover:text-ink cursor-pointer">✕</button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
 
               {/* ---- Playhead ---- */}
               <div className="absolute top-0 bottom-0 z-30 pointer-events-none" style={{ left: currentTime * pixelsPerSec }}>
@@ -1459,6 +1673,55 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
         {toast && (
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-ink/90 text-white text-xs font-medium shadow-lg" style={{ animation: "fade-in 0.2s ease forwards" }}>
             {toast}
+          </div>
+        )}
+
+        {/* settings modal */}
+        {showSettings && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+            <div className="glass-panel rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl" style={{ animation: "scale-in 0.2s ease forwards" }}>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-sm font-semibold text-ink">⚙️ Cấu hình API</span>
+                <button onClick={() => { setShowSettings(false); setSettingsStatus(""); }} className="w-6 h-6 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-colors cursor-pointer">
+                  <svg className="w-3.5 h-3.5 text-ink-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">Gemini API Key</label>
+                  <input
+                    type="password"
+                    value={settingsGeminiKey}
+                    onChange={(e) => setSettingsGeminiKey(e.target.value)}
+                    placeholder="AIzaSy..."
+                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  />
+                  <p className="text-[9px] text-ink-light mt-1">
+                    Lấy tại <a href="https://aistudio.google.com/apikey" target="_blank" className="text-blue-500 underline">aistudio.google.com/apikey</a>
+                  </p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">Google Cloud TTS (Service Account JSON)</label>
+                  <textarea
+                    value={settingsTtsJson}
+                    onChange={(e) => setSettingsTtsJson(e.target.value)}
+                    placeholder='{"type": "service_account", "project_id": "..."}'
+                    rows={4}
+                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  />
+                  <p className="text-[9px] text-ink-light mt-1">
+                    Google Cloud → IAM → Service Accounts → Create Key → JSON
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mt-4">
+                <span className={`text-[11px] ${settingsStatus.includes("Đã lưu") ? "text-emerald-600" : settingsStatus.includes("Lỗi") || settingsStatus.includes("không") ? "text-red-500" : "text-ink-light"}`}>{settingsStatus || ""}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => { setShowSettings(false); setSettingsStatus(""); }} className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-colors cursor-pointer">Đóng</button>
+                  <button onClick={saveSettings} className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer">Lưu</button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

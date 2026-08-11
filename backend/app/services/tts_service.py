@@ -22,14 +22,31 @@ def _get_tts_client():
             "google-cloud-texttospeech not installed. Run: pip install google-cloud-texttospeech"
         )
 
+    # Check env vars first, then user config
     creds_path = settings.google_tts_credentials or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    if creds_path:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+    if not creds_path:
+        # Read from user config JSON
+        cf = settings.temp_dir / "user_config.json"
+        if cf.exists():
+            try:
+                cfg = json.loads(cf.read_text(encoding="utf-8"))
+                creds_json = cfg.get("google_tts_credentials", "")
+                if creds_json:
+                    # Write to temp file and point to it
+                    creds_file = settings.temp_dir / "tts_service_account.json"
+                    creds_file.write_text(creds_json, encoding="utf-8")
+                    creds_path = str(creds_file)
+            except Exception:
+                pass
 
+    if not creds_path:
+        raise ValueError("Google TTS credentials not set. Vào Settings (⚙️) để nhập Service Account JSON.")
+
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
     return texttospeech.TextToSpeechClient()
 
 
-def synthesize_entry(client, entry, out_dir: Path, index: int) -> Path:
+def synthesize_entry(client, entry, out_dir: Path, index: int, voice_name: str = "vi-VN-Standard-A") -> Path:
     """Synthesize a single SRT entry to MP3."""
     try:
         from google.cloud import texttospeech
@@ -43,7 +60,7 @@ def synthesize_entry(client, entry, out_dir: Path, index: int) -> Path:
     synthesis_input = texttospeech.SynthesisInput(text=text)
     voice = texttospeech.VoiceSelectionParams(
         language_code="vi-VN",
-        name="vi-VN-Standard-A",  # Standard Vietnamese female voice
+        name=voice_name,
         ssml_gender=texttospeech.SsmlVoiceGender.FEMALE,
     )
     audio_config = texttospeech.AudioConfig(
@@ -62,13 +79,17 @@ def synthesize_entry(client, entry, out_dir: Path, index: int) -> Path:
     return out_path
 
 
-def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool = False) -> List[Path]:
+def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "vi-VN-Standard-A") -> List[Path]:
     """Convert all SRT entries to individual MP3 files, then combine into one."""
-    out_dir = settings.temp_dir / "tts" / video_id
+    voice_key = voice_name.replace("-", "_")
+    out_dir = settings.temp_dir / "tts" / video_id / voice_key
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if use_custom_srt:
         custom_path = out_dir / "custom_input.srt"
+        # Fallback: custom SRT is saved in parent tts dir by the router
+        if not custom_path.exists():
+            custom_path = settings.temp_dir / "tts" / video_id / "custom_input.srt"
         if not custom_path.exists():
             raise ValueError("Custom SRT input not found")
         content = custom_path.read_text(encoding="utf-8")
@@ -83,20 +104,17 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
 
     client = _get_tts_client()
 
-    out_dir = settings.temp_dir / "tts" / video_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     audio_files: List[Path] = []
     total = len(entries)
 
-    logger.info("Synthesizing %d subtitle entries with Google Cloud TTS", total)
+    logger.info("Synthesizing %d entries (voice=%s)", total, voice_name)
 
     for i, entry in enumerate(entries):
         if progress_callback:
             progress_callback(i, total)
 
         try:
-            path = synthesize_entry(client, entry, out_dir, i + 1)
+            path = synthesize_entry(client, entry, out_dir, i + 1, voice_name=voice_name)
             if path:
                 audio_files.append(path)
         except Exception as e:
@@ -252,13 +270,15 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             video_id,
             progress_callback=progress,
             use_custom_srt=job.get("use_custom_srt", False),
+            voice_name=job.get("tts_voice", "vi-VN-Standard-A"),
         )
 
-        # Build list of audio file URLs for FE
+        # Build list of audio file URLs for FE (use relative paths from out_dir)
         audio_urls = []
         for af in audio_files:
             if af and af.exists() and af.stat().st_size > 0:
-                audio_urls.append(f"/api/tts-audio/{video_id}/{af.name}")
+                rel = str(af.relative_to(settings.temp_dir / "tts" / video_id))
+                audio_urls.append(f"/api/tts-audio/{video_id}/{rel}")
 
         _notify_ws_sync(loop, ws_clients, job_id, {
             "type": "log",

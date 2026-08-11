@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import shlex
 import uuid
@@ -182,6 +183,8 @@ async def translate_subtitles(video_id: str, request: Request):
         pass
 
     srt_content = body.get("srt_content", "")
+    source_lang = body.get("source_lang", "zh")
+    target_lang = body.get("target_lang", "vi")
 
     if srt_content:
         tr_dir = settings.temp_dir / "translated" / video_id
@@ -206,6 +209,8 @@ async def translate_subtitles(video_id: str, request: Request):
         "error": None,
         "cancelled": False,
         "use_custom_srt": bool(srt_content),
+        "source_lang": source_lang,
+        "target_lang": target_lang,
     }
     jobs[job_id] = job
     logger.info("translate job %s: queued for %s (custom=%s)", job_id, video_id, bool(srt_content))
@@ -239,6 +244,7 @@ async def tts_subtitles(video_id: str, request: Request):
 
     srt_content = body.get("srt_content", "")
     track_name = body.get("track_name", "")
+    tts_voice = body.get("voice", "vi-VN-Standard-A")
 
     if srt_content:
         # Save custom SRT temporarily for TTS
@@ -267,6 +273,7 @@ async def tts_subtitles(video_id: str, request: Request):
         "cancelled": False,
         "use_custom_srt": bool(srt_content),
         "track_name": track_name,
+        "tts_voice": tts_voice,
     }
     jobs[job_id] = job
     logger.info("tts job %s: queued for %s (custom=%s)", job_id, video_id, bool(srt_content))
@@ -330,21 +337,61 @@ async def load_srt_file(video_id: str, file_id: str):
 
 @router.get("/api/tts/{video_id}/available")
 async def list_available_tts(video_id: str):
-    """List available TTS dubbed files for this video."""
+    """List all TTS audio files for this video."""
     files = []
     tts_dir = settings.temp_dir / "tts" / video_id
     if tts_dir.exists():
+        # List MP3 files grouped by voice subdirectory
+        for subdir in sorted(tts_dir.iterdir()):
+            if subdir.is_dir():
+                mp3_files = sorted(subdir.glob("*.mp3"))
+                if mp3_files:
+                    voice_label = subdir.name.replace("_", "-")
+                    files.append({
+                        "id": subdir.name,
+                        "name": f"TTS {voice_label} ({len(mp3_files)} files)",
+                        "count": len(mp3_files),
+                    })
+        # Legacy: MP3s directly in tts dir (old format)
+        mp3_files = sorted(tts_dir.glob("*.mp3"))
+        if mp3_files:
+            files.append({
+                "id": "legacy",
+                "name": f"Audio TTS legacy ({len(mp3_files)} files)",
+                "count": len(mp3_files),
+            })
+        # Also check for remuxed video
         dubbed = tts_dir / "dubbed_video.mp4"
         if dubbed.exists():
             files.append({"id": "dubbed", "name": "Video lồng tiếng", "size": dubbed.stat().st_size})
     return {"files": files}
 
 
-# ── GET /api/tts-audio/{video_id}/{filename} ──
+# ── POST /api/project/{video_id}/save ──
 
-@router.get("/api/tts-audio/{video_id}/{filename}")
-async def serve_tts_audio(video_id: str, filename: str):
-    path = settings.temp_dir / "tts" / video_id / filename
+@router.post("/api/project/{video_id}/save")
+async def save_project(video_id: str, request: Request):
+    """Save full timeline project state."""
+    body = await request.json()
+    proj_dir = settings.temp_dir / "projects" / video_id
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "project.json").write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok"}
+
+
+# ── GET /api/project/{video_id}/load ──
+
+@router.get("/api/project/{video_id}/load")
+async def load_project(video_id: str):
+    """Load full timeline project state."""
+    proj_path = settings.temp_dir / "projects" / video_id / "project.json"
+    if not proj_path.exists():
+        return {"tracks": [], "tts_clips": [], "video_muted": False}
+    return json.loads(proj_path.read_text(encoding="utf-8"))
+
+@router.get("/api/tts-audio/{video_id}/{rest:path}")
+async def serve_tts_audio(video_id: str, rest: str):
+    path = settings.temp_dir / "tts" / video_id / rest
     if not path.exists():
         raise HTTPException(404, "Audio file not found")
     return FileResponse(str(path), media_type="audio/mpeg")
