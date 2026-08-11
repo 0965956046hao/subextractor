@@ -13,6 +13,7 @@ interface SubtitleStyle {
   y: number;
   maxWidth: number;
   showBg: boolean;
+  textAlign: "left" | "center" | "right";
   fontFamily: string;
   fontSize: number;
   textColor: string;
@@ -43,6 +44,7 @@ const DEFAULT_STYLE: SubtitleStyle = {
   y: 90,
   maxWidth: 90,
   showBg: true,
+  textAlign: "center",
   fontFamily: "Plus Jakarta Sans",
   fontSize: 16,
   textColor: "#ffffff",
@@ -138,6 +140,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
   } | null>(null);
   const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ trackId: string; index: number; text: string } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const [applyAll, setApplyAll] = useState(false);
   const [showStylePanel, setShowStylePanel] = useState(false);
@@ -242,6 +245,21 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
     };
   }, []);
 
+  /* ---- keyboard shortcuts ---- */
+  const togglePlayRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        togglePlayRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   /* ---- save SRT ---- */
   const saveSrt = useCallback(async () => {
     if (saved) return;
@@ -264,6 +282,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
     if (v.paused) { v.play?.().catch(() => {}); setPlaying(true); }
     else { v.pause(); setPlaying(false); }
   };
+  togglePlayRef.current = togglePlay;
 
   const seekTimeline = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = scrollRef.current;
@@ -473,7 +492,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
   const updateStyle = (key: keyof SubtitleStyle, value: string | number | boolean) => {
     if (selectedTrack === null || selectedIndex === null) return;
     setTracks((prev) => prev.map((track) => {
-      if (!applyAll && track.id !== selectedTrack) return track;
+      if (track.id !== selectedTrack) return track;
       const next = [...track.entries];
       if (applyAll) {
         for (let i = 0; i < next.length; i++) {
@@ -648,7 +667,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                         const dxPct = (ev.clientX - e.clientX) / rect.width * 100;
                         const nw = Math.max(15, Math.min(95, origW + dxPct * 2));
                         setTracks((prev) => prev.map((t) => {
-                          if (!applyAll && t.id !== entry._trackId) return t;
+                          if (t.id !== entry._trackId) return t;
                           const next = [...t.entries];
                           if (applyAll) {
                             for (let i = 0; i < next.length; i++) {
@@ -663,7 +682,15 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                         }));
                         setSaved(false);
                       };
-                      const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+                    const onUp = () => {
+                      window.removeEventListener("pointermove", onMove);
+                      window.removeEventListener("pointerup", onUp);
+                      if (applyAll) {
+                        const count = tracks.find((t) => t.id === trackId)?.entries.length ?? 0;
+                        setToast(`Đã cập nhật vị trí cho ${count} phụ đề`);
+                        setTimeout(() => setToast(null), 2500);
+                      }
+                    };
                       window.addEventListener("pointermove", onMove);
                       window.addEventListener("pointerup", onUp);
                       return;
@@ -685,7 +712,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                       const nx = Math.max(5, Math.min(95, origX + dxPct));
                       const ny = Math.max(5, Math.min(95, origY + dyPct));
                       setTracks((prev) => prev.map((t) => {
-                        if (!applyAll && t.id !== trackId) return t;
+                        if (t.id !== trackId) return t;
                         const next = [...t.entries];
                         if (applyAll) {
                           for (let i = 0; i < next.length; i++) {
@@ -698,7 +725,15 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                       }));
                       setSaved(false);
                     };
-                    const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+                    const onUp = () => {
+                      window.removeEventListener("pointermove", onMove);
+                      window.removeEventListener("pointerup", onUp);
+                      if (applyAll) {
+                        const count = tracks.find((t) => t.id === trackId)?.entries.length ?? 0;
+                        setToast(`Đã cập nhật vị trí cho ${count} phụ đề trong track`);
+                        setTimeout(() => setToast(null), 2500);
+                      }
+                    };
                     window.addEventListener("pointermove", onMove);
                     window.addEventListener("pointerup", onUp);
                   }}
@@ -709,6 +744,8 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                     <div className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`} />
                     <div className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`} />
                   </div>
+                  {/* center indicator */}
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-red-500/80 opacity-60 pointer-events-none" title="Tâm (X,Y)" />
                   {/* resize handle (right edge, only when bg visible) */}
                   {s.showBg && (
                     <div className="absolute right-0 top-0 bottom-0 w-[10px] cursor-ew-resize hover:bg-white/10 rounded-r-xl flex items-center justify-center opacity-0 group-hover/vidtext:opacity-100 transition-opacity">
@@ -721,6 +758,7 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                   <p style={{
                     color: s.textColor, fontFamily: s.fontFamily, fontSize: `${s.fontSize}px`,
                     fontWeight: s.bold ? 700 : 400, fontStyle: s.italic ? "italic" : "normal",
+                    textAlign: s.textAlign,
                     lineHeight: 1.4, letterSpacing: "0.02em",
                     textShadow: s.showBg ? "none" : "0 1px 4px rgba(0,0,0,0.5)",
                   }}>{entry.text}</p>
@@ -788,6 +826,22 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                   <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">Vị trí X/Y</span>
                   <div className="flex gap-1 items-center"><span className="text-[8px] font-mono text-ink-light w-2.5">X</span><input type="range" min={5} max={95} value={s.x} onChange={(e) => updateStyle("x", parseInt(e.target.value))} disabled={selectedIndex === null} className="flex-1 h-1 accent-blue-600 cursor-pointer disabled:opacity-40" /><span className="text-[8px] font-mono text-ink-light tabular-nums w-6 text-right">{s.x}%</span></div>
                   <div className="flex gap-1 items-center"><span className="text-[8px] font-mono text-ink-light w-2.5">Y</span><input type="range" min={5} max={95} value={s.y} onChange={(e) => updateStyle("y", parseInt(e.target.value))} disabled={selectedIndex === null} className="flex-1 h-1 accent-blue-600 cursor-pointer disabled:opacity-40" /><span className="text-[8px] font-mono text-ink-light tabular-nums w-6 text-right">{s.y}%</span></div>
+                  <div className="flex gap-0.5 mt-0.5">
+                    {[
+                      { label: "Dưới", x: 50, y: 90 },
+                      { label: "Giữa", x: 50, y: 50 },
+                      { label: "Trên", x: 50, y: 10 },
+                    ].map((p) => (
+                      <button
+                        key={p.label}
+                        onClick={() => { updateStyle("x", p.x); updateStyle("y", p.y); }}
+                        disabled={selectedIndex === null}
+                        className="flex-1 py-0.5 text-[9px] font-medium rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink"
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex flex-col gap-1">
                   <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">Font</span>
@@ -814,6 +868,23 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                     <input type="color" value={s.bgColor} onChange={(e) => updateStyle("bgColor", e.target.value)} disabled={selectedIndex === null} className="w-6 h-6 rounded-md border-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed p-0" />
                     <input type="range" min={0} max={100} value={Math.round(s.bgOpacity * 100)} onChange={(e) => updateStyle("bgOpacity", parseInt(e.target.value) / 100)} disabled={selectedIndex === null} className="w-10 h-1 accent-blue-600 cursor-pointer disabled:opacity-40" />
                     <span className="text-[9px] font-mono text-ink-light tabular-nums">{Math.round(s.bgOpacity * 100)}%</span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">Align</span>
+                  <div className="flex gap-0.5 rounded-lg bg-black/[0.04] p-0.5">
+                    {(["left", "center", "right"] as const).map((a) => (
+                      <button
+                        key={a}
+                        onClick={() => updateStyle("textAlign", a)}
+                        disabled={selectedIndex === null}
+                        className={`flex-1 py-1 text-[10px] font-medium rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                          s.textAlign === a ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]" : "text-ink-light hover:text-ink"
+                        }`}
+                      >
+                        {a === "left" ? "Trái" : a === "center" ? "Giữa" : "Phải"}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 <div className="flex flex-col gap-1">
@@ -1076,6 +1147,13 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* toast notification */}
+        {toast && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-ink/90 text-white text-xs font-medium shadow-lg" style={{ animation: "fade-in 0.2s ease forwards" }}>
+            {toast}
           </div>
         )}
 
