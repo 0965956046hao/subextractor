@@ -30,7 +30,7 @@ async def upload_video(file: UploadFile = File(...)):
         with open(video_path, "wb") as f:
             while chunk := await file.read(64 * 1024):
                 written += len(chunk)
-                if written > settings.max_upload_size:
+                if settings.max_upload_size > 0 and written > settings.max_upload_size:
                     raise HTTPException(413, "File too large")
                 f.write(chunk)
     except Exception as e:

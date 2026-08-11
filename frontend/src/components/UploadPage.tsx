@@ -40,7 +40,6 @@ export default function UploadPage({ onUploaded }: Props) {
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("video/")) { setError("Select a video file"); return; }
-    if (file.size > 500 * 1024 * 1024) { setError("Max 500MB"); return; }
     setError(""); setLoading(true); setProgress(0); setFileName(file.name);
     const ctrl = new AbortController(); abortRef.current = ctrl;
     try {

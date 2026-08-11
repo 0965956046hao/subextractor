@@ -1,5 +1,87 @@
 # SubTitleExtractor — Project Instructions
 
+## Tech Stack
+- **Backend:** Python 3.10+, FastAPI, Uvicorn, Pydantic v2
+- **Frontend:** Next.js 14+, TypeScript, Tailwind CSS (App Router)
+- **OCR:** RapidOCR (`lang='ch'` — Simplified Chinese) *hoặc* Apple Vision OCR (`VNRecognizeTextRequest` trên macOS) — người dùng chọn engine ở frontend (`ocr_type: rapid | apple`)
+- **Video:** OpenCV `VideoCapture` (in-memory frame streaming) + FFmpeg
+- **Text diff:** `rapidfuzz` (Levenshtein ratio, threshold ~0.85)
+- **Config:** `pydantic-settings` (env vars + .env, prefix `STE_`)
+- **Job Queue:** `asyncio.Queue` (in-process, no Redis)
+
+## Project Structure
+```
+SubTitleExtractor/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py              # FastAPI app, lifespan, CORS
+│   │   ├── config.py            # pydantic-settings (env vars)
+│   │   ├── models.py            # Pydantic v2 schemas
+│   │   ├── dependencies.py      # FastAPI DI (engine, jobs, ws)
+│   │   ├── routers/
+│   │   │   ├── __init__.py
+│   │   │   ├── upload.py        # POST /api/upload (streaming)
+│   │   │   ├── video.py         # GET /api/video/{id}, /api/frame/{id}
+│   │   │   ├── process.py       # POST /api/process, WS /api/ws/{id}, GET /api/status/{id}
+│   │   │   └── download.py      # GET /api/download/{id}
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── video_processor.py  # OpenCV frame streaming, crop, dhash
+│   │   │   ├── ocr_engine.py       # BaseOCREngine (cache chung) + RapidOCR wrapper
+│   │   │   ├── apple_ocr_engine.py # Apple Vision OCR wrapper (pyobjc, macOS)
+│   │   │   └── subtitle_generator.py # SRT generation, merge
+│   │   └── worker.py             # Background job runner + WS notify
+│   ├── requirements.txt
+│   └── temp/                     (gitignored)
+├── frontend/
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx
+│   │   │   ├── page.tsx         # Step-based workflow
+│   │   │   └── globals.css
+│   │   ├── components/
+│   │   │   ├── UploadPage.tsx       # Drag-drop + progress bar
+│   │   │   ├── RegionSelector.tsx   # Canvas with RAF, pointer events, keyboard
+│   │   │   └── ResultPage.tsx       # WebSocket progress + download
+│   │   └── lib/
+│   │       └── api.ts               # Axios + WS helpers
+│   ├── package.json
+│   ├── next.config.js
+│   └── tailwind.config.js
+├── AGENTS.md
+└── PLAN.md
+```
+
+## API Endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/upload` | Upload video file (streaming chunks) |
+| GET | `/api/video/{video_id}` | Serve video file for preview |
+| GET | `/api/frame/{video_id}` | Get first frame JPEG for region selection |
+| POST | `/api/process` | Submit job (returns `job_id`) |
+| GET | `/api/status/{job_id}` | Poll job status (fallback for WS) |
+| WS | `/api/ws/{job_id}` | WebSocket realtime progress |
+| GET | `/api/download/{video_id}` | Download .srt file |
+| GET | `/api/health` | Health check |
+
+## Key Architectural Decisions
+
+### No temp frame files
+Frames are read via OpenCV `VideoCapture` in-memory, cropped to region, and OCR'd directly from numpy arrays. No JPG files are written to disk during processing.
+
+### Async job queue
+`POST /api/process` returns immediately with a `job_id`. Background worker processes the video and pushes progress via WebSocket.
+
+### OCR caching
+dHash comparison between consecutive frames: if crop hash differs by ≤5 bits, the previous OCR text is reused. Avoids redundant OCR calls on near-identical frames. Cache logic lives in `BaseOCREngine` — shared by RapidOCR and Apple Vision engines.
+
+### Dual OCR engines
+`POST /api/process` nhận `ocr_type: "rapid" | "apple"`. Worker chọn engine từ `app.state.ocr_engines` dict (`main.py` khởi tạo cả hai; Apple engine bị disable nếu thiếu pyobjc). Cả hai engine implement cùng interface: `ocr_image(np.ndarray) -> str`, `set_lang()`, `ocr_region_cached()`, `log_stats()`.
+
+### Upload streaming
+File chunks are streamed to disk incrementally (64KB buffer), not loaded into memory. No size limit (or set `STE_max_upload_size` to override).
+
 ## Run Commands
 ```bash
 # Convenience: starts both backend (uvicorn) + frontend (Next.js) at once

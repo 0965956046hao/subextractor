@@ -358,6 +358,19 @@ function useReveal(index: number, distance = 30) {
 function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (jobId: string) => void }) {
   if (!video.status || video.status === "done") return null;
 
+  if (video.status === "uploaded") {
+    return (
+      <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90 truncate">
+          <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          Đã upload — cần chọn vùng & extract
+        </span>
+      </div>
+    );
+  }
+
   if (video.status === "cancelled") {
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
@@ -429,10 +442,11 @@ function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; inde
   }, [confirming]);
 
   const { ref, style } = useReveal(index);
+  const href = video.status === "uploaded" ? `/extract?video_id=${video.video_id}` : `/video/${video.video_id}`;
 
   return (
     <Link
-      href={`/video/${video.video_id}`}
+      href={href}
       className="group block focus:outline-none"
       style={style}
     >
@@ -562,10 +576,11 @@ function VideoCard({
   const [confirming, setConfirming] = useState(false);
 
   const { ref, style } = useReveal(index, 40);
+  const href = video.status === "uploaded" ? `/extract?video_id=${video.video_id}` : `/video/${video.video_id}`;
 
   return (
     <Link
-      href={`/video/${video.video_id}`}
+      href={href}
       className={`group block focus:outline-none ${featured ? "md:col-span-2" : ""}`}
       style={style}
     >

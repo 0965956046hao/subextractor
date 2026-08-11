@@ -11,8 +11,7 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.85
     merge_similarity: float = 0.9
     subtitle_flash_seconds: float = 2.0
-    max_upload_size: int = 500 * 1024 * 1024
-    job_timeout: int = 1800
+    max_upload_size: int = 0
     ocr_cache_max_streak: int = 15
 
     det_db_thresh: float = 0.3
