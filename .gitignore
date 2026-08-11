@@ -6,3 +6,4 @@ frontend/.next/
 __pycache__/
 .env
 .DS_Store
+.json
