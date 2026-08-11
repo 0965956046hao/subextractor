@@ -211,10 +211,7 @@ async def run_job(
         logger.info("job %s: processing started  |  %s", job_id, video_path)
         t_start = time.time()
 
-        srt_content = await asyncio.wait_for(
-            loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
-        )
+        srt_content = await loop.run_in_executor(_executor, fn)
 
         t_end = time.time()
         logger.info("job %s: saving SRT...  |  total %.1fs", job_id, t_end - t_start)
@@ -260,18 +257,6 @@ async def run_job(
         )
         await notify_ws(ws_clients, job_id, {
             "type": "cancelled",
-        })
-    except asyncio.TimeoutError:
-        logger.error("job %s: TIMEOUT after %ds", job_id, settings.job_timeout)
-        job["status"] = "error"
-        job["error"] = f"Job timed out after {settings.job_timeout}s"
-        await job_log_async(
-            job, ws_clients,
-            f"Quá thời gian xử lý ({settings.job_timeout} giây). Vui lòng thử lại với video ngắn hơn.",
-            "error",
-        )
-        await notify_ws(ws_clients, job_id, {
-            "type": "error", "message": "Job timed out",
         })
     except Exception as e:
         logger.exception("job %s: FAILED  |  %s", job_id, e)

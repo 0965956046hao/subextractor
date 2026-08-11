@@ -42,7 +42,7 @@ export function getFrameUrl(videoId: string): string {
   return `/api/frame/${videoId}`;
 }
 
-export type VideoStatus = "queued" | "processing" | "done" | "error" | "cancelled";
+export type VideoStatus = "uploaded" | "queued" | "processing" | "done" | "error" | "cancelled";
 
 export interface VideoMeta {
   video_id: string;

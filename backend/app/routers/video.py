@@ -79,7 +79,7 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
 
     # ── Completed videos (have SRT on disk) ──
     srt_root = settings.temp_dir / "srt"
-    seen: set[str] = set()
+    seen: set[str] = set(r["video_id"] for r in active)
     if srt_root.exists():
         for srt_dir in sorted(
             srt_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True
@@ -115,6 +115,33 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
                 ).isoformat(),
                 "status": "done",
             })
+
+    # ── Uploaded videos (no SRT, no active job) ──
+    video_root = settings.temp_dir / "videos"
+    if video_root.exists():
+        for vdir in sorted(
+            video_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True
+        ):
+            if not vdir.is_dir():
+                continue
+            video_id = vdir.name
+            if video_id in seen:
+                continue
+            has_video = any(f.stem.startswith("video") for f in vdir.iterdir())
+            if not has_video:
+                continue
+            seen.add(video_id)
+            videos.append({
+                "video_id": video_id,
+                "filename": _meta_filename(video_id) or video_id,
+                "has_video": has_video,
+                "entries": 0,
+                "created_at": datetime.fromtimestamp(
+                    vdir.stat().st_mtime, tz=timezone.utc
+                ).isoformat(),
+                "status": "uploaded",
+            })
+
     return {"videos": videos}
 
 

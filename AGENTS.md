@@ -80,7 +80,7 @@ dHash comparison between consecutive frames: if crop hash differs by ≤5 bits, 
 `POST /api/process` nhận `ocr_type: "rapid" | "apple"`. Worker chọn engine từ `app.state.ocr_engines` dict (`main.py` khởi tạo cả hai; Apple engine bị disable nếu thiếu pyobjc). Cả hai engine implement cùng interface: `ocr_image(np.ndarray) -> str`, `set_lang()`, `ocr_region_cached()`, `log_stats()`.
 
 ### Upload streaming
-File chunks are streamed to disk incrementally (64KB buffer), not loaded into memory. Max file size check is enforced during streaming.
+File chunks are streamed to disk incrementally (64KB buffer), not loaded into memory. No size limit (or set `STE_max_upload_size` to override).
 
 ## Run Commands
 ```bash
