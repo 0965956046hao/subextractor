@@ -16,6 +16,14 @@ class Settings(BaseSettings):
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5
+    job_timeout: int = 1800
+
+    # Gemini translation
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+
+    # Google Cloud TTS
+    google_tts_credentials: str = ""
 
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
@@ -27,3 +35,5 @@ settings.temp_dir.mkdir(parents=True, exist_ok=True)
 (settings.temp_dir / "srt").mkdir(exist_ok=True)
 (settings.temp_dir / "muxed").mkdir(exist_ok=True)
 (settings.temp_dir / "hardcoded").mkdir(exist_ok=True)
+(settings.temp_dir / "tts").mkdir(exist_ok=True)
+(settings.temp_dir / "translated").mkdir(exist_ok=True)

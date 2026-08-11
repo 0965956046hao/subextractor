@@ -181,3 +181,21 @@ export async function alignSubtitles(videoId: string): Promise<JobStatus> {
   const res = await api.post<JobStatus>(`/align/${videoId}`);
   return res.data;
 }
+
+export async function translateSubtitles(videoId: string): Promise<JobStatus> {
+  const res = await api.post<JobStatus>(`/translate/${videoId}`);
+  return res.data;
+}
+
+export function getTranslatedDownloadUrl(videoId: string): string {
+  return `/api/download/translated/${videoId}`;
+}
+
+export async function ttsSubtitles(videoId: string): Promise<JobStatus> {
+  const res = await api.post<JobStatus>(`/tts/${videoId}`);
+  return res.data;
+}
+
+export function getDubbedDownloadUrl(videoId: string): string {
+  return `/api/download/dubbed/${videoId}`;
+}

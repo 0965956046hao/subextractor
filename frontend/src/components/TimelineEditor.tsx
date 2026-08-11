@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { getSrtEntries, updateSrt, getVideoUrl, getSrtContent } from "@/lib/api";
+import { getSrtEntries, updateSrt, getVideoUrl, getSrtContent, getTranslatedDownloadUrl, getDubbedDownloadUrl, getJobStatus } from "@/lib/api";
 import type { SrtEntry as ApiSrtEntry } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -141,10 +141,16 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
   const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ trackId: string; index: number; text: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [availableSrtFiles, setAvailableSrtFiles] = useState<{id:string;name:string}[]>([]);
+  const [availableTtsFiles, setAvailableTtsFiles] = useState<{id:string;name:string}[]>([]);
 
   const [applyAll, setApplyAll] = useState(false);
   const [showStylePanel, setShowStylePanel] = useState(false);
   const [confirmDeleteTrack, setConfirmDeleteTrack] = useState<string | null>(null);
+  const [toolJob, setToolJob] = useState<{
+    type: string; jobId: string; status: string; progress: number; error: string;
+  } | null>(null);
+  const [ttsClips, setTtsClips] = useState<{url:string;start:number;end:number}[]>([]);
 
   useEffect(() => {
     if (selectedIndex !== null) setShowStylePanel(true);
@@ -195,6 +201,37 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
   }, [videoId]);
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
+
+  /* ---- fetch available SRT files ---- */
+  useEffect(() => {
+    fetch(`/api/srt/${videoId}/available`).then(r => r.json()).then(d => {
+      if (d.files?.length > 1) setAvailableSrtFiles(d.files);
+    }).catch(() => {});
+  }, [videoId]);
+
+  useEffect(() => {
+    fetch(`/api/tts/${videoId}/available`).then(r => r.json()).then(d => {
+      if (d.files?.length) setAvailableTtsFiles(d.files);
+    }).catch(() => {});
+  }, [videoId]);
+
+  const loadSrtFile = async (fileId: string, fileName: string) => {
+    try {
+      const res = await fetch(`/api/srt/${videoId}/load/${fileId}`);
+      const data = await res.json();
+      const parsed: SrtEntry[] = (data.entries as ApiSrtEntry[]).map((e: ApiSrtEntry) => ({
+        index: e.index, start: e.start, end: e.end,
+        startLabel: e.startLabel, endLabel: e.endLabel, text: e.text,
+      }));
+      if (parsed.length > 0) {
+        const tid = newTrackId();
+        setTracks((prev) => [...prev, { id: tid, name: fileName, entries: parsed }]);
+        setSaved(false);
+        setToast(`Đã tải ${parsed.length} phụ đề từ "${fileName}"`);
+        setTimeout(() => setToast(null), 3000);
+      }
+    } catch { /* ignore */ }
+  };
 
   /* ---- video duration ---- */
   useEffect(() => {
@@ -259,6 +296,72 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  /* ---- poll tool job status ---- */
+  useEffect(() => {
+    if (!toolJob || (toolJob.status !== "queued" && toolJob.status !== "processing")) return;
+    const timer = setInterval(async () => {
+      try {
+        const st = await getJobStatus(toolJob.jobId);
+        setToolJob((prev) =>
+          prev ? { ...prev, status: st.status, progress: st.progress, error: st.error || "" } : prev
+        );
+        if (st.status === "done") {
+          clearInterval(timer);
+          if (toolJob.type === "translate") {
+            setToolJob((prev) => prev ? { ...prev, status: "done", progress: 100 } : prev);
+            try {
+              const res = await fetch(`/api/download/translated/${videoId}`);
+              if (res.ok) {
+                const text = await res.text();
+                const blocks = text.trim().split(/\n\s*\n/);
+                const parsed: SrtEntry[] = [];
+                for (const block of blocks) {
+                  const lines = block.split("\n");
+                  const timeMatch = lines[1]?.match(/([\d:,]+)\s*-->\s*([\d:,]+)/);
+                  if (!timeMatch) continue;
+                  parsed.push({
+                    index: parsed.length + 1,
+                    start: parseTime(timeMatch[1]), end: parseTime(timeMatch[2]),
+                    startLabel: timeMatch[1], endLabel: timeMatch[2],
+                    text: lines.slice(2).join(" "),
+                  });
+                }
+                if (parsed.length > 0) {
+                  const tid = newTrackId();
+                  setTracks((prev) => [...prev, { id: tid, name: `Việt (Gemini)`, entries: parsed }]);
+                  setSaved(false);
+                  setToast(`Đã tải ${parsed.length} phụ đề đã dịch`);
+                  setTimeout(() => setToast(null), 3000);
+                }
+              }
+            } catch { /* ignore */ }
+          }
+          if (toolJob.type === "tts") {
+            setToolJob((prev) => prev ? { ...prev, status: "done", progress: 100 } : prev);
+            // Load TTS audio clips into timeline using selected track's timestamps
+            const track = selectedTrack ? tracks.find(t => t.id === selectedTrack) : tracks[0];
+            if (track) {
+              const clips = track.entries.map((entry, i) => ({
+                url: `/api/tts-audio/${videoId}/${String(i + 1).padStart(4, "0")}.mp3`,
+                start: entry.start,
+                end: entry.end,
+              }));
+              setTtsClips(clips);
+              setToast(`Đã tải ${clips.length} audio clip vào timeline. Click để nghe.`);
+              setTimeout(() => setToast(null), 3000);
+            }
+          }
+        }
+        if (st.status === "error") {
+          clearInterval(timer);
+        }
+      } catch {
+        clearInterval(timer);
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [toolJob, videoId, tracks.length]);
 
   /* ---- save SRT ---- */
   const saveSrt = useCallback(async () => {
@@ -416,6 +519,39 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
     const num = tracks.length + 1;
     setTracks((prev) => [...prev, { id, name: `Subtitle ${num}`, entries: [] }]);
     setSaved(false);
+  };
+
+  const runToolJob = async (type: "translate" | "tts") => {
+    try {
+      // Check track selection
+      const track = selectedTrack ? tracks.find(t => t.id === selectedTrack) : tracks[0] || null;
+      if (!track || track.entries.length === 0) {
+        setToast("Hãy chọn 1 track có phụ đề trước khi thực hiện.");
+        setTimeout(() => setToast(null), 3000);
+        return;
+      }
+      const srtContent = entriesToSrt(track.entries);
+      const trackName = track.name;
+
+      if (type === "tts") {
+        const res = await fetch(`/api/tts/${videoId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ srt_content: srtContent, track_name: trackName }),
+        });
+        const data = await res.json();
+        setToolJob({ type, jobId: data.job_id, status: data.status, progress: data.progress, error: data.error || "" });
+      } else {
+        // Translate: send SRT content to translate endpoint
+        const res = await fetch(`/api/translate/${videoId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ srt_content: srtContent, track_name: trackName }),
+        });
+        const data = await res.json();
+        setToolJob({ type, jobId: data.job_id, status: data.status, progress: data.progress, error: data.error || "" });
+      }
+    } catch { /* handled by state */ }
   };
 
   const deleteTrack = (trackId: string) => {
@@ -606,6 +742,54 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
               <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               Thêm track
             </button>
+            {availableSrtFiles.length > 0 && (
+              <select
+                onChange={(e) => {
+                  const file = availableSrtFiles.find(f => f.id === e.target.value);
+                  if (file) loadSrtFile(file.id, file.name);
+                  e.target.value = "";
+                }}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-indigo-500/10 text-indigo-700 ring-1 ring-indigo-500/20 hover:bg-indigo-500/20 transition-colors cursor-pointer appearance-none pr-7"
+                style={{backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%234338ca' opacity='0.5'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center"}}
+              >
+                <option value="">📂 Tải file SRT...</option>
+                {availableSrtFiles.map(f => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </select>
+            )}
+            {availableTtsFiles.length > 0 && (
+              <select
+                onChange={async (e) => {
+                  e.target.value = "";
+                  // download dubbed video
+                  window.open(`/api/download/dubbed/${videoId}`, "_blank");
+                  // load original SRT as "Voice" track
+                  try {
+                    const res = await fetch(`/api/srt/${videoId}/load/original`);
+                    const data = await res.json();
+                    const parsed: SrtEntry[] = (data.entries as ApiSrtEntry[]).map((e: ApiSrtEntry) => ({
+                      index: e.index, start: e.start, end: e.end,
+                      startLabel: e.startLabel, endLabel: e.endLabel, text: e.text,
+                    }));
+                    if (parsed.length > 0) {
+                      const tid = newTrackId();
+                      setTracks((prev) => [...prev, { id: tid, name: "Voice (TTS)", entries: parsed }]);
+                      setSaved(false);
+                      setToast(`Đã tải ${parsed.length} phụ đề từ file lồng tiếng`);
+                      setTimeout(() => setToast(null), 3000);
+                    }
+                  } catch { /* ignore */ }
+                }}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer appearance-none pr-7"
+                style={{backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%230895b0' opacity='0.5'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center"}}
+              >
+                <option value="">🎙️ Tải TTS...</option>
+                {availableTtsFiles.map(f => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </select>
+            )}
             <button
               onClick={addEntry}
               disabled={!selectedTrack}
@@ -613,6 +797,20 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
             >
               <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               Thêm phụ đề
+            </button>
+            <button
+              onClick={() => runToolJob("translate")}
+              disabled={!!toolJob}
+              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-violet-500/10 text-violet-700 ring-1 ring-violet-500/20 hover:bg-violet-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Dịch (Gemini)
+            </button>
+            <button
+              onClick={() => runToolJob("tts")}
+              disabled={!!toolJob}
+              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Lồng tiếng (TTS)
             </button>
             <button
               onClick={saveSrt}
@@ -625,6 +823,38 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
             </button>
           </div>
         </div>
+
+        {/* Job progress banner */}
+        {toolJob && (
+          <div className="px-4 py-2 border-b border-black/[0.06] bg-gradient-to-r from-blue-500/[0.04] to-blue-500/[0.01]">
+            <div className="flex items-center gap-3">
+              {toolJob.status === "queued" || toolJob.status === "processing" ? (
+                <>
+                  <svg className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15"/><path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  <span className="text-[11px] font-medium text-ink-muted flex-1">{toolJob.type === "translate" ? "Đang dịch với Gemini..." : "Đang tổng hợp giọng nói..."}</span>
+                  <div className="w-32 h-1.5 rounded-full bg-black/[0.06] overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-700" style={{width: `${Math.max(3, toolJob.progress)}%`}}/></div>
+                  <span className="text-[10px] font-mono text-ink-light tabular-nums w-8 text-right">{toolJob.progress}%</span>
+                </>
+              ) : toolJob.status === "done" ? (
+                <>
+                  <svg className="w-4 h-4 text-emerald-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                  <span className="text-[11px] font-medium text-emerald-700 flex-1">{toolJob.type === "translate" ? "Dịch hoàn tất" : "Lồng tiếng hoàn tất"}</span>
+                  {toolJob.type === "translate" ? (
+                    <a href={getTranslatedDownloadUrl(videoId)} download className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer">Tải SRT Việt</a>
+                  ) : (
+                    <span className="text-[10px] text-cyan-600/70">Click 🎙️ trên track audio để nghe</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4 text-red-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                  <span className="text-[11px] font-medium text-red-600/80 flex-1">{toolJob.error || "Thất bại"}</span>
+                </>
+              )}
+              <button onClick={() => setToolJob(null)} className="text-[10px] text-ink-light hover:text-ink transition-colors cursor-pointer">✕</button>
+            </div>
+          </div>
+        )}
 
         {/* ================================================================ */}
         {/*  Video Preview + Subtitle Overlay                                */}
@@ -1060,8 +1290,9 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
               ))}
 
               {/* ---- Audio Track ---- */}
-              <div className="h-16 relative bg-emerald-500/[0.02] cursor-pointer flex items-end" onClick={seekTimeline}>
-                <div className="absolute inset-x-0 bottom-1 top-1 flex items-end">
+              <div className="h-16 relative bg-emerald-500/[0.02] cursor-pointer" onClick={seekTimeline}>
+                {/* waveform background */}
+                <div className="absolute inset-x-0 bottom-1 top-1 flex items-end pointer-events-none">
                   {Array.from({ length: Math.ceil(duration * 2) }, (_, i) => {
                     const t = i / 2;
                     const x = t * pixelsPerSec;
@@ -1072,6 +1303,31 @@ export default function TimelineEditor({ videoId, duration: initialDuration = 0 
                     return (<div key={i} className="absolute rounded-t-[1px]" style={{ left: x, width: barW, height: `${Math.max(2, h * 54)}px`, background: nearSub ? "rgba(16,185,129,0.3)" : "rgba(16,185,129,0.15)" }} />);
                   })}
                 </div>
+                {/* TTS audio clips */}
+                {ttsClips.map((clip, i) => {
+                  const left = clip.start * pixelsPerSec;
+                  const width = Math.max((clip.end - clip.start) * pixelsPerSec, 4);
+                  return (
+                    <div
+                      key={i}
+                      className="absolute top-1 bottom-1 rounded-md bg-cyan-500/30 ring-1 ring-cyan-500/40 hover:bg-cyan-500/50 cursor-pointer flex items-center justify-center z-10"
+                      style={{ left, width }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const audio = new Audio(clip.url);
+                        audio.play().catch(() => {});
+                        // seek video to this clip
+                        const v = videoRef.current;
+                        if (v) { v.currentTime = clip.start; setCurrentTime(clip.start); }
+                      }}
+                      title={`🎙️ ${fmtTime(clip.start)} - ${fmtTime(clip.end)}`}
+                    >
+                      <span className="text-[8px] font-medium text-cyan-700/70 select-none pointer-events-none">
+                        🎙️ {i + 1}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* ---- Playhead ---- */}

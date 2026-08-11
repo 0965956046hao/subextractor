@@ -406,6 +406,116 @@ async def run_align_job(
         await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
+async def run_translate_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        from app.services.translation_service import run_translate_sync
+
+        job["status"] = "processing"
+        job["phase"] = "translate"
+        await job_log_async(job, ws_clients, "Bắt đầu dịch phụ đề bằng Gemini…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "translate",
+        })
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_translate_sync,
+            loop, job_id, jobs, ws_clients, job["video_id"],
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, "Dịch hoàn tất! File SRT tiếng Việt đã sẵn sàng.", "success")
+
+    except JobCancelled:
+        logger.info("translate job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy dịch.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
+    except asyncio.TimeoutError:
+        logger.error("translate job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("translate job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi dịch: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
+async def run_tts_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        from app.services.tts_service import run_tts_sync
+
+        job["status"] = "processing"
+        job["phase"] = "tts"
+        await job_log_async(job, ws_clients, "Bắt đầu tổng hợp giọng nói TTS…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "tts",
+        })
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_tts_sync,
+            loop, job_id, jobs, ws_clients, job["video_id"],
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, "TTS hoàn tất! Video lồng tiếng đã sẵn sàng.", "success")
+
+    except JobCancelled:
+        logger.info("tts job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy TTS.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
+    except asyncio.TimeoutError:
+        logger.error("tts job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("tts job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi TTS: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
 async def worker_loop(
     jobs: dict,
     ws_clients: dict,
@@ -423,6 +533,10 @@ async def worker_loop(
                     await run_hardcode_job(jobs, ws_clients, job_id)
                 elif job_type == "align":
                     await run_align_job(jobs, ws_clients, job_id)
+                elif job_type == "translate":
+                    await run_translate_job(jobs, ws_clients, job_id)
+                elif job_type == "tts":
+                    await run_tts_job(jobs, ws_clients, job_id)
                 else:
                     await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:
