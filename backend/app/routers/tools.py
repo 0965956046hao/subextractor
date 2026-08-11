@@ -389,6 +389,50 @@ async def load_project(video_id: str):
         return {"tracks": [], "tts_clips": [], "video_muted": False}
     return json.loads(proj_path.read_text(encoding="utf-8"))
 
+
+# ── POST /api/export/{video_id} ──
+
+@router.post("/api/export/{video_id}")
+async def export_video(video_id: str, request: Request):
+    """Export final video with burned subtitles and mixed TTS audio."""
+    _video_path(video_id)
+    body = await request.json()
+
+    jobs = get_jobs(request)
+    ws_clients = get_ws_clients(request)
+    queue = get_job_queue(request)
+
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "job_type": "export",
+        "status": "queued",
+        "phase": "",
+        "progress": 0,
+        "error": None,
+        "cancelled": False,
+        "tracks": body.get("tracks", []),
+        "tts_clips": body.get("tts_clips", []),
+    }
+    jobs[job_id] = job
+    logger.info("export job %s: queued for %s", job_id, video_id)
+    await queue.put(job_id)
+    return {"job_id": job_id, "status": "queued", "phase": "export", "progress": 0, "error": None, "logs": []}
+
+
+# ── GET /api/download/exported/{video_id} ──
+
+@router.get("/api/download/exported/{video_id}")
+async def download_exported(video_id: str):
+    exp_dir = settings.temp_dir / "export" / video_id
+    if not exp_dir.exists():
+        raise HTTPException(404, "Exported file not found. Run export first.")
+    files = list(exp_dir.glob("exported.mp4"))
+    if not files:
+        raise HTTPException(404, "Exported file not found. Run export first.")
+    return FileResponse(str(files[0]), media_type="video/mp4", filename=files[0].name)
+
 @router.get("/api/tts-audio/{video_id}/{rest:path}")
 async def serve_tts_audio(video_id: str, rest: str):
     path = settings.temp_dir / "tts" / video_id / rest
