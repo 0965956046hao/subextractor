@@ -3,7 +3,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 
-EXTRACT_FPS = 2
+EXTRACT_FPS = 10
 OCR_LANG = "ch"
 SIMILARITY_THRESHOLD = 0.85
 

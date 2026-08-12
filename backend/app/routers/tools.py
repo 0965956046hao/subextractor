@@ -488,3 +488,92 @@ async def generate_context(request: Request, video_id: str):
     logger.info("context job %s: queued for %s", job_id, video_id)
     await queue.put(job_id)
     return {"job_id": job_id}
+
+
+# ── Gemini File Store ──
+
+@router.get("/api/gemini/files")
+async def list_gemini_files(request: Request, video_id: str = ""):
+    """List files in Gemini File Store, optionally filtered by video_id via local index."""
+    try:
+        from google import genai
+    except ImportError:
+        raise HTTPException(400, "google-genai not installed")
+
+    from app.services.translation_service import _read_user_config
+    from app.services.context_service import _load_files_index
+    import os
+    cfg = _read_user_config()
+    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or cfg.get("gemini_api_key", "")
+    if not api_key:
+        raise HTTPException(400, "Gemini API key not configured")
+
+    client = genai.Client(api_key=api_key)
+
+    if video_id:
+        # Look up file names from local index, then get details from Gemini
+        indexed_names = set(_load_files_index(video_id))
+        if not indexed_names:
+            return {"count": 0, "files": [], "video_id": video_id}
+
+        result_files = []
+        try:
+            for f in client.files.list():
+                try:
+                    if f.name in indexed_names:
+                        result_files.append({
+                            "name": f.name,
+                            "display_name": getattr(f, "display_name", "") or f.name,
+                            "size_bytes": getattr(f, "size_bytes", 0) or 0,
+                            "create_time": str(getattr(f, "create_time", "") or ""),
+                        })
+                except Exception:
+                    continue
+        except Exception as e:
+            raise HTTPException(500, f"Failed to list files: {e}")
+
+        return {"count": len(result_files), "files": result_files, "video_id": video_id}
+
+    # No filter — list all files from Gemini
+    try:
+        all_files = list(client.files.list())
+    except Exception as e:
+        raise HTTPException(500, f"Failed to list files: {e}")
+
+    result_files = []
+    for f in all_files:
+        try:
+            result_files.append({
+                "name": f.name or "",
+                "display_name": getattr(f, "display_name", "") or f.name or "",
+                "size_bytes": getattr(f, "size_bytes", 0) or 0,
+                "create_time": str(getattr(f, "create_time", "") or ""),
+            })
+        except Exception:
+            continue
+
+    return {"count": len(result_files), "files": result_files}
+
+
+@router.delete("/api/gemini/files/{name:path}")
+async def delete_gemini_file(name: str, request: Request):
+    """Delete a file from Gemini File Store by name."""
+    try:
+        from google import genai
+    except ImportError:
+        raise HTTPException(400, "google-genai not installed")
+
+    from app.services.translation_service import _read_user_config
+    import os
+    cfg = _read_user_config()
+    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or cfg.get("gemini_api_key", "")
+    if not api_key:
+        raise HTTPException(400, "Gemini API key not configured")
+
+    client = genai.Client(api_key=api_key)
+    try:
+        client.files.delete(name=name)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to delete file: {e}")
+
+    return {"deleted": name}

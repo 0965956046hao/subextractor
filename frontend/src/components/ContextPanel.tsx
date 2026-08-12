@@ -51,6 +51,9 @@ export default function ContextPanel({ videoId }: ContextPanelProps) {
   const [genJobId, setGenJobId] = useState<string | null>(null);
   const [genProgress, setGenProgress] = useState(0);
   const [genError, setGenError] = useState("");
+  const [showFileStore, setShowFileStore] = useState(false);
+  const [geminiFiles, setGeminiFiles] = useState<{ name: string; display_name: string; size_bytes: number }[]>([]);
+  const [fileStoreLoading, setFileStoreLoading] = useState(false);
 
   // Load existing context
   const loadContext = useCallback(async () => {
@@ -107,6 +110,27 @@ export default function ContextPanel({ videoId }: ContextPanelProps) {
     } catch {
       setGenerating(false);
       setGenError("Lỗi kết nối");
+    }
+  };
+
+  const loadGeminiFiles = async () => {
+    setFileStoreLoading(true);
+    try {
+      const res = await fetch(`/api/gemini/files?video_id=${encodeURIComponent(videoId)}`);
+      const data = await res.json();
+      setGeminiFiles(data.files || []);
+    } catch {
+      // ignore
+    }
+    setFileStoreLoading(false);
+  };
+
+  const deleteGeminiFile = async (name: string) => {
+    try {
+      await fetch(`/api/gemini/files/${encodeURIComponent(name)}`, { method: "DELETE" });
+      setGeminiFiles((prev) => prev.filter((f) => f.name !== name));
+    } catch {
+      // ignore
     }
   };
 
@@ -209,6 +233,63 @@ export default function ContextPanel({ videoId }: ContextPanelProps) {
             </p>
           </div>
         )}
+
+        {/* Gemini File Store */}
+        <div className="mt-5">
+          <button
+            onClick={async () => {
+              if (!showFileStore) {
+                await loadGeminiFiles();
+              }
+              setShowFileStore(!showFileStore);
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/[0.06] ring-1 ring-amber-500/[0.12] text-[11px] font-medium text-amber-600/80 hover:bg-amber-500/[0.10] transition-all duration-300 cursor-pointer"
+          >
+            <svg className={`w-3 h-3 transition-transform duration-400 ${showFileStore ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+            Gemini File Store
+            {geminiFiles.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-500/15 text-[9px]">{geminiFiles.length}</span>
+            )}
+          </button>
+
+          {showFileStore && (
+            <div className="mt-2 rounded-2xl bg-amber-500/[0.02] ring-1 ring-amber-500/[0.08] overflow-hidden" style={{ animation: "fade-up 0.2s ease forwards" }}>
+              {fileStoreLoading ? (
+                <div className="p-4 flex items-center gap-3">
+                  <IconSpinner className="w-4 h-4 text-amber-500" />
+                  <span className="text-[12px] text-ink-muted">Đang tải...</span>
+                </div>
+              ) : geminiFiles.length === 0 ? (
+                <div className="p-4 text-center">
+                  <p className="text-[12px] text-ink-light">Không có file nào trong Gemini File Store</p>
+                </div>
+              ) : (
+                <div className="max-h-[300px] overflow-y-auto">
+                  {geminiFiles.map((f) => (
+                    <div key={f.name} className="flex items-center justify-between px-4 py-2.5 border-b border-amber-500/[0.06] last:border-b-0 hover:bg-amber-500/[0.03] transition-colors">
+                      <div className="min-w-0 flex-1 mr-3">
+                        <p className="text-[12px] font-medium text-ink/80 truncate">{f.display_name || f.name}</p>
+                        <p className="text-[10px] text-ink-light font-mono">{(f.size_bytes / 1024).toFixed(1)} KB</p>
+                      </div>
+                      <button
+                        onClick={() => deleteGeminiFile(f.name)}
+                        className="w-6 h-6 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
+                        title="Xoá file"
+                      >
+                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
