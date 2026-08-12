@@ -127,10 +127,16 @@ def generate_video_context(video_id: str) -> str | None:
             model=settings.gemini_model,
             contents=[
                 *uploaded_files,
-                f"Analyze these {len(uploaded_files)} frames from video '{video_id}'. "
-                "Describe the video's context in Vietnamese (2-4 sentences): "
-                "content type, setting/time period, visual style, characters. "
-                "Be concise — this context improves subtitle translation accuracy.",
+                f"Analyze these {len(uploaded_files)} frames sampled from video '{video_id}'. "
+                "Synthesize ALL frames together to understand the full video context. "
+                "Describe in Vietnamese (4-6 sentences), including:\n"
+                "- Content type (phim cổ trang / hiện đại / hoạt hình / tài liệu / tutorial...)\n"
+                "- Time period and setting (bối cảnh lịch sử, không gian)\n"
+                "- Main characters: count, gender (nam/nữ), estimated age, relationships\n"
+                "- How characters address each other (xưng hô: huynh-đệ, anh-em, ngài-tiểu nhân, bạn-cậu...)\n"
+                "- Overall tone (nghiêm túc / hài hước / hành động / lãng mạn...)\n"
+                "- Any notable visual style, costumes, or recurring text on screen\n\n"
+                "Be specific and detailed. This context will be used to improve subtitle translation accuracy.",
             ],
         )
 
