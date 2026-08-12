@@ -242,13 +242,6 @@ async def run_job(
         srt_path = srt_dir / "subtitles.srt"
         srt_path.write_text(srt_content, encoding="utf-8")
 
-        # Generate video context from OCR snapshots via Gemini Vision (background)
-        try:
-            from app.services.context_service import generate_video_context
-            await loop.run_in_executor(_executor, generate_video_context, video_id)
-        except Exception:
-            logger.warning("Context generation failed (non-critical)", exc_info=True)
-
         size_kb = srt_path.stat().st_size / 1024
         line_count = srt_content.count("-->")
         job["status"] = "done"
@@ -263,6 +256,15 @@ async def run_job(
             "type": "done", "video_id": video_id,
         })
         logger.info("job %s: done  |  %.1fKB  |  %.1fs total", job_id, size_kb, time.time() - t_start)
+
+        # Fire-and-forget: auto-generate context (runs after "done" notification)
+        from app.services.context_service import generate_video_context
+        from app.routers.config_router import _read_config
+        cfg = _read_config()
+        if cfg.get("auto_context_enabled", True):
+            asyncio.create_task(_auto_context(video_id, generate_video_context, loop))
+        else:
+            logger.info("Auto context generation disabled, skipping for %s", video_id)
 
     except JobCancelled:
         logger.info("job %s: cancelled by user", job_id)
@@ -582,6 +584,15 @@ async def run_export_job(
         job["status"] = "error"
         job["error"] = str(e)
         await job_log_async(job, ws_clients, f"Lỗi xuất: {e}", "error")
+
+
+async def _auto_context(video_id: str, generate_fn, loop):
+    """Fire-and-forget context generation after OCR completes."""
+    try:
+        await loop.run_in_executor(_executor, generate_fn, video_id)
+        logger.info("Auto context generated for %s", video_id)
+    except Exception:
+        logger.warning("Auto context generation failed (non-critical)", exc_info=True)
 
 
 async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):

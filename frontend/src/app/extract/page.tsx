@@ -143,6 +143,7 @@ export default function ExtractPage() {
   const [region, setRegion] = useState<Region | null>(null);
   const [lang, setLang] = useState<OcrLang>("ch");
   const [ocrType, setOcrType] = useState<OcrType>("apple");
+  const [autoContext, setAutoContext] = useState(true);
 
   useEffect(() => {
     const v = new URLSearchParams(window.location.search).get("video_id");
@@ -152,6 +153,29 @@ export default function ExtractPage() {
       setStep("select");
     }
   }, []);
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.auto_context_enabled !== undefined) setAutoContext(d.auto_context_enabled);
+      })
+      .catch(() => {});
+  }, []);
+
+  const toggleAutoContext = async () => {
+    const next = !autoContext;
+    setAutoContext(next);
+    try {
+      await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_context_enabled: next }),
+      });
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <main className="min-h-[100dvh] max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
@@ -202,6 +226,33 @@ export default function ExtractPage() {
             <>
               <EngineSelector value={ocrType} onChange={setOcrType} />
               <LangSelector value={lang} onChange={setLang} />
+              <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
+                <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
+                  Ngữ cảnh
+                </span>
+                <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
+                  <button
+                    onClick={() => !autoContext && toggleAutoContext()}
+                    className={`px-4 py-1.5 rounded-full text-[13px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 ${
+                      autoContext
+                        ? "bg-violet-600 text-white shadow-[0_6px_16px_-6px_rgba(139,92,246,0.5)]"
+                        : "text-ink-muted hover:text-ink"
+                    }`}
+                  >
+                    Bật
+                  </button>
+                  <button
+                    onClick={() => autoContext && toggleAutoContext()}
+                    className={`px-4 py-1.5 rounded-full text-[13px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 ${
+                      !autoContext
+                        ? "bg-ink/80 text-white shadow-[0_6px_16px_-6px_rgba(0,0,0,0.3)]"
+                        : "text-ink-muted hover:text-ink"
+                    }`}
+                  >
+                    Tắt
+                  </button>
+                </div>
+              </div>
               <RegionSelector
                 videoId={videoId}
                 onConfirmed={(r) => {

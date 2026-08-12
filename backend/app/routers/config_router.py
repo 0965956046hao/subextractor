@@ -25,6 +25,7 @@ def _read_config() -> dict:
 class SaveConfigRequest(BaseModel):
     gemini_api_key: str = ""
     google_tts_json: str = ""
+    auto_context_enabled: bool | None = None
 
 
 @router.get("/api/config")
@@ -34,6 +35,7 @@ async def get_config():
     return {
         "has_gemini_key": bool(cfg.get("gemini_api_key")),
         "has_tts_credentials": bool(cfg.get("google_tts_credentials")),
+        "auto_context_enabled": cfg.get("auto_context_enabled", True),
     }
 
 
@@ -54,6 +56,9 @@ async def save_config(body: SaveConfigRequest):
         except json.JSONDecodeError:
             return {"error": "JSON không hợp lệ."}
         cfg["google_tts_credentials"] = body.google_tts_json
+
+    if body.auto_context_enabled is not None:
+        cfg["auto_context_enabled"] = body.auto_context_enabled
 
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
