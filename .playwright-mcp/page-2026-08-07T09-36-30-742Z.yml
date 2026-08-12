@@ -1,0 +1,49 @@
+- generic [active] [ref=f3e1]:
+  - main [ref=f3e3]:
+    - generic [ref=f3e4]:
+      - generic [ref=f3e5]: SubTitle Extractor
+      - link "New Extractor" [ref=f3e10] [cursor=pointer]:
+        - /url: /extract
+    - generic [ref=f3e14]:
+      - generic [ref=f3e15]: Extracted Library
+      - heading "Your subtitles, ready to relive" [level=1] [ref=f3e18]: Your subtitles,ready to relive
+      - paragraph [ref=f3e20]: Every video you’ve extracted lives here — open one to watch, read the transcript, and download clean SRT text.
+      - link "Start a new extractor" [ref=f3e23] [cursor=pointer]:
+        - /url: /extract
+      - generic [ref=f3e29]:
+        - generic [ref=f3e30]: 2 videos
+        - generic [ref=f3e31]: 354 subtitle lines
+        - generic [ref=f3e32]: latest Aug 7, 2026
+    - generic [ref=f3e33]:
+      - generic [ref=f3e34]:
+        - generic [ref=f3e35]: 2 videos
+        - generic [ref=f3e36]:
+          - button "Xem dạng lưới" [ref=f3e37] [cursor=pointer]
+          - button "Xem dạng danh sách" [ref=f3e43] [cursor=pointer]
+      - generic [ref=f3e45]:
+        - 'link "窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4 Delete 窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4 34 lines Aug 7, 2026 · 03:24 PM Latest extraction" [ref=f3e46] [cursor=pointer]':
+          - /url: /video/2838163194a5
+          - generic [ref=f3e48]:
+            - generic [ref=f3e49]:
+              - 'img "窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4" [ref=f3e50]'
+              - button "Delete" [ref=f3e55]
+            - generic [ref=f3e58]:
+              - generic [ref=f3e59]:
+                - 'heading "窃甲帝骑二十九集又是被ai驯服的一天 #假面骑士#特摄#ai#原创动画#窃甲帝骑.mp4" [level=3] [ref=f3e60]'
+                - generic [ref=f3e61]:
+                  - generic [ref=f3e62]: 34 lines
+                  - generic [ref=f3e66]: Aug 7, 2026 · 03:24 PM
+              - generic [ref=f3e67]: Latest extraction
+        - 'link "我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4 Delete 我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4 320 lines Aug 7, 2026 · 02:07 PM" [ref=f3e70] [cursor=pointer]':
+          - /url: /video/b2260eabc0bb
+          - generic [ref=f3e72]:
+            - generic [ref=f3e73]:
+              - 'img "我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4" [ref=f3e74]'
+              - button "Delete" [ref=f3e79]
+            - generic [ref=f3e83]:
+              - 'heading "我真没想迟到啊 执剑1-5合集 #漫剧 #短剧推荐 #ai原创动漫 #漫剧推荐.mp4" [level=3] [ref=f3e84]'
+              - generic [ref=f3e85]:
+                - generic [ref=f3e86]: 320 lines
+                - generic [ref=f3e90]: Aug 7, 2026 · 02:07 PM
+    - paragraph [ref=f3e92]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=f3e93]

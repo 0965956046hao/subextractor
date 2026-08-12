@@ -1,0 +1,31 @@
+- generic [active] [ref=f1e1]:
+  - main [ref=f1e530]:
+    - link "Back to library" [ref=f1e532] [cursor=pointer]:
+      - /url: /
+    - generic [ref=f1e537]:
+      - generic [ref=f1e538]: Video OCR Pipeline
+      - heading "SubTitle Extractor" [level=1] [ref=f1e539]: SubTitleExtractor
+      - paragraph [ref=f1e540]: Upload a video, select the subtitle region, and extract clean SRT text with AI-powered OCR.
+    - generic [ref=f1e544]:
+      - generic [ref=f1e546]:
+        - generic [ref=f1e547]: "01"
+        - generic [ref=f1e550]: Upload
+      - generic [ref=f1e553]:
+        - generic [ref=f1e554]: "02"
+        - generic [ref=f1e557]: Select Region
+      - generic [ref=f1e560]:
+        - generic [ref=f1e561]: "03"
+        - generic [ref=f1e564]: Extract
+    - generic [ref=f1e567]:
+      - generic [ref=f1e575] [cursor=pointer]:
+        - paragraph [ref=f1e576]: Drop video here
+        - paragraph [ref=f1e577]: or browse files — MP4, MOV, AVI, MKV, WebM
+      - generic [ref=f1e578]:
+        - generic [ref=f1e579]: Supported
+        - generic [ref=f1e580]: MP4
+        - generic [ref=f1e581]: MOV
+        - generic [ref=f1e582]: AVI
+        - generic [ref=f1e583]: MKV
+        - generic [ref=f1e584]: WebM
+    - paragraph [ref=f1e586]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=f1e165]

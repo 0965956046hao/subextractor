@@ -1,0 +1,57 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: SubTitle Extractor
+      - link "New Extractor" [ref=e10] [cursor=pointer]:
+        - /url: /extract
+    - generic [ref=e14]:
+      - generic [ref=e15]: Extracted Library
+      - heading "Your subtitles, ready to relive" [level=1] [ref=e18]: Your subtitles,ready to relive
+      - paragraph [ref=e20]: Every video you’ve extracted lives here — open one to watch, read the transcript, and download clean SRT text.
+      - link "Start a new extractor" [ref=e23] [cursor=pointer]:
+        - /url: /extract
+      - generic [ref=e29]:
+        - generic [ref=e30]: 4 videos
+        - generic [ref=e31]: 259 subtitle lines
+        - generic [ref=e32]: latest Jul 31, 2026
+    - generic [ref=e34]:
+      - link "Video unavailable e3c29e8ac2d3 41 lines Jul 31, 2026 · 02:53 PM Latest extraction" [ref=e35] [cursor=pointer]:
+        - /url: /video/e3c29e8ac2d3
+        - generic [ref=e37]:
+          - generic [ref=e38]: Video unavailable
+          - generic [ref=e48]:
+            - generic [ref=e49]:
+              - heading "e3c29e8ac2d3" [level=3] [ref=e50]
+              - generic [ref=e51]:
+                - generic [ref=e52]: 41 lines
+                - generic [ref=e56]: Jul 31, 2026 · 02:53 PM
+            - generic [ref=e57]: Latest extraction
+      - link "Video unavailable 848ec0c8bf3f 107 lines Jul 31, 2026 · 02:37 PM" [ref=e60] [cursor=pointer]:
+        - /url: /video/848ec0c8bf3f
+        - generic [ref=e62]:
+          - generic [ref=e63]: Video unavailable
+          - generic [ref=e74]:
+            - heading "848ec0c8bf3f" [level=3] [ref=e75]
+            - generic [ref=e76]:
+              - generic [ref=e77]: 107 lines
+              - generic [ref=e81]: Jul 31, 2026 · 02:37 PM
+      - link "Video unavailable f89c6163916e 108 lines Jul 31, 2026 · 02:25 PM" [ref=e82] [cursor=pointer]:
+        - /url: /video/f89c6163916e
+        - generic [ref=e84]:
+          - generic [ref=e85]: Video unavailable
+          - generic [ref=e96]:
+            - heading "f89c6163916e" [level=3] [ref=e97]
+            - generic [ref=e98]:
+              - generic [ref=e99]: 108 lines
+              - generic [ref=e103]: Jul 31, 2026 · 02:25 PM
+      - link "Video unavailable 724ced0951ca 3 lines Jul 31, 2026 · 01:44 PM" [ref=e104] [cursor=pointer]:
+        - /url: /video/724ced0951ca
+        - generic [ref=e106]:
+          - generic [ref=e107]: Video unavailable
+          - generic [ref=e118]:
+            - heading "724ced0951ca" [level=3] [ref=e119]
+            - generic [ref=e120]:
+              - generic [ref=e121]: 3 lines
+              - generic [ref=e125]: Jul 31, 2026 · 01:44 PM
+    - paragraph [ref=e127]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=e128]

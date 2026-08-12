@@ -1,0 +1,47 @@
+- generic [active] [ref=f6e1]:
+  - main [ref=f6e3]:
+    - link "Back to library" [ref=f6e5] [cursor=pointer]:
+      - /url: /
+    - generic [ref=f6e10]:
+      - generic [ref=f6e11]: Video OCR Pipeline
+      - heading "SubTitle Extractor" [level=1] [ref=f6e12]: SubTitleExtractor
+      - paragraph [ref=f6e13]: Upload a video, select the subtitle region, and extract clean SRT text with AI-powered OCR.
+    - generic [ref=f6e17]:
+      - generic [ref=f6e18]: Upload
+      - generic [ref=f6e27]:
+        - generic [ref=f6e28]: "02"
+        - generic [ref=f6e31]: Select Region
+      - generic [ref=f6e34]:
+        - generic [ref=f6e35]: "03"
+        - generic [ref=f6e38]: Extract
+    - generic [ref=f6e40]:
+      - generic [ref=f6e41]:
+        - generic [ref=f6e42]: OCR Engine
+        - generic [ref=f6e43]:
+          - button "Apple Vision" [ref=f6e44] [cursor=pointer]
+          - button "RapidOCR" [ref=f6e45] [cursor=pointer]
+      - generic [ref=f6e46]:
+        - generic [ref=f6e47]: Ngôn ngữ OCR
+        - generic [ref=f6e48]:
+          - button "Tiếng Trung" [ref=f6e49] [cursor=pointer]
+          - button "Tiếng Việt" [ref=f6e50] [cursor=pointer]
+          - button "Tiếng Anh" [ref=f6e51] [cursor=pointer]
+      - generic [ref=f6e52]:
+        - generic [ref=f6e53]:
+          - paragraph [ref=f6e54]: Scrub the timeline to a moment with visible subtitles, then draw a rectangle over the subtitle region. Drag edges to adjust.
+          - generic [ref=f6e55]:
+            - generic [ref=f6e56]: Space
+            - generic [ref=f6e57]: Play
+            - generic [ref=f6e58]: ↵
+            - generic [ref=f6e59]: Confirm
+        - generic [ref=f6e65]:
+          - generic [ref=f6e66]:
+            - button "Play" [ref=f6e67] [cursor=pointer]
+            - button "Capture" [ref=f6e70] [cursor=pointer]
+          - generic [ref=f6e73]: 00:00 / 00:00
+        - generic [ref=f6e74] [cursor=pointer]:
+          - generic:
+            - generic: 00:00
+            - generic: 00:00
+    - paragraph [ref=f6e78]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=f6e79]
