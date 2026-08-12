@@ -1,9 +1,0 @@
-backend/temp/
-backend/.venv/
-backend/subtle-sublime-371414-043d111da8b3.json
-frontend/node_modules/
-frontend/.next/
-*.pyc
-__pycache__/
-.env
-.DS_Store
