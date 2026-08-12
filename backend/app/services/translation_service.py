@@ -6,6 +6,7 @@ from typing import Optional
 
 from app.config import settings
 from app.services.tool_services import parse_srt, entries_to_srt, _srt_path, _video_path
+from app.services.context_service import load_video_context
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +21,21 @@ def _read_user_config() -> dict:
     return {}
 
 
-CHINESE_TO_VIETNAMESE_PROMPT = """You are a professional translator specializing in Chinese historical drama subtitles. 
+CHINESE_TO_VIETNAMESE_PROMPT = """You are a professional translator. Your ONLY job is to translate Chinese to Vietnamese.
 
-Translate the following Chinese SRT subtitles to natural, fluent Vietnamese. Follow these rules:
-1. Read the FULL context of all subtitle lines first before translating
-2. Use natural Vietnamese sentence structure, not word-for-word translation
-3. Adapt cultural terms appropriately (e.g. "tướng quân" for 将军, "bệ hạ" for 陛下)
-4. Keep the original SRT format: index, timestamps, and translated text
-5. Keep each translated line roughly the same length as the original to fit subtitle timing
-6. DO NOT add any explanation, notes, or markdown formatting
-7. Output ONLY the translated SRT content in valid SRT format
+Translate EVERY subtitle line from Chinese to Vietnamese. NEVER keep any Chinese text in your output.
+IMPORTANT: You MUST replace ALL Chinese characters with Vietnamese translation. Do NOT output the original Chinese text under any circumstances.
 
-Here is the SRT to translate:
+Rules:
+1. Read the full context of all lines first
+2. Use natural Vietnamese, not word-for-word
+3. Adapt cultural terms (将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân")
+4. Keep SRT format: index, timestamps, translated Vietnamese text
+5. Keep lines similar length for subtitle timing
+6. Merge consecutive duplicate lines: if two or more lines in a row have IDENTICAL text, combine them into one line with the earliest start time and latest end time
+7. Output ONLY the translated SRT — no explanations, no markdown, no code fences
+
+SRT to translate from Chinese to Vietnamese:
 
 """
 
@@ -72,6 +76,22 @@ LANG_NAMES = {
 }
 
 
+def _clean_gemini_response(text: str) -> str:
+    """Strip markdown fences and any preamble/postamble from Gemini SRT output."""
+    import re
+    # Remove ```srt ... ``` or ``` ... ``` fences
+    text = re.sub(r"```(?:srt|subtitle|subtitles)?\s*\n?", "", text)
+    text = text.replace("```", "")
+    # Remove any leading non-digit lines before the first SRT index
+    lines = text.strip().split("\n")
+    start = 0
+    for i, ln in enumerate(lines):
+        if ln.strip().isdigit():
+            start = i
+            break
+    return "\n".join(lines[start:]).strip()
+
+
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False) -> str:
     """Translate SRT file using Gemini and save as translated_vi.srt."""
     if use_custom_srt:
@@ -99,6 +119,13 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         tn = LANG_NAMES.get(target_lang, target_lang)
         base_prompt = GENERIC_TRANSLATE_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
 
+    # Load video context if available (generated from OCR snapshots)
+    context = load_video_context(video_id)
+    if context:
+        context_prefix = f"VIDEO CONTEXT (use this to understand the scene and translate more accurately):\n{context}\n\n"
+        base_prompt = context_prefix + base_prompt
+        logger.info("Using video context for translation: %s", context[:100])
+
     # Send in batches of 50 entries to stay within context limits
     batch_size = 50
     translated_entries = []
@@ -113,17 +140,59 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             response = model.models.generate_content(
                 model=settings.gemini_model,
                 contents=prompt,
+                config={
+                    "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+                    "temperature": 0.3,
+                },
             )
             response_text = response.text.strip()
         except Exception as e:
             logger.error("Gemini API error: %s", e)
             raise RuntimeError(f"Translation failed: {e}")
 
+        # Strip markdown code fences that Gemini sometimes wraps around SRT
+        response_text = _clean_gemini_response(response_text)
+        logger.debug("Gemini response (first 200 chars): %s", response_text[:200])
+
         # Parse translated SRT back
         translated_batch = parse_srt(response_text)
         if not translated_batch:
-            logger.warning("Gemini returned empty translation for batch %d-%d", batch_start + 1, min(batch_start + batch_size, len(entries)))
+            logger.warning("Gemini returned empty translation for batch %d-%d, response: %s",
+                           batch_start + 1, min(batch_start + batch_size, len(entries)),
+                           response_text[:300])
             # fallback: keep original
+            translated_entries.extend(batch)
+            continue
+
+        # Detect if Gemini echoed back the input (no translation)
+        if len(translated_batch) == len(batch) and translated_batch[0].text.strip() == batch[0].text.strip():
+            logger.warning("Gemini echoed input without translating batch %d-%d, retrying with per-line prompt",
+                           batch_start + 1, min(batch_start + batch_size, len(entries)))
+            # Retry with explicit per-line instruction
+            retry_prompt = (
+                base_prompt
+                + "\nIMPORTANT: Translate EVERY line below from Chinese to Vietnamese. "
+                + "Replace each Chinese text with its Vietnamese equivalent. "
+                + "Do NOT output any Chinese characters.\n\n"
+                + batch_srt
+            )
+            try:
+                response2 = model.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=retry_prompt,
+                    config={
+                        "system_instruction": "You are a subtitle translator. You must translate ALL text. Never echo the input.",
+                        "temperature": 0.7,
+                    },
+                )
+                response_text2 = _clean_gemini_response(response2.text.strip())
+                translated_batch = parse_srt(response_text2)
+            except Exception:
+                pass
+
+        if not translated_batch:
+            logger.warning("Gemini retry also failed for batch %d-%d, keeping original",
+                           batch_start + 1, min(batch_start + batch_size, len(entries)))
             translated_entries.extend(batch)
             continue
 

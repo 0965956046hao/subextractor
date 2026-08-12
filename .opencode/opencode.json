@@ -40,7 +40,12 @@
     },
     "sequential-thinking": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/claude-code-addons", "sequential-thinking"],
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/claude-code-addons",
+        "sequential-thinking"
+      ],
       "enabled": true,
       "description": "Hỗ trợ suy luận từng bước, debug phức tạp — OCR tuning, subtitle timing, pipeline issues"
     },
@@ -55,7 +60,12 @@
     },
     "filesystem": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/Users/vophamnhuthao/Work/SubTitleExtractor"],
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/vophamnhuthao/Work/SubTitleExtractor"
+      ],
       "enabled": true,
       "description": "Quản lý file projects — đọc/ghi, di chuyển, bulk operations"
     },

@@ -121,7 +121,7 @@ def process_job_sync(
     job_log(job, ws_clients, loop, "Đang đọc từng khung hình của video…")
 
     crops = (
-        (crop_region(frame, region), ts)
+        (crop_region(frame, region), frame, ts)
         for frame, ts in stream_frames_generator(video_path, target_fps)
     )
 
@@ -156,11 +156,17 @@ def process_job_sync(
             "text",
         )
 
+    # Create directory for OCR frame snapshots
+    job_video_id = job.get("video_id", job_id)
+    crops_dir = settings.temp_dir / "frames" / job_video_id / "ocr_snapshots"
+    crops_dir.mkdir(parents=True, exist_ok=True)
+
     srt_content = generate_srt(
         crops, region, ocr_engine,
         progress_callback=progress_cb,
         text_callback=text_cb,
         total_frames=total_crops,
+        save_crops_dir=crops_dir,
     )
     t2 = time.time()
     logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)
@@ -235,6 +241,13 @@ async def run_job(
         srt_dir.mkdir(parents=True, exist_ok=True)
         srt_path = srt_dir / "subtitles.srt"
         srt_path.write_text(srt_content, encoding="utf-8")
+
+        # Generate video context from OCR snapshots via Gemini Vision (background)
+        try:
+            from app.services.context_service import generate_video_context
+            await loop.run_in_executor(_executor, generate_video_context, video_id)
+        except Exception:
+            logger.warning("Context generation failed (non-critical)", exc_info=True)
 
         size_kb = srt_path.stat().st_size / 1024
         line_count = srt_content.count("-->")
@@ -571,6 +584,40 @@ async def run_export_job(
         await job_log_async(job, ws_clients, f"Lỗi xuất: {e}", "error")
 
 
+async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
+    """Generate video context from OCR snapshots via Gemini Vision."""
+    from app.services.context_service import generate_video_context, load_video_context
+
+    job = jobs[job_id]
+    video_id = job.get("video_id", job_id)
+
+    try:
+        job["status"] = "processing"
+        job["phase"] = "context"
+        await job_log_async(job, ws_clients, "Đang upload ảnh snapshot lên Gemini File Store...", "info")
+        await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "context"})
+
+        loop = asyncio.get_event_loop()
+        context = await loop.run_in_executor(_executor, generate_video_context, video_id)
+
+        if context:
+            job["status"] = "done"
+            job["progress"] = 100
+            await job_log_async(job, ws_clients, f"Đã sinh ngữ cảnh: {context[:150]}...", "text")
+            await notify_ws(ws_clients, job_id, {"type": "done", "progress": 100, "context": context})
+        else:
+            job["status"] = "done"
+            job["progress"] = 100
+            await job_log_async(job, ws_clients, "Không tìm thấy ảnh snapshot để phân tích.", "warn")
+            await notify_ws(ws_clients, job_id, {"type": "done", "progress": 100})
+
+    except Exception as e:
+        logger.exception("context job %s: FAILED", job_id)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Lỗi sinh ngữ cảnh: {e}", "error")
+
+
 async def worker_loop(
     jobs: dict,
     ws_clients: dict,
@@ -594,6 +641,8 @@ async def worker_loop(
                     await run_tts_job(jobs, ws_clients, job_id)
                 elif job_type == "export":
                     await run_export_job(jobs, ws_clients, job_id)
+                elif job_type == "context":
+                    await run_context_job(jobs, ws_clients, job_id)
                 else:
                     await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:

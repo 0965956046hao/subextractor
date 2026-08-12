@@ -1,6 +1,7 @@
 import logging
 import re
 from collections.abc import Iterable
+from pathlib import Path
 
 from rapidfuzz import fuzz
 from tqdm import tqdm
@@ -8,6 +9,17 @@ from tqdm import tqdm
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _save_crop(crop, save_dir: Path, index: int, timestamp: float):
+    """Save cropped frame image to disk."""
+    import cv2
+    ts_str = f"{timestamp:.2f}".replace(".", "_")
+    filename = f"{index:04d}_{ts_str}s.jpg"
+    filepath = save_dir / filename
+    cv2.imwrite(str(filepath), crop)
+    logger.debug("  saved crop: %s", filename)
+
 
 # Chars often left behind by OCR (leading/trailing noise).
 ARTIFACT_CHARS = " \u3000-—–−|·•.,，。;；:：!！?？~～`'\"“”‘’()（）[]【】«»‹›"
@@ -151,8 +163,9 @@ def generate_srt(
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
+    save_crops_dir: Path | None = None,
 ) -> str:
-    """Build SRT from a stream of (crop, timestamp) frames.
+    """Build SRT from a stream of (crop, full_frame, timestamp) frames.
 
     A subtitle boundary is placed at the midpoint between the last frame that
     still showed the old text and the first frame that shows the new text,
@@ -167,7 +180,7 @@ def generate_srt(
 
     pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
-    for i, (crop, timestamp) in enumerate(frames):
+    for i, (crop, full_frame, timestamp) in enumerate(frames):
         text = ocr_engine.ocr_region_cached(crop)
         text = clean_text(text)
         pbar.update(1)
@@ -209,6 +222,8 @@ def generate_srt(
                 entries.append((start_time, boundary, prev_text.strip()))
                 if text_callback:
                     text_callback(start_time, boundary, prev_text.strip())
+                if save_crops_dir:
+                    _save_crop(full_frame, save_crops_dir, len(entries), start_time)
                 logger.info(
                     "  subtitle: %s --> %s  |  %s",
                     sec_to_srt(start_time), sec_to_srt(boundary),

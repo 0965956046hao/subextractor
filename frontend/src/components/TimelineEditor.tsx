@@ -47,10 +47,20 @@ interface SubtitleTrack {
   entries: SrtEntry[];
 }
 
+const ASPECT_RATIOS: { label: string; value: string | null; ratio: number }[] =
+  [
+    { label: "Gốc", value: null, ratio: 0 },
+    { label: "16:9", value: "16/9", ratio: 16 / 9 },
+    { label: "9:16", value: "9/16", ratio: 9 / 16 },
+    { label: "4:3", value: "4/3", ratio: 4 / 3 },
+    { label: "1:1", value: "1/1", ratio: 1 },
+    { label: "21:9", value: "21/9", ratio: 21 / 9 },
+  ];
+
 const DEFAULT_STYLE: SubtitleStyle = {
   x: 50,
-  y: 90,
-  maxWidth: 90,
+  y: 93,
+  maxWidth: 92,
   showBg: true,
   textAlign: "center",
   fontFamily: "Plus Jakarta Sans",
@@ -132,6 +142,329 @@ function newTrackId(): string {
   return `track_${++_trackCounter}_${Date.now()}`;
 }
 
+function refStyleToPx(ref: SubtitleStyle, vw: number, vh: number): SubtitleStyle {
+  return {
+    ...ref,
+    x: Math.round((ref.x / 100) * vw),
+    y: Math.round((ref.y / 100) * vh),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Inline SVG icons (thin-stroke, Phosphor-style)                    */
+/* ------------------------------------------------------------------ */
+
+function IconPlay({ className = "w-4 h-4" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function IconPause({ className = "w-4 h-4" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+function IconAdd({ className = "w-3 h-3" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+
+function IconChevronRight({ className = "w-3.5 h-3.5", open = false }) {
+  return (
+    <svg
+      className={className}
+      style={{
+        transform: open ? "rotate(90deg)" : "rotate(0deg)",
+        transition: "transform 0.4s cubic-bezier(0.32,0.72,0,1)",
+      }}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}
+
+function IconClose({ className = "w-3.5 h-3.5" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+function IconSpeaker({ className = "w-3.5 h-3.5", muted = false }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      {muted ? (
+        <>
+          <line x1="23" y1="9" x2="17" y2="15" />
+          <line x1="17" y1="9" x2="23" y2="15" />
+        </>
+      ) : (
+        <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" />
+      )}
+    </svg>
+  );
+}
+
+function IconSnap({ className = "w-3.5 h-3.5" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 3h4l2 7-2 7H6l2-7-2-7z" />
+      <path d="M13 3l3 7-3 7" />
+      <line x1="3" y1="21" x2="21" y2="21" />
+    </svg>
+  );
+}
+
+function IconSettings({ className = "w-3.5 h-3.5" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+    </svg>
+  );
+}
+
+function IconSpinner({ className = "w-4 h-4" }) {
+  return (
+    <svg
+      className={`${className} animate-spin`}
+      viewBox="0 0 24 24"
+      fill="none"
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        opacity="0.15"
+      />
+      <path
+        d="M12 2a10 10 0 019.95 9"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconCheck({ className = "w-4 h-4" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+      <polyline points="22 4 12 14.01 9 11.01" />
+    </svg>
+  );
+}
+
+function IconError({ className = "w-4 h-4" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <line x1="15" y1="9" x2="9" y2="15" />
+      <line x1="9" y1="9" x2="15" y2="15" />
+    </svg>
+  );
+}
+
+function IconDownload({ className = "w-4 h-4" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Mini helper components                                            */
+/* ------------------------------------------------------------------ */
+
+function PillButton({
+  children,
+  active = false,
+  disabled = false,
+  color = "blue",
+  onClick,
+  className = "",
+  title,
+}: {
+  children: React.ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  color?:
+    | "blue"
+    | "green"
+    | "amber"
+    | "cyan"
+    | "violet"
+    | "rose"
+    | "red"
+    | "slate";
+  onClick?: () => void;
+  className?: string;
+  title?: string;
+}) {
+  const colors: Record<string, string> = {
+    blue: active
+      ? "bg-blue-600/10 text-blue-700 ring-blue-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    green: active
+      ? "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    amber: active
+      ? "bg-amber-500/10 text-amber-700 ring-amber-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    cyan: active
+      ? "bg-cyan-500/10 text-cyan-700 ring-cyan-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    violet: active
+      ? "bg-violet-500/10 text-violet-700 ring-violet-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    rose: active
+      ? "bg-rose-500/10 text-rose-700 ring-rose-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    red: active
+      ? "bg-red-500/10 text-red-700 ring-red-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+    slate: active
+      ? "bg-slate-500/10 text-slate-700 ring-slate-500/25"
+      : "bg-black/[0.02] text-ink-muted ring-black/[0.06] hover:bg-black/[0.04] hover:text-ink",
+  };
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight ring-1 transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.97] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${colors[color] || colors.blue} ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function IconButton({
+  onClick,
+  active = false,
+  color = "slate",
+  title,
+  children,
+  className = "",
+}: {
+  onClick?: () => void;
+  active?: boolean;
+  color?: "blue" | "red" | "slate" | "green" | "amber";
+  title?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const colors: Record<string, string> = {
+    blue: active
+      ? "bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/25"
+      : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink",
+    red: active
+      ? "bg-red-500/10 text-red-600 ring-1 ring-red-500/25"
+      : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink",
+    green: active
+      ? "bg-emerald-500/10 text-emerald-600 ring-1 ring-emerald-500/25"
+      : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink",
+    amber: active
+      ? "bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/25"
+      : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink",
+    slate:
+      "bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink",
+  };
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.95] cursor-pointer ${colors[color] || colors.slate} ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                         */
 /* ------------------------------------------------------------------ */
@@ -210,6 +543,8 @@ export default function TimelineEditor({
   const [ttsApplyAll, setTtsApplyAll] = useState(false);
   const [editingClipSpeed, setEditingClipSpeed] = useState<number | null>(null);
   const [ttsSpeedApplyAll, setTtsSpeedApplyAll] = useState(false);
+  const [exportAspect, setExportAspect] = useState<string | null>(null);
+  const [videoDims, setVideoDims] = useState({ w: 1920, h: 1080 });
 
   useEffect(() => {
     if (selectedIndex !== null) setShowStylePanel(true);
@@ -294,13 +629,14 @@ export default function TimelineEditor({
           if (v) v.muted = d.videoMuted;
         }
         if (d.videoVolume !== undefined) {
-        setVideoVolume(d.videoVolume);
-        const v = videoRef.current;
-        if (v) v.volume = d.videoVolume;
-      }
-      if (d.ttsVoice) setTtsVoice(d.ttsVoice);
+          setVideoVolume(d.videoVolume);
+          const v = videoRef.current;
+          if (v) v.volume = d.videoVolume;
+        }
+        if (d.ttsVoice) setTtsVoice(d.ttsVoice);
         if (d.snapping !== undefined) setSnapping(d.snapping);
         if (d.zoom) setZoom(d.zoom);
+        if (d.exportAspect !== undefined) setExportAspect(d.exportAspect);
         if (loaded) {
           setToast("Đã khôi phục cấu hình đã lưu");
           setTimeout(() => setToast(null), 2000);
@@ -416,6 +752,8 @@ export default function TimelineEditor({
     const updateDur = () => {
       if (v.duration && Number.isFinite(v.duration) && v.duration > 0)
         setDuration(v.duration);
+      if (v.videoWidth && v.videoHeight)
+        setVideoDims({ w: v.videoWidth, h: v.videoHeight });
     };
     if (v.readyState >= 1) updateDur();
     v.addEventListener("loadedmetadata", updateDur);
@@ -509,7 +847,6 @@ export default function TimelineEditor({
     };
   }, [ttsClips]);
 
-  // Sync playbackRate when per-clip speed changes
   useEffect(() => {
     ttsAudioRefs.current.forEach((a, i) => {
       const clip = ttsClips[i];
@@ -603,7 +940,6 @@ export default function TimelineEditor({
             setToolJob((prev) =>
               prev ? { ...prev, status: "done", progress: 100 } : prev,
             );
-            // Load TTS audio clips into timeline using selected track's timestamps
             const track = selectedTrack
               ? tracks.find((t) => t.id === selectedTrack)
               : tracks[0];
@@ -637,10 +973,8 @@ export default function TimelineEditor({
   const saveSrt = useCallback(async () => {
     if (saved) return;
     try {
-      // Save SRT
       const allEntries = tracks.flatMap((t) => t.entries);
       await updateSrt(videoId, entriesToSrt(allEntries));
-      // Save full project state
       await fetch(`/api/project/${videoId}/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -658,6 +992,7 @@ export default function TimelineEditor({
           snapping,
           zoom,
           applyAll,
+          exportAspect,
         }),
       });
       console.log("Saved project with ttsClips:", ttsClips.length);
@@ -675,6 +1010,7 @@ export default function TimelineEditor({
     snapping,
     zoom,
     applyAll,
+    exportAspect,
   ]);
 
   /* ---- helpers ---- */
@@ -738,7 +1074,6 @@ export default function TimelineEditor({
     (e: PointerEvent) => {
       if (!dragState) return;
 
-      // detect which track the mouse is over (for cross-track drag)
       if (dragState.mode === "move") {
         const el = document.elementFromPoint(e.clientX, e.clientY);
         const row = el?.closest?.("[data-track-id]") as HTMLElement | null;
@@ -807,7 +1142,6 @@ export default function TimelineEditor({
 
   const endDrag = useCallback(() => {
     if (!dragState) return;
-    // cross-track move
     if (dragState.mode === "move" && dragOverTrackId) {
       setTracks((prev) => {
         const srcTrack = prev.find((t) => t.id === dragState.trackId);
@@ -888,7 +1222,6 @@ export default function TimelineEditor({
         });
         return;
       }
-      // Check track selection for translate/tts
       const track = selectedTrack
         ? tracks.find((t) => t.id === selectedTrack)
         : tracks[0] || null;
@@ -1030,7 +1363,7 @@ export default function TimelineEditor({
   const getEntryStyle = (trackId: string, index: number): SubtitleStyle => {
     return (
       tracks.find((t) => t.id === trackId)?.entries[index]?.style ??
-      DEFAULT_STYLE
+      refStyleToPx(DEFAULT_STYLE, videoDims.w, videoDims.h)
     );
   };
 
@@ -1066,7 +1399,7 @@ export default function TimelineEditor({
     if (selectedTrack !== null && selectedIndex !== null) {
       return getEntryStyle(selectedTrack, selectedIndex);
     }
-    return DEFAULT_STYLE;
+    return refStyleToPx(DEFAULT_STYLE, videoDims.w, videoDims.h);
   };
 
   /* ---- all entries across all tracks (for video overlay) ---- */
@@ -1083,35 +1416,18 @@ export default function TimelineEditor({
     return `rgba(${r},${g},${b},${alpha})`;
   };
 
-  /* ---- all entries for waveform ---- */
-  const allEntries = tracks.flatMap((t) => t.entries);
+  const pxToPctX = (px: number) => `${((px / videoDims.w) * 100).toFixed(4)}%`;
+  const pxToPctY = (px: number) => `${((px / videoDims.h) * 100).toFixed(4)}%`;
+  const pxToPctValX = (px: number) => (px / videoDims.w) * 100;
+  const pxToPctValY = (px: number) => (px / videoDims.h) * 100;
 
   /* ---- render ---- */
   if (loading) {
     return (
       <div className="double-bezel">
-        <div className="double-bezel-inner p-10 flex items-center justify-center">
-          <svg
-            className="w-6 h-6 text-blue-500 animate-spin"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
-            <circle
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              opacity="0.15"
-            />
-            <path
-              d="M12 2a10 10 0 019.95 9"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="ml-3 text-sm text-ink-muted">Loading timeline…</span>
+        <div className="double-bezel-inner p-16 flex flex-col items-center justify-center gap-4">
+          <IconSpinner className="w-6 h-6 text-blue-500" />
+          <span className="text-sm text-ink-muted">Đang tải timeline...</span>
         </div>
       </div>
     );
@@ -1120,20 +1436,9 @@ export default function TimelineEditor({
   if (error) {
     return (
       <div className="double-bezel">
-        <div className="double-bezel-inner p-6">
-          <div className="flex items-start gap-3 p-4 rounded-2xl bg-red-500/10 ring-1 ring-red-500/15">
-            <svg
-              className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
+        <div className="double-bezel-inner p-10 flex flex-col items-center gap-4">
+          <div className="flex items-start gap-3 p-5 rounded-2xl bg-red-500/8 ring-1 ring-red-500/15 max-w-md">
+            <IconError className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-red-600/80">{error}</p>
           </div>
         </div>
@@ -1145,35 +1450,26 @@ export default function TimelineEditor({
     <div className="double-bezel">
       <div className="double-bezel-inner flex flex-col overflow-hidden relative">
         {/* ================================================================ */}
-        {/*  Toolbar                                                         */}
+        {/*  Toolbar — Two-row professional layout                          */}
         {/* ================================================================ */}
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-black/[0.06] bg-white/60 flex-wrap">
-          <div className="flex items-center gap-2">
+
+        {/* Row 1 — Transport Bar: playback, zoom, save */}
+        <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-2 flex-wrap select-none">
+          {/* Left cluster: Transport controls */}
+          <div className="flex items-center gap-1 p-1 rounded-full bg-black/[0.03] ring-1 ring-black/[0.04] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
             <button
               onClick={togglePlay}
               aria-label={playing ? "Pause" : "Play"}
-              className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
+              className="group relative w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
             >
               {playing ? (
-                <svg
-                  className="w-3.5 h-3.5"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                >
-                  <rect x="6" y="4" width="4" height="16" rx="1" />
-                  <rect x="14" y="4" width="4" height="16" rx="1" />
-                </svg>
+                <IconPause className="w-3.5 h-3.5" />
               ) : (
-                <svg
-                  className="w-3.5 h-3.5 ml-0.5"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                >
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+                <IconPlay className="w-3.5 h-3.5 ml-0.5" />
               )}
             </button>
-            <button
+            <div className="w-px h-5 bg-black/[0.06]" />
+            <IconButton
               onClick={() => {
                 const v = videoRef.current;
                 if (v) {
@@ -1181,40 +1477,12 @@ export default function TimelineEditor({
                   setVideoMuted(v.muted);
                 }
               }}
+              active={videoMuted}
+              color={videoMuted ? "red" : "slate"}
               title={videoMuted ? "Bật tiếng" : "Tắt tiếng video gốc"}
-              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-300 cursor-pointer ${
-                videoMuted
-                  ? "bg-red-500/10 text-red-500 ring-1 ring-red-500/25"
-                  : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06]"
-              }`}
             >
-              {videoMuted ? (
-                <svg
-                  className="w-3.5 h-3.5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                  strokeLinecap="round"
-                >
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <line x1="23" y1="9" x2="17" y2="15" />
-                  <line x1="17" y1="9" x2="23" y2="15" />
-                </svg>
-              ) : (
-                <svg
-                  className="w-3.5 h-3.5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                  strokeLinecap="round"
-                >
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" />
-                </svg>
-              )}
-            </button>
+              <IconSpeaker muted={videoMuted} className="w-3.5 h-3.5" />
+            </IconButton>
             <input
               type="range"
               min={0}
@@ -1225,44 +1493,38 @@ export default function TimelineEditor({
                 const v = parseFloat(e.target.value);
                 setVideoVolume(v);
                 const vid = videoRef.current;
-                if (vid) { vid.volume = v; vid.muted = false; setVideoMuted(false); }
+                if (vid) {
+                  vid.volume = v;
+                  vid.muted = false;
+                  setVideoMuted(false);
+                }
               }}
-              className="w-16 h-1 accent-blue-600 cursor-pointer"
+              className="w-12 h-1 accent-blue-600 cursor-pointer mx-1"
               title={`Âm lượng: ${Math.round(videoVolume * 100)}%`}
             />
-            <span className="text-xs font-mono tabular-nums text-ink-muted min-w-[90px]">
-              {fmtTime(currentTime)} / {fmtTime(duration)}
+            <span className="text-[11px] font-mono tabular-nums text-ink-muted min-w-[100px] tracking-tight">
+              {fmtTime(currentTime)}{" "}
+              <span className="text-ink-light/50 mx-0.5">/</span>{" "}
+              {fmtTime(duration)}
             </span>
-            <button
+            <div className="w-px h-5 bg-black/[0.06]" />
+            <IconButton
               onClick={() => setSnapping(!snapping)}
-              aria-label="Toggle snapping"
-              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-300 cursor-pointer ${
-                snapping
-                  ? "bg-blue-600/10 text-blue-600 ring-1 ring-blue-500/25"
-                  : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06]"
-              }`}
+              active={snapping}
+              color={snapping ? "blue" : "slate"}
               title="Bắt điểm (Snapping)"
             >
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M6 3h4l2 7-2 7H6l2-7-2-7z" />
-                <path d="M13 3l3 7-3 7" />
-                <line x1="3" y1="21" x2="21" y2="21" />
-              </svg>
-            </button>
+              <IconSnap className="w-3.5 h-3.5" />
+            </IconButton>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5">
+
+          {/* Right cluster: Zoom + Save + Settings */}
+          <div className="flex items-center gap-2">
+            {/* Zoom */}
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.02] ring-1 ring-black/[0.04]">
               <button
                 onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - 0.25))}
-                className="w-6 h-6 rounded-md bg-black/[0.03] text-ink-light hover:bg-black/[0.06] flex items-center justify-center text-xs font-bold transition-colors cursor-pointer"
+                className="w-6 h-6 rounded-full flex items-center justify-center text-xs text-ink-muted hover:bg-black/[0.04] hover:text-ink transition-all duration-300 cursor-pointer"
               >
                 −
               </button>
@@ -1273,35 +1535,80 @@ export default function TimelineEditor({
                 step={0.25}
                 value={zoom}
                 onChange={(e) => setZoom(parseFloat(e.target.value))}
-                className="w-20 h-1 accent-blue-600 cursor-pointer"
+                className="w-14 h-1 accent-blue-600 cursor-pointer"
               />
               <button
                 onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + 0.25))}
-                className="w-6 h-6 rounded-md bg-black/[0.03] text-ink-light hover:bg-black/[0.06] flex items-center justify-center text-xs font-bold transition-colors cursor-pointer"
+                className="w-6 h-6 rounded-full flex items-center justify-center text-xs text-ink-muted hover:bg-black/[0.04] hover:text-ink transition-all duration-300 cursor-pointer"
               >
                 +
               </button>
-              <span className="text-[10px] font-mono text-ink-light tabular-nums w-8 text-right">
-                {zoom.toFixed(2)}x
+              <span className="text-[10px] font-mono text-ink-light tabular-nums w-8 text-center">
+                {zoom.toFixed(1)}x
               </span>
             </div>
-            <button
-              onClick={addTrack}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-green-500/10 text-green-700 ring-1 ring-green-500/20 hover:bg-green-500/20 transition-colors cursor-pointer flex items-center gap-1"
+
+            <div className="w-px h-5 bg-black/[0.08]" />
+
+            <IconButton
+              onClick={openSettings}
+              active={hasApiKeys}
+              color={hasApiKeys ? "green" : "amber"}
+              title="Cấu hình API Keys"
             >
-              <svg
-                className="w-3 h-3"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
+              <IconSettings className="w-3.5 h-3.5" />
+            </IconButton>
+
+            {/* Save — Primary CTA with Button-in-Button */}
+            <button
+              onClick={saveSrt}
+              disabled={saved}
+              className={`group inline-flex items-center gap-2.5 pl-5 pr-2 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.97] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                saved
+                  ? "bg-black/[0.02] text-ink-light ring-1 ring-black/[0.04]"
+                  : "bg-blue-600 text-white hover:bg-blue-500 shadow-sm"
+              }`}
+            >
+              <span>{saved ? "Đã lưu" : "Lưu thay đổi"}</span>
+              <span
+                className={`w-6 h-6 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:scale-105 ${
+                  saved
+                    ? "bg-black/[0.05] text-ink-light"
+                    : "bg-white/20 text-white group-hover:bg-white/30"
+                }`}
               >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              Thêm track
+                <svg
+                  className="w-3 h-3"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" />
+                  <polyline points="7 3 7 8 15 8" />
+                </svg>
+              </span>
             </button>
+          </div>
+        </div>
+
+        {/* Row 2 — Tools Palette */}
+        <div className="flex items-center justify-between gap-3 px-5 pb-3 flex-wrap select-none">
+          {/* Left: Track + Subtitle management */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <PillButton onClick={addTrack} color="green">
+              <IconAdd /> Thêm track
+            </PillButton>
+            <PillButton
+              onClick={addEntry}
+              disabled={!selectedTrack}
+              color="amber"
+            >
+              <IconAdd /> Thêm phụ đề
+            </PillButton>
             {availableSrtFiles.length > 0 && (
               <select
                 onChange={(e) => {
@@ -1311,7 +1618,7 @@ export default function TimelineEditor({
                   if (file) loadSrtFile(file.id, file.name);
                   e.target.value = "";
                 }}
-                className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-indigo-500/10 text-indigo-700 ring-1 ring-indigo-500/20 hover:bg-indigo-500/20 transition-colors cursor-pointer appearance-none pr-7"
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-indigo-500/8 text-indigo-700 ring-1 ring-indigo-500/20 hover:bg-indigo-500/15 transition-all duration-300 cursor-pointer appearance-none pr-7"
                 style={{
                   backgroundImage:
                     "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%234338ca' opacity='0.5'/%3E%3C/svg%3E\")",
@@ -1335,7 +1642,6 @@ export default function TimelineEditor({
                   );
                   e.target.value = "";
                   if (!file) return;
-                  // Load TTS audio clips from the selected subdirectory
                   const track = selectedTrack
                     ? tracks.find((t) => t.id === selectedTrack)
                     : tracks[0];
@@ -1352,7 +1658,7 @@ export default function TimelineEditor({
                     setTimeout(() => setToast(null), 3000);
                   }
                 }}
-                className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer appearance-none pr-7"
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/8 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/15 transition-all duration-300 cursor-pointer appearance-none pr-7"
                 style={{
                   backgroundImage:
                     "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%230895b0' opacity='0.5'/%3E%3C/svg%3E\")",
@@ -1368,64 +1674,52 @@ export default function TimelineEditor({
                 ))}
               </select>
             )}
-            <button
-              onClick={addEntry}
-              disabled={!selectedTrack}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-amber-500/10 text-amber-700 ring-1 ring-amber-500/20 hover:bg-amber-500/20 transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <svg
-                className="w-3 h-3"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
+          </div>
+
+          {/* Right: AI tools — Translate, TTS, Export */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {/* Translation cluster */}
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-violet-500/[0.05] ring-1 ring-violet-500/[0.12]">
+              <select
+                value={transSrcLang}
+                onChange={(e) => setTransSrcLang(e.target.value)}
+                className="rounded-full bg-transparent px-2 py-1 text-[10px] text-violet-600/70 font-medium cursor-pointer outline-none"
               >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              Thêm phụ đề
-            </button>
-            <select
-              value={transSrcLang}
-              onChange={(e) => setTransSrcLang(e.target.value)}
-              className="rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-ink cursor-pointer"
-            >
-              <option value="zh">Trung</option>
-              <option value="en">Anh</option>
-              <option value="ja">Nhật</option>
-              <option value="ko">Hàn</option>
-            </select>
-            <span className="text-[10px] text-ink-light">→</span>
-            <select
-              value={transDstLang}
-              onChange={(e) => setTransDstLang(e.target.value)}
-              className="rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-ink cursor-pointer"
-            >
-              <option value="vi">Việt</option>
-              <option value="en">Anh</option>
-              <option value="zh">Trung</option>
-            </select>
-            <button
+                <option value="zh">Trung</option>
+                <option value="en">Anh</option>
+                <option value="ja">Nhật</option>
+                <option value="ko">Hàn</option>
+              </select>
+              <span className="text-[10px] text-violet-400">→</span>
+              <select
+                value={transDstLang}
+                onChange={(e) => setTransDstLang(e.target.value)}
+                className="rounded-full bg-transparent px-2 py-1 text-[10px] text-violet-600/70 font-medium cursor-pointer outline-none"
+              >
+                <option value="vi">Việt</option>
+                <option value="en">Anh</option>
+                <option value="zh">Trung</option>
+              </select>
+            </div>
+            <PillButton
               onClick={() => runToolJob("translate")}
               disabled={!!toolJob}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-violet-500/10 text-violet-700 ring-1 ring-violet-500/20 hover:bg-violet-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              color="violet"
             >
               Dịch (Gemini)
-            </button>
-            <button
-              onClick={() => runToolJob("tts")}
-              disabled={!!toolJob}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Lồng tiếng (TTS)
-            </button>
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-ink-light">Giọng:</span>
+            </PillButton>
+
+            <div className="w-px h-4 bg-black/[0.06] mx-0.5" />
+
+            {/* TTS cluster */}
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-cyan-500/[0.05] ring-1 ring-cyan-500/[0.12]">
+              <span className="text-[9px] text-cyan-600/60 ml-1 font-medium">
+                Giọng
+              </span>
               <select
                 value={ttsVoice}
                 onChange={(e) => setTtsVoice(e.target.value)}
-                className="rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-ink cursor-pointer"
+                className="rounded-full bg-transparent px-1.5 py-1 text-[10px] text-cyan-600/70 font-medium cursor-pointer outline-none"
               >
                 <option value="vi-VN-Standard-A">Nữ A</option>
                 <option value="vi-VN-Standard-B">Nam B</option>
@@ -1437,427 +1731,387 @@ export default function TimelineEditor({
                 <option value="vi-VN-Wavenet-D">WaveNet Nam D</option>
               </select>
             </div>
-            <button
-              onClick={openSettings}
-              title="Cấu hình API Keys"
-              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-300 cursor-pointer ${
-                hasApiKeys
-                  ? "bg-emerald-500/10 text-emerald-600 ring-1 ring-emerald-500/25"
-                  : "bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/25"
-              }`}
+            <PillButton
+              onClick={() => runToolJob("tts")}
+              disabled={!!toolJob}
+              color="cyan"
             >
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-              </svg>
-            </button>
-            <button
-              onClick={saveSrt}
-              disabled={saved}
-              className={`px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors cursor-pointer disabled:cursor-not-allowed ${
-                saved
-                  ? "bg-black/[0.02] text-ink-light ring-1 ring-black/[0.04]"
-                  : "bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/25 hover:bg-blue-600/20"
-              }`}
-            >
-              {saved ? "Đã lưu" : "Lưu thay đổi"}
-            </button>
-            <button
+              Lồng tiếng
+            </PillButton>
+
+            <div className="w-px h-4 bg-black/[0.06] mx-0.5" />
+
+            <PillButton
               onClick={() => runToolJob("export")}
               disabled={!!toolJob}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-rose-500/10 text-rose-700 ring-1 ring-rose-500/20 hover:bg-rose-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              color="rose"
             >
               Xuất video
-            </button>
+            </PillButton>
           </div>
         </div>
 
-        {/* Job progress banner */}
+        {/* ================================================================ */}
+        {/*  Job progress banner                                             */}
+        {/* ================================================================ */}
         {toolJob && (
-          <div className="px-4 py-2 border-b border-black/[0.06] bg-gradient-to-r from-blue-500/[0.04] to-blue-500/[0.01]">
-            <div className="flex items-center gap-3">
-              {toolJob.status === "queued" ||
-              toolJob.status === "processing" ? (
-                <>
-                  <svg
-                    className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0"
-                    viewBox="0 0 24 24"
-                    fill="none"
+          <div className="mx-5 mb-3 p-3 rounded-2xl bg-gradient-to-r from-blue-500/[0.05] to-transparent ring-1 ring-blue-500/[0.08] flex items-center gap-3">
+            {toolJob.status === "queued" || toolJob.status === "processing" ? (
+              <>
+                <IconSpinner className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                <span className="text-[11px] font-medium text-ink-muted flex-1">
+                  {toolJob.type === "translate"
+                    ? "Đang dịch với Gemini..."
+                    : toolJob.type === "tts"
+                      ? "Đang tổng hợp giọng nói..."
+                      : "Đang xuất video..."}
+                </span>
+                <div className="w-28 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]"
+                    style={{ width: `${Math.max(3, toolJob.progress)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-ink-light tabular-nums w-8 text-right">
+                  {toolJob.progress}%
+                </span>
+              </>
+            ) : toolJob.status === "done" ? (
+              <>
+                <IconCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                <span className="text-[11px] font-medium text-emerald-700 flex-1">
+                  {toolJob.type === "translate"
+                    ? "Dịch hoàn tất"
+                    : toolJob.type === "tts"
+                      ? "Lồng tiếng hoàn tất"
+                      : "Xuất video hoàn tất"}
+                </span>
+                {toolJob.type === "translate" ? (
+                  <a
+                    href={getTranslatedDownloadUrl(videoId)}
+                    download
+                    className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
                   >
-                    <circle
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      opacity="0.15"
-                    />
-                    <path
-                      d="M12 2a10 10 0 019.95 9"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  <span className="text-[11px] font-medium text-ink-muted flex-1">
-                    {toolJob.type === "translate"
-                      ? "Đang dịch với Gemini..."
-                      : toolJob.type === "tts"
-                        ? "Đang tổng hợp giọng nói..."
-                        : "Đang xuất video..."}
-                  </span>
-                  <div className="w-32 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-700"
-                      style={{ width: `${Math.max(3, toolJob.progress)}%` }}
-                    />
-                  </div>
-                  <span className="text-[10px] font-mono text-ink-light tabular-nums w-8 text-right">
-                    {toolJob.progress}%
-                  </span>
-                </>
-              ) : toolJob.status === "done" ? (
-                <>
-                  <svg
-                    className="w-4 h-4 text-emerald-500 flex-shrink-0"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
+                    Tải SRT Việt
+                  </a>
+                ) : toolJob.type === "export" ? (
+                  <a
+                    href={`/api/download/exported/${videoId}`}
+                    download
+                    className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
                   >
-                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
-                    <polyline points="22 4 12 14.01 9 11.01" />
-                  </svg>
-                  <span className="text-[11px] font-medium text-emerald-700 flex-1">
-                    {toolJob.type === "translate"
-                      ? "Dịch hoàn tất"
-                      : toolJob.type === "tts"
-                        ? "Lồng tiếng hoàn tất"
-                        : "Xuất video hoàn tất"}
+                    Tải Video
+                  </a>
+                ) : (
+                  <span className="text-[10px] text-cyan-600/70">
+                    Click 🎙️ trên TTS track để nghe
                   </span>
-                  {toolJob.type === "translate" ? (
-                    <a
-                      href={getTranslatedDownloadUrl(videoId)}
-                      download
-                      className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
-                    >
-                      Tải SRT Việt
-                    </a>
-                  ) : toolJob.type === "export" ? (
-                    <a
-                      href={`/api/download/exported/${videoId}`}
-                      download
-                      className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
-                    >
-                      Tải Video
-                    </a>
-                  ) : (
-                    <span className="text-[10px] text-cyan-600/70">
-                      Click 🎙️ trên track audio để nghe
-                    </span>
-                  )}
-                </>
-              ) : (
-                <>
-                  <svg
-                    className="w-4 h-4 text-red-500 flex-shrink-0"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="15" y1="9" x2="9" y2="15" />
-                    <line x1="9" y1="9" x2="15" y2="15" />
-                  </svg>
-                  <span className="text-[11px] font-medium text-red-600/80 flex-1">
-                    {toolJob.error || "Thất bại"}
-                  </span>
-                </>
-              )}
-              <button
-                onClick={() => setToolJob(null)}
-                className="text-[10px] text-ink-light hover:text-ink transition-colors cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
+                )}
+              </>
+            ) : (
+              <>
+                <IconError className="w-4 h-4 text-red-500 flex-shrink-0" />
+                <span className="text-[11px] font-medium text-red-600/80 flex-1">
+                  {toolJob.error || "Thất bại"}
+                </span>
+              </>
+            )}
+            <button
+              onClick={() => setToolJob(null)}
+              className="w-5 h-5 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-colors cursor-pointer"
+            >
+              <IconClose className="w-2.5 h-2.5 text-ink-muted" />
+            </button>
           </div>
         )}
 
         {/* ================================================================ */}
-        {/*  Video Preview + Subtitle Overlay                                */}
+        {/*  Video Preview — Nested Double-Bezel + Aspect Ratio              */}
         {/* ================================================================ */}
-        <div className="relative bg-black mx-4 mt-4 rounded-2xl overflow-hidden aspect-video max-h-[360px]">
-          <video
-            ref={videoRef}
-            src={getVideoUrl(videoId)}
-            className="w-full h-full object-contain"
-            playsInline
-            preload="auto"
-          />
-          {allActive.map((entry, i) => {
-            const s = entry.style ?? DEFAULT_STYLE;
-            return (
-              <div
-                key={`${entry._trackId}-${i}`}
-                className="absolute inset-0 pointer-events-none"
-              >
-                <div
-                  className={`absolute text-center rounded-xl px-3.5 py-1.5 pointer-events-auto cursor-grab active:cursor-grabbing group/vidtext ${
-                    s.showBg ? "shadow-lg" : ""
-                  }`}
-                  style={{
-                    left: `${s.x}%`,
-                    top: `${s.y}%`,
-                    maxWidth: `${s.maxWidth}%`,
-                    transform: `translate(-50%, -50%) translateY(${i * 60}px)`,
-                    animation: "fade-in 0.25s ease forwards",
-                    backgroundColor: s.showBg
-                      ? hexToRgba(s.bgColor, s.bgOpacity)
-                      : "transparent",
-                    backdropFilter: s.showBg ? "blur(8px)" : "none",
-                  }}
-                  onPointerDown={(e) => {
-                    const el = e.currentTarget as HTMLElement;
-                    const relX = e.clientX - el.getBoundingClientRect().left;
-                    const isResize = relX > el.offsetWidth - 12 && s.showBg;
-                    if (isResize) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      const origW = s.maxWidth;
-                      const parent = el.parentElement;
-                      if (!parent) return;
-                      const rect = parent.getBoundingClientRect();
-                      el.setPointerCapture(e.pointerId);
-                      const onMove = (ev: PointerEvent) => {
-                        const dxPct =
-                          ((ev.clientX - e.clientX) / rect.width) * 100;
-                        const nw = Math.max(
-                          15,
-                          Math.min(95, origW + dxPct * 2),
-                        );
-                        setTracks((prev) =>
-                          prev.map((t) => {
-                            if (t.id !== entry._trackId) return t;
-                            const next = [...t.entries];
+        <div className="mx-5 mt-1">
+          <div className="p-1.5 rounded-[1.5rem] bg-black/[0.04] ring-1 ring-black/[0.05]">
+            <div
+              className="relative bg-black rounded-[calc(1.5rem-0.375rem)] overflow-hidden max-h-[400px] shadow-[inset_0_1px_1px_rgba(255,255,255,0.1)]"
+              style={{
+                aspectRatio: exportAspect || undefined,
+                maxWidth: exportAspect
+                  ? `${400 * (ASPECT_RATIOS.find((r) => r.value === exportAspect)?.ratio ?? 16 / 9)}px`
+                  : undefined,
+                margin: exportAspect ? "0 auto" : undefined,
+              }}
+            >
+              <video
+                ref={videoRef}
+                src={getVideoUrl(videoId)}
+                className={`w-full h-full ${exportAspect ? "object-cover" : "object-contain"}`}
+                playsInline
+                preload="auto"
+              />
+              {allActive.map((entry, i) => {
+                const s = entry.style ?? refStyleToPx(DEFAULT_STYLE, videoDims.w, videoDims.h);
+                return (
+                  <div
+                    key={`${entry._trackId}-${i}`}
+                    className="absolute inset-0 pointer-events-none"
+                  >
+                    <div
+                      className={`absolute text-center rounded-xl px-3.5 py-1.5 pointer-events-auto cursor-grab active:cursor-grabbing group/vidtext ${
+                        s.showBg ? "shadow-lg" : ""
+                      }`}
+                      style={{
+                        left: pxToPctX(s.x),
+                        top: pxToPctY(s.y),
+                        maxWidth: `${s.maxWidth}%`,
+                        transform: `translate(-50%, -50%) translateY(${i * 60}px)`,
+                        animation: "fade-in 0.25s ease forwards",
+                        backgroundColor: s.showBg
+                          ? hexToRgba(s.bgColor, s.bgOpacity)
+                          : "transparent",
+                        backdropFilter: s.showBg ? "blur(8px)" : "none",
+                      }}
+                      onPointerDown={(e) => {
+                        const el = e.currentTarget as HTMLElement;
+                        const relX =
+                          e.clientX - el.getBoundingClientRect().left;
+                        const isResize = relX > el.offsetWidth - 12 && s.showBg;
+                        if (isResize) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const origW = s.maxWidth;
+                          const parent = el.parentElement;
+                          if (!parent) return;
+                          const rect = parent.getBoundingClientRect();
+                          el.setPointerCapture(e.pointerId);
+                          const onMove = (ev: PointerEvent) => {
+                            const dxPct =
+                              ((ev.clientX - e.clientX) / rect.width) * 100;
+                            const nw = Math.max(
+                              15,
+                              Math.min(95, origW + dxPct * 2),
+                            );
+                            setTracks((prev) =>
+                              prev.map((t) => {
+                                if (t.id !== entry._trackId) return t;
+                                const next = [...t.entries];
+                                if (applyAll) {
+                                  for (let i = 0; i < next.length; i++) {
+                                    next[i] = {
+                                      ...next[i],
+                                      style: {
+                                        ...(next[i].style ?? DEFAULT_STYLE),
+                                        maxWidth: Math.round(nw),
+                                      },
+                                    };
+                                  }
+                                } else {
+                                  const idx = t.entries.findIndex(
+                                    (en) => en.index === entry.index,
+                                  );
+                                  if (idx < 0) return t;
+                                  next[idx] = {
+                                    ...next[idx],
+                                    style: {
+                                      ...(next[idx].style ?? DEFAULT_STYLE),
+                                      maxWidth: Math.round(nw),
+                                    },
+                                  };
+                                }
+                                return { ...t, entries: next };
+                              }),
+                            );
+                            setSaved(false);
+                          };
+                          const onUp = () => {
+                            window.removeEventListener("pointermove", onMove);
+                            window.removeEventListener("pointerup", onUp);
                             if (applyAll) {
-                              for (let i = 0; i < next.length; i++) {
-                                next[i] = {
-                                  ...next[i],
+                              const count =
+                                tracks.find((t) => t.id === entry._trackId)
+                                  ?.entries.length ?? 0;
+                              setToast(
+                                `Đã cập nhật vị trí cho ${count} phụ đề`,
+                              );
+                              setTimeout(() => setToast(null), 2500);
+                            }
+                          };
+                          window.addEventListener("pointermove", onMove);
+                          window.addEventListener("pointerup", onUp);
+                          return;
+                        }
+                        e.preventDefault();
+                        const parent = (e.currentTarget as HTMLElement)
+                          .parentElement;
+                        if (!parent) return;
+                        const rect = parent.getBoundingClientRect();
+                        const trackId = entry._trackId;
+                        const entIdx =
+                          tracks
+                            .find((t) => t.id === trackId)
+                            ?.entries.findIndex(
+                              (en) => en.index === entry.index,
+                            ) ?? -1;
+                        if (entIdx < 0) return;
+                        const origX = s.x;
+                        const origY = s.y;
+                        (e.currentTarget as HTMLElement).setPointerCapture(
+                          e.pointerId,
+                        );
+                        const onMove = (ev: PointerEvent) => {
+                          const dxPx =
+                            ((ev.clientX - e.clientX) / rect.width) * videoDims.w;
+                          const dyPx =
+                            ((ev.clientY - e.clientY) / rect.height) * videoDims.h;
+                          const nx = Math.round(
+                            Math.max(0, Math.min(videoDims.w, origX + dxPx)),
+                          );
+                          const ny = Math.round(
+                            Math.max(0, Math.min(videoDims.h, origY + dyPx)),
+                          );
+                          setTracks((prev) =>
+                            prev.map((t) => {
+                              if (t.id !== trackId) return t;
+                              const next = [...t.entries];
+                              if (applyAll) {
+                                for (let i = 0; i < next.length; i++) {
+                                  next[i] = {
+                                    ...next[i],
+                                    style: {
+                                      ...(next[i].style ?? DEFAULT_STYLE),
+                                      x: Math.round(nx),
+                                      y: Math.round(ny),
+                                    },
+                                  };
+                                }
+                              } else {
+                                next[entIdx] = {
+                                  ...next[entIdx],
                                   style: {
-                                    ...(next[i].style ?? DEFAULT_STYLE),
-                                    maxWidth: Math.round(nw),
+                                    ...(next[entIdx].style ?? DEFAULT_STYLE),
+                                    x: Math.round(nx),
+                                    y: Math.round(ny),
                                   },
                                 };
                               }
-                            } else {
-                              const idx = t.entries.findIndex(
-                                (en) => en.index === entry.index,
-                              );
-                              if (idx < 0) return t;
-                              next[idx] = {
-                                ...next[idx],
-                                style: {
-                                  ...(next[idx].style ?? DEFAULT_STYLE),
-                                  maxWidth: Math.round(nw),
-                                },
-                              };
-                            }
-                            return { ...t, entries: next };
-                          }),
-                        );
-                        setSaved(false);
-                      };
-                      const onUp = () => {
-                        window.removeEventListener("pointermove", onMove);
-                        window.removeEventListener("pointerup", onUp);
-                        if (applyAll) {
-                          const count =
-                            tracks.find((t) => t.id === trackId)?.entries
-                              .length ?? 0;
-                          setToast(`Đã cập nhật vị trí cho ${count} phụ đề`);
-                          setTimeout(() => setToast(null), 2500);
-                        }
-                      };
-                      window.addEventListener("pointermove", onMove);
-                      window.addEventListener("pointerup", onUp);
-                      return;
-                    }
-                    // position drag
-                    e.preventDefault();
-                    const parent = (e.currentTarget as HTMLElement)
-                      .parentElement;
-                    if (!parent) return;
-                    const rect = parent.getBoundingClientRect();
-                    const trackId = entry._trackId;
-                    const entIdx =
-                      tracks
-                        .find((t) => t.id === trackId)
-                        ?.entries.findIndex((en) => en.index === entry.index) ??
-                      -1;
-                    if (entIdx < 0) return;
-                    const origX = s.x;
-                    const origY = s.y;
-                    (e.currentTarget as HTMLElement).setPointerCapture(
-                      e.pointerId,
-                    );
-                    const onMove = (ev: PointerEvent) => {
-                      const dxPct =
-                        ((ev.clientX - e.clientX) / rect.width) * 100;
-                      const dyPct =
-                        ((ev.clientY - e.clientY) / rect.height) * 100;
-                      const nx = Math.max(5, Math.min(95, origX + dxPct));
-                      const ny = Math.max(5, Math.min(95, origY + dyPct));
-                      setTracks((prev) =>
-                        prev.map((t) => {
-                          if (t.id !== trackId) return t;
-                          const next = [...t.entries];
+                              return { ...t, entries: next };
+                            }),
+                          );
+                          setSaved(false);
+                        };
+                        const onUp = () => {
+                          window.removeEventListener("pointermove", onMove);
+                          window.removeEventListener("pointerup", onUp);
                           if (applyAll) {
-                            for (let i = 0; i < next.length; i++) {
-                              next[i] = {
-                                ...next[i],
-                                style: {
-                                  ...(next[i].style ?? DEFAULT_STYLE),
-                                  x: Math.round(nx),
-                                  y: Math.round(ny),
-                                },
-                              };
-                            }
-                          } else {
-                            next[entIdx] = {
-                              ...next[entIdx],
-                              style: {
-                                ...(next[entIdx].style ?? DEFAULT_STYLE),
-                                x: Math.round(nx),
-                                y: Math.round(ny),
-                              },
-                            };
+                            const count =
+                              tracks.find((t) => t.id === trackId)?.entries
+                                .length ?? 0;
+                            setToast(
+                              `Đã cập nhật vị trí cho ${count} phụ đề trong track`,
+                            );
+                            setTimeout(() => setToast(null), 2500);
                           }
-                          return { ...t, entries: next };
-                        }),
-                      );
-                      setSaved(false);
-                    };
-                    const onUp = () => {
-                      window.removeEventListener("pointermove", onMove);
-                      window.removeEventListener("pointerup", onUp);
-                      if (applyAll) {
-                        const count =
-                          tracks.find((t) => t.id === trackId)?.entries
-                            .length ?? 0;
-                        setToast(
-                          `Đã cập nhật vị trí cho ${count} phụ đề trong track`,
-                        );
-                        setTimeout(() => setToast(null), 2500);
-                      }
-                    };
-                    window.addEventListener("pointermove", onMove);
-                    window.addEventListener("pointerup", onUp);
-                  }}
-                >
-                  {/* drag handle */}
-                  <div
-                    className={`absolute -top-2 left-1/2 -translate-x-1/2 flex gap-[2px] ${s.showBg ? "opacity-40" : "opacity-70"}`}
-                  >
-                    <div
-                      className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`}
-                    />
-                    <div
-                      className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`}
-                    />
-                    <div
-                      className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`}
-                    />
-                  </div>
-                  {/* center indicator */}
-                  <div
-                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-red-500/80 opacity-60 pointer-events-none"
-                    title="Tâm (X,Y)"
-                  />
-                  {/* resize handle (right edge, only when bg visible) */}
-                  {s.showBg && (
-                    <div className="absolute right-0 top-0 bottom-0 w-[10px] cursor-ew-resize hover:bg-white/10 rounded-r-xl flex items-center justify-center opacity-0 group-hover/vidtext:opacity-100 transition-opacity">
-                      <div className="flex gap-[1.5px]">
-                        <div className="w-[1.5px] h-4 rounded-full bg-white/50" />
-                        <div className="w-[1.5px] h-4 rounded-full bg-white/50" />
+                        };
+                        window.addEventListener("pointermove", onMove);
+                        window.addEventListener("pointerup", onUp);
+                      }}
+                    >
+                      <div
+                        className={`absolute -top-2 left-1/2 -translate-x-1/2 flex gap-[2px] ${s.showBg ? "opacity-40" : "opacity-70"}`}
+                      >
+                        <div
+                          className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`}
+                        />
+                        <div
+                          className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`}
+                        />
+                        <div
+                          className={`w-1 h-1 rounded-full ${s.showBg ? "bg-white" : "bg-gray-400"}`}
+                        />
                       </div>
+
+                      {s.showBg && (
+                        <div className="absolute right-0 top-0 bottom-0 w-[10px] cursor-ew-resize hover:bg-white/10 rounded-r-xl flex items-center justify-center opacity-0 group-hover/vidtext:opacity-100 transition-opacity">
+                          <div className="flex gap-[1.5px]">
+                            <div className="w-[1.5px] h-4 rounded-full bg-white/50" />
+                            <div className="w-[1.5px] h-4 rounded-full bg-white/50" />
+                          </div>
+                        </div>
+                      )}
+                      <p
+                        style={{
+                          color: s.textColor,
+                          fontFamily: s.fontFamily,
+                          fontSize: `${s.fontSize}px`,
+                          fontWeight: s.bold ? 700 : 400,
+                          fontStyle: s.italic ? "italic" : "normal",
+                          textAlign: s.textAlign,
+                          lineHeight: 1.4,
+                          letterSpacing: "0.02em",
+                          textShadow: s.showBg
+                            ? "none"
+                            : "0 1px 4px rgba(0,0,0,0.5)",
+                        }}
+                      >
+                        {entry.text}
+                      </p>
                     </div>
-                  )}
-                  <p
-                    style={{
-                      color: s.textColor,
-                      fontFamily: s.fontFamily,
-                      fontSize: `${s.fontSize}px`,
-                      fontWeight: s.bold ? 700 : 400,
-                      fontStyle: s.italic ? "italic" : "normal",
-                      textAlign: s.textAlign,
-                      lineHeight: 1.4,
-                      letterSpacing: "0.02em",
-                      textShadow: s.showBg
-                        ? "none"
-                        : "0 1px 4px rgba(0,0,0,0.5)",
-                    }}
-                  >
-                    {entry.text}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-          {allActive.length === 0 && !playing && (
-            <button
-              onClick={togglePlay}
-              aria-label="Play"
-              className="absolute inset-0 m-auto w-14 h-14 rounded-full bg-black/50 hover:bg-black/70 backdrop-blur-sm border border-white/15 flex items-center justify-center transition-all duration-300 active:scale-95 cursor-pointer"
-            >
-              <svg
-                className="w-6 h-6 text-white ml-1"
-                viewBox="0 0 24 24"
-                fill="currentColor"
+                  </div>
+                );
+              })}
+              {allActive.length === 0 && !playing && (
+                <button
+                  onClick={togglePlay}
+                  aria-label="Play"
+                  className="absolute inset-0 m-auto w-14 h-14 rounded-full bg-black/50 hover:bg-black/70 backdrop-blur-sm border border-white/15 flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-95 cursor-pointer"
+                >
+                  <IconPlay className="w-6 h-6 text-white ml-1" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Aspect Ratio selector */}
+        <div className="mx-5 mt-2 flex items-center gap-2">
+          <span className="text-[9px] uppercase tracking-[0.15em] text-ink-light font-medium">
+            Tỷ lệ
+          </span>
+          <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.02] ring-1 ring-black/[0.04]">
+            {ASPECT_RATIOS.map((ar) => (
+              <button
+                key={ar.label}
+                onClick={() => {
+                  setExportAspect(ar.value);
+                  setSaved(false);
+                }}
+                className={`px-3 py-1 rounded-full text-[10px] font-medium tracking-tight transition-all duration-400 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.95] cursor-pointer whitespace-nowrap ${
+                  exportAspect === ar.value
+                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    : "text-ink-light hover:text-ink hover:bg-black/[0.03]"
+                }`}
               >
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </button>
-          )}
+                {ar.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ================================================================ */}
-        {/*  Playback Control Bar                                            */}
+        {/*  Playback Seek Bar — Glass Island                                */}
         {/* ================================================================ */}
-        <div className="mx-4 mt-2 glass-panel rounded-2xl px-3 py-2.5 flex items-center gap-3">
+        <div className="mx-5 mt-3 rounded-2xl bg-white/80 ring-1 ring-black/[0.05] shadow-[0_2px_12px_rgba(0,0,0,0.03)] px-4 py-3 flex items-center gap-3">
           <button
             onClick={togglePlay}
             aria-label={playing ? "Pause" : "Play"}
-            className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
+            className="group w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
           >
             {playing ? (
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="4" width="4" height="16" rx="1" />
-                <rect x="14" y="4" width="4" height="16" rx="1" />
-              </svg>
+              <IconPause className="w-3.5 h-3.5" />
             ) : (
-              <svg
-                className="w-4 h-4 ml-0.5"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path d="M8 5v14l11-7z" />
-              </svg>
+              <IconPlay className="w-3.5 h-3.5 ml-0.5" />
             )}
           </button>
           <div
-            className="flex-1 h-1.5 rounded-full bg-black/[0.08] overflow-hidden cursor-pointer group relative"
+            className="flex-1 h-1.5 rounded-full bg-black/[0.06] overflow-hidden cursor-pointer group relative"
             onClick={(e) => {
               const v = videoRef.current;
               const bar = e.currentTarget;
@@ -1872,66 +2126,68 @@ export default function TimelineEditor({
             }}
           >
             <div
-              className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-100"
+              className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-150"
               style={{
                 width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
               }}
             />
+            {/* subtle playhead indicator */}
+            <div
+              className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-white ring-2 ring-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.3)] pointer-events-none transition-all duration-150"
+              style={{
+                left: `calc(${duration > 0 ? (currentTime / duration) * 100 : 0}% - 7px)`,
+              }}
+            />
           </div>
           <span className="text-[11px] font-mono text-ink-light tabular-nums tracking-tight flex-shrink-0">
-            {Math.floor(currentTime / 60)}:
-            {String(Math.floor(currentTime % 60)).padStart(2, "0")} /{" "}
-            {Math.floor(duration / 60)}:
-            {String(Math.floor(duration % 60)).padStart(2, "0")}
+            {fmtTimeShort(currentTime)} / {fmtTimeShort(duration)}
           </span>
         </div>
 
         {/* ================================================================ */}
-        {/*  Style Panel                                                     */}
+        {/*  Style Panel — Collapsible Bento Card                            */}
         {/* ================================================================ */}
-        <div className="px-4 pt-3 border-b border-black/[0.06] bg-white/40">
-          <div className="flex items-center justify-between mb-2">
-            <button
-              onClick={() => setShowStylePanel(!showStylePanel)}
-              className="flex items-center gap-1.5 text-[11px] font-medium text-ink-muted hover:text-ink transition-colors cursor-pointer"
-            >
-              <svg
-                className={`w-3.5 h-3.5 transition-transform duration-300 ${showStylePanel ? "rotate-90" : ""}`}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-              >
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-              Định dạng phụ đề
-            </button>
+        <div className="mx-5 mt-3">
+          <button
+            onClick={() => setShowStylePanel(!showStylePanel)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/[0.02] ring-1 ring-black/[0.04] text-[11px] font-medium text-ink-muted hover:text-ink hover:bg-black/[0.04] transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer"
+          >
+            <IconChevronRight open={showStylePanel} className="w-3 h-3" />
+            Định dạng phụ đề
             {selectedIndex !== null && (
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={applyAll}
-                  onChange={(e) => setApplyAll(e.target.checked)}
-                  className="w-3.5 h-3.5 accent-blue-600 cursor-pointer"
-                />
-                <span className="text-[10px] font-medium text-ink-muted">
-                  Apply to all
-                </span>
-              </label>
+              <span className="ml-1 px-1.5 py-0.5 rounded-full bg-blue-500/10 text-[9px] text-blue-600">
+                #{selectedIndex + 1}
+              </span>
             )}
-          </div>
+          </button>
+          {selectedIndex !== null && showStylePanel && (
+            <label className="inline-flex items-center gap-1.5 ml-3 cursor-pointer select-none mt-1">
+              <input
+                type="checkbox"
+                checked={applyAll}
+                onChange={(e) => setApplyAll(e.target.checked)}
+                className="w-3 h-3 accent-blue-600 cursor-pointer"
+              />
+              <span className="text-[10px] text-ink-muted">
+                Áp dụng cho tất cả
+              </span>
+            </label>
+          )}
           {showStylePanel &&
             (() => {
               const s = getCurrentStyle();
               return (
                 <div
-                  className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pb-3"
-                  style={{ animation: "fade-in 0.2s ease forwards" }}
+                  className="mt-2 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 p-3 rounded-2xl bg-black/[0.015] ring-1 ring-black/[0.04]"
+                  style={{
+                    animation:
+                      "fade-up 0.35s ease-[cubic-bezier(0.32,0.72,0,1)] forwards",
+                  }}
                 >
+                  {/* Position X/Y */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Vị trí X/Y
+                    <span className="text-[9px] uppercase tracking-[0.15em] text-ink-light font-medium">
+                      Vị trí (px)
                     </span>
                     <div className="flex gap-1 items-center">
                       <span className="text-[8px] font-mono text-ink-light w-2.5">
@@ -1939,8 +2195,8 @@ export default function TimelineEditor({
                       </span>
                       <input
                         type="range"
-                        min={5}
-                        max={95}
+                        min={0}
+                        max={videoDims.w}
                         value={s.x}
                         onChange={(e) =>
                           updateStyle("x", parseInt(e.target.value))
@@ -1948,8 +2204,8 @@ export default function TimelineEditor({
                         disabled={selectedIndex === null}
                         className="flex-1 h-1 accent-blue-600 cursor-pointer disabled:opacity-40"
                       />
-                      <span className="text-[8px] font-mono text-ink-light tabular-nums w-6 text-right">
-                        {s.x}%
+                      <span className="text-[8px] font-mono text-ink-light tabular-nums w-8 text-right">
+                        {s.x}px
                       </span>
                     </div>
                     <div className="flex gap-1 items-center">
@@ -1958,8 +2214,8 @@ export default function TimelineEditor({
                       </span>
                       <input
                         type="range"
-                        min={5}
-                        max={95}
+                        min={0}
+                        max={videoDims.h}
                         value={s.y}
                         onChange={(e) =>
                           updateStyle("y", parseInt(e.target.value))
@@ -1967,15 +2223,15 @@ export default function TimelineEditor({
                         disabled={selectedIndex === null}
                         className="flex-1 h-1 accent-blue-600 cursor-pointer disabled:opacity-40"
                       />
-                      <span className="text-[8px] font-mono text-ink-light tabular-nums w-6 text-right">
-                        {s.y}%
+                      <span className="text-[8px] font-mono text-ink-light tabular-nums w-8 text-right">
+                        {s.y}px
                       </span>
                     </div>
                     <div className="flex gap-0.5 mt-0.5">
                       {[
-                        { label: "Dưới", x: 50, y: 90 },
-                        { label: "Giữa", x: 50, y: 50 },
-                        { label: "Trên", x: 50, y: 10 },
+                        { label: "Dưới", x: Math.round(videoDims.w / 2), y: Math.round(videoDims.h * 0.93) },
+                        { label: "Giữa", x: Math.round(videoDims.w / 2), y: Math.round(videoDims.h / 2) },
+                        { label: "Trên", x: Math.round(videoDims.w / 2), y: Math.round(videoDims.h * 0.1) },
                       ].map((p) => (
                         <button
                           key={p.label}
@@ -1984,15 +2240,16 @@ export default function TimelineEditor({
                             updateStyle("y", p.y);
                           }}
                           disabled={selectedIndex === null}
-                          className="flex-1 py-0.5 text-[9px] font-medium rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-black/[0.03] text-ink-light hover:bg-black/[0.06] hover:text-ink"
+                          className="flex-1 py-0.5 text-[9px] font-medium rounded-md transition-all duration-300 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-black/[0.02] text-ink-light hover:bg-black/[0.05] hover:text-ink"
                         >
                           {p.label}
                         </button>
                       ))}
                     </div>
                   </div>
+                  {/* Font */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
+                    <span className="text-[9px] uppercase tracking-[0.15em] text-ink-light font-medium">
                       Font
                     </span>
                     <select
@@ -2001,7 +2258,7 @@ export default function TimelineEditor({
                         updateStyle("fontFamily", e.target.value)
                       }
                       disabled={selectedIndex === null}
-                      className="w-full rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[10px] font-medium text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/30 disabled:opacity-40 cursor-pointer"
+                      className="w-full rounded-lg border border-black/[0.06] bg-white px-2 py-1 text-[10px] font-medium text-ink focus:outline-none focus:ring-1 focus:ring-blue-500/30 disabled:opacity-40 cursor-pointer"
                     >
                       {FONT_OPTIONS.map((f) => (
                         <option key={f} value={f}>
@@ -2010,8 +2267,9 @@ export default function TimelineEditor({
                       ))}
                     </select>
                   </div>
+                  {/* Font Size */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
+                    <span className="text-[9px] uppercase tracking-[0.15em] text-ink-light font-medium">
                       Cỡ chữ
                     </span>
                     <select
@@ -2020,7 +2278,7 @@ export default function TimelineEditor({
                         updateStyle("fontSize", parseInt(e.target.value))
                       }
                       disabled={selectedIndex === null}
-                      className="w-full rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[10px] font-medium text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/30 disabled:opacity-40 cursor-pointer"
+                      className="w-full rounded-lg border border-black/[0.06] bg-white px-2 py-1 text-[10px] font-medium text-ink focus:outline-none focus:ring-1 focus:ring-blue-500/30 disabled:opacity-40 cursor-pointer"
                     >
                       {[12, 14, 16, 18, 20, 24, 28, 32, 40].map((n) => (
                         <option key={n} value={n}>
@@ -2029,11 +2287,12 @@ export default function TimelineEditor({
                       ))}
                     </select>
                   </div>
+                  {/* Color & Bg */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Chữ
+                    <span className="text-[9px] uppercase tracking-[0.15em] text-ink-light font-medium">
+                      Chữ / Nền
                     </span>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1">
                       <input
                         type="color"
                         value={s.textColor}
@@ -2041,24 +2300,14 @@ export default function TimelineEditor({
                           updateStyle("textColor", e.target.value)
                         }
                         disabled={selectedIndex === null}
-                        className="w-6 h-6 rounded-md border-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed p-0"
+                        className="w-5 h-5 rounded border-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed p-0"
                       />
-                      <span className="text-[9px] font-mono text-ink-light tabular-nums">
-                        {s.textColor}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Nền
-                    </span>
-                    <div className="flex items-center gap-1.5">
                       <input
                         type="color"
                         value={s.bgColor}
                         onChange={(e) => updateStyle("bgColor", e.target.value)}
                         disabled={selectedIndex === null}
-                        className="w-6 h-6 rounded-md border-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed p-0"
+                        className="w-5 h-5 rounded border-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed p-0"
                       />
                       <input
                         type="range"
@@ -2074,83 +2323,65 @@ export default function TimelineEditor({
                         disabled={selectedIndex === null}
                         className="w-10 h-1 accent-blue-600 cursor-pointer disabled:opacity-40"
                       />
-                      <span className="text-[9px] font-mono text-ink-light tabular-nums">
+                      <span className="text-[8px] font-mono text-ink-light tabular-nums">
                         {Math.round(s.bgOpacity * 100)}%
                       </span>
                     </div>
                   </div>
+                  {/* Align + Style */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Align
+                    <span className="text-[9px] uppercase tracking-[0.15em] text-ink-light font-medium">
+                      Align / Kiểu / Rộng
                     </span>
-                    <div className="flex gap-0.5 rounded-lg bg-black/[0.04] p-0.5">
-                      {(["left", "center", "right"] as const).map((a) => (
-                        <button
-                          key={a}
-                          onClick={() => updateStyle("textAlign", a)}
-                          disabled={selectedIndex === null}
-                          className={`flex-1 py-1 text-[10px] font-medium rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                            s.textAlign === a
-                              ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
-                              : "text-ink-light hover:text-ink"
-                          }`}
-                        >
-                          {a === "left"
-                            ? "Trái"
-                            : a === "center"
-                              ? "Giữa"
-                              : "Phải"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Kiểu
-                    </span>
-                    <div className="flex gap-1">
+                    <div className="flex items-center gap-1">
+                      <div className="flex gap-0.5 rounded-lg bg-black/[0.03] p-0.5">
+                        {(["left", "center", "right"] as const).map((a) => (
+                          <button
+                            key={a}
+                            onClick={() => updateStyle("textAlign", a)}
+                            disabled={selectedIndex === null}
+                            className={`px-1.5 py-0.5 text-[9px] font-medium rounded transition-all duration-300 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${s.textAlign === a ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]" : "text-ink-light hover:text-ink"}`}
+                          >
+                            {a === "left"
+                              ? "Trái"
+                              : a === "center"
+                                ? "Giữa"
+                                : "Phải"}
+                          </button>
+                        ))}
+                      </div>
                       <button
                         onClick={() => updateStyle("bold", !s.bold)}
                         disabled={selectedIndex === null}
-                        className={`flex-1 py-1 text-[10px] font-bold rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${s.bold ? "bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/25" : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06]"}`}
+                        className={`px-1.5 py-0.5 text-[10px] font-bold rounded transition-all duration-300 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${s.bold ? "bg-blue-500/10 text-blue-700 ring-1 ring-blue-500/25" : "bg-black/[0.03] text-ink-light hover:bg-black/[0.05]"}`}
                       >
                         B
                       </button>
                       <button
                         onClick={() => updateStyle("italic", !s.italic)}
                         disabled={selectedIndex === null}
-                        className={`flex-1 py-1 text-[10px] italic rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${s.italic ? "bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/25" : "bg-black/[0.03] text-ink-light hover:bg-black/[0.06]"}`}
+                        className={`px-1.5 py-0.5 text-[10px] italic rounded transition-all duration-300 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${s.italic ? "bg-blue-500/10 text-blue-700 ring-1 ring-blue-500/25" : "bg-black/[0.03] text-ink-light hover:bg-black/[0.05]"}`}
                       >
                         I
                       </button>
+                      <div className="flex gap-1 items-center ml-0.5">
+                        <input
+                          type="range"
+                          min={15}
+                          max={95}
+                          value={s.maxWidth}
+                          onChange={(e) =>
+                            updateStyle("maxWidth", parseInt(e.target.value))
+                          }
+                          disabled={selectedIndex === null}
+                          className="w-10 h-1 accent-blue-600 cursor-pointer disabled:opacity-40"
+                        />
+                        <span className="text-[8px] font-mono text-ink-light tabular-nums w-5">
+                          {s.maxWidth}%
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Rộng
-                    </span>
-                    <div className="flex gap-1 items-center">
-                      <input
-                        type="range"
-                        min={15}
-                        max={95}
-                        value={s.maxWidth}
-                        onChange={(e) =>
-                          updateStyle("maxWidth", parseInt(e.target.value))
-                        }
-                        disabled={selectedIndex === null}
-                        className="flex-1 h-1 accent-blue-600 cursor-pointer disabled:opacity-40"
-                      />
-                      <span className="text-[8px] font-mono text-ink-light tabular-nums w-6 text-right">
-                        {s.maxWidth}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[9px] uppercase tracking-wider text-ink-light font-medium">
-                      Nền
-                    </span>
-                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <label className="flex items-center gap-1 cursor-pointer select-none mt-0.5">
                       <input
                         type="checkbox"
                         checked={s.showBg}
@@ -2158,9 +2389,9 @@ export default function TimelineEditor({
                           updateStyle("showBg", e.target.checked)
                         }
                         disabled={selectedIndex === null}
-                        className="w-3.5 h-3.5 accent-blue-600 cursor-pointer disabled:opacity-40"
+                        className="w-3 h-3 accent-blue-600 cursor-pointer disabled:opacity-40"
                       />
-                      <span className="text-[10px] font-medium text-ink-muted">
+                      <span className="text-[9px] text-ink-muted">
                         Hiện khung nền
                       </span>
                     </label>
@@ -2171,23 +2402,24 @@ export default function TimelineEditor({
         </div>
 
         {/* ================================================================ */}
-        {/*  Track labels + Timeline area                                    */}
+        {/*  Timeline — Track Sidebar + Tracks Area                          */}
         {/* ================================================================ */}
-        <div className="flex flex-1 min-h-0">
-          <div className="w-[72px] flex-shrink-0 border-r border-black/[0.06] bg-white/40 flex flex-col">
-            <div className="h-7 border-b border-black/[0.04]" />
-            <div className="h-16 flex items-center px-2 border-b border-black/[0.04]">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-600/70">
+        <div className="flex flex-1 min-h-0 mx-5 mt-3 mb-5 rounded-2xl overflow-hidden ring-1 ring-black/[0.05] bg-gradient-to-b from-white/90 to-white/50">
+          {/* --- Track Labels Sidebar --- */}
+          <div className="w-[80px] flex-shrink-0 border-r border-black/[0.06] bg-gradient-to-b from-white/80 to-white/30 flex flex-col select-none">
+            <div className="h-7 border-b border-black/[0.03] bg-white/50" />
+            <div className="h-14 flex items-center px-3 border-b border-black/[0.03] bg-blue-500/[0.02]">
+              <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-blue-500/50">
                 Video
               </span>
             </div>
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className={`h-16 flex items-center px-2 border-b border-black/[0.04] cursor-pointer group relative ${
+                className={`h-14 flex items-center px-3 border-b border-black/[0.03] cursor-pointer group relative transition-all duration-300 ${
                   selectedTrack === track.id
-                    ? "bg-amber-500/[0.08] ring-1 ring-amber-500/20 ring-inset"
-                    : ""
+                    ? "bg-amber-500/[0.12] ring-1 ring-amber-400/30 ring-inset shadow-[inset_2px_0_0_rgba(245,158,11,0.5)]"
+                    : "hover:bg-black/[0.015]"
                 }`}
                 onClick={() => setSelectedTrack(track.id)}
               >
@@ -2200,30 +2432,15 @@ export default function TimelineEditor({
                       e.stopPropagation();
                       deleteTrack(track.id);
                     }}
-                    className="absolute right-1 w-4 h-4 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    className="absolute right-1 w-4 h-4 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 cursor-pointer"
                   >
-                    <svg
-                      className="w-2.5 h-2.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                      strokeLinecap="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
+                    <IconClose className="w-2.5 h-2.5" />
                   </button>
                 )}
               </div>
             ))}
-            <div className="flex-1 flex items-center px-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-600/70">
-                Audio
-              </span>
-            </div>
             {ttsClips.length > 0 && (
-              <div className="h-16 flex items-center px-2 border-t border-black/[0.04]">
+              <div className="h-14 flex items-center px-2 border-t border-black/[0.03]">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-600/70">
                   TTS Voice
                 </span>
@@ -2231,6 +2448,7 @@ export default function TimelineEditor({
             )}
           </div>
 
+          {/* --- Timeline Canvas --- */}
           <div
             ref={scrollRef}
             className="flex-1 overflow-x-auto overflow-y-hidden"
@@ -2241,7 +2459,7 @@ export default function TimelineEditor({
               style={{ width: totalWidth, minHeight: "100%" }}
             >
               {/* ---- Timecode Ruler ---- */}
-              <div className="h-7 border-b border-black/[0.04] bg-white/70 relative">
+              <div className="h-7 border-b border-black/[0.03] bg-white/60 relative">
                 {Array.from({ length: Math.ceil(duration / 5) + 1 }, (_, i) => {
                   const t = i * 5;
                   const x = t * pixelsPerSec;
@@ -2252,8 +2470,8 @@ export default function TimelineEditor({
                       className="absolute top-0 h-full"
                       style={{ left: x }}
                     >
-                      <div className="absolute top-0 left-0 w-px h-2.5 bg-black/[0.12]" />
-                      <span className="absolute top-2 left-1 text-[9px] font-mono tabular-nums text-ink-light select-none whitespace-nowrap">
+                      <div className="absolute top-0 left-0 w-px h-2.5 bg-black/[0.10]" />
+                      <span className="absolute top-2 left-1.5 text-[9px] font-mono tabular-nums text-ink-light select-none whitespace-nowrap">
                         {fmtTimeShort(t)}
                       </span>
                     </div>
@@ -2267,7 +2485,7 @@ export default function TimelineEditor({
                     return (
                       <div
                         key={`s-${i}`}
-                        className="absolute top-0 w-px h-1.5 bg-black/[0.06]"
+                        className="absolute top-0 w-px h-1.5 bg-black/[0.05]"
                         style={{ left: x }}
                       />
                     );
@@ -2276,7 +2494,7 @@ export default function TimelineEditor({
 
               {/* ---- Video Track ---- */}
               <div
-                className="h-16 border-b border-black/[0.04] relative cursor-pointer"
+                className="h-14 border-b border-black/[0.04] relative cursor-pointer bg-blue-500/[0.02]"
                 onClick={seekTimeline}
               >
                 {Array.from({ length: Math.ceil(duration / 10) }, (_, i) => {
@@ -2286,19 +2504,19 @@ export default function TimelineEditor({
                   return (
                     <div
                       key={i}
-                      className="absolute top-1.5 bottom-1.5 rounded-md flex items-center justify-center"
+                      className="absolute top-1 bottom-1 rounded-lg flex items-center justify-center"
                       style={{
                         left: segStart * pixelsPerSec,
                         width: segWidth,
                         background:
                           i % 2 === 0
-                            ? "linear-gradient(180deg, rgba(59,130,246,0.08) 0%, rgba(59,130,246,0.04) 100%)"
-                            : "linear-gradient(180deg, rgba(59,130,246,0.12) 0%, rgba(59,130,246,0.06) 100%)",
-                        border: "1px solid rgba(59,130,246,0.2)",
+                            ? "linear-gradient(180deg, rgba(59,130,246,0.06) 0%, rgba(59,130,246,0.02) 100%)"
+                            : "linear-gradient(180deg, rgba(59,130,246,0.10) 0%, rgba(59,130,246,0.04) 100%)",
+                        border: "1px solid rgba(59,130,246,0.15)",
                       }}
                     >
                       {segWidth > 40 && (
-                        <span className="text-[9px] font-mono text-blue-400/50 tabular-nums select-none">
+                        <span className="text-[9px] font-mono text-blue-400/40 tabular-nums select-none">
                           {fmtTimeShort(segStart)}
                         </span>
                       )}
@@ -2312,7 +2530,7 @@ export default function TimelineEditor({
                 <div
                   key={track.id}
                   data-track-id={track.id}
-                  className={`h-16 border-b border-black/[0.04] relative cursor-pointer transition-colors duration-200 ${
+                  className={`h-14 border-b border-black/[0.04] relative cursor-pointer transition-all duration-300 ${
                     dragOverTrackId === track.id
                       ? "bg-amber-500/15 ring-2 ring-amber-500/40 ring-inset"
                       : "bg-amber-500/[0.02]"
@@ -2334,10 +2552,10 @@ export default function TimelineEditor({
                       <div
                         key={i}
                         data-index={i}
-                        className={`absolute top-1.5 bottom-1.5 rounded-lg flex items-center overflow-hidden select-none transition-shadow duration-150 group ${
+                        className={`absolute top-1 bottom-1 rounded-lg flex items-center overflow-hidden select-none transition-all duration-200 group ${
                           isSelected || isDragging
-                            ? "bg-amber-500/30 ring-2 ring-amber-500/50 shadow-md z-10"
-                            : "bg-amber-500/20 ring-1 ring-amber-500/15 hover:bg-amber-500/25 cursor-grab"
+                            ? "bg-amber-500/35 ring-2 ring-amber-500/50 shadow-[0_2px_8px_rgba(245,158,11,0.15)] z-10"
+                            : "bg-amber-500/20 ring-1 ring-amber-500/15 hover:bg-amber-500/28 cursor-grab"
                         }`}
                         style={{ left, width }}
                         onPointerDown={(e) => {
@@ -2378,8 +2596,9 @@ export default function TimelineEditor({
                           });
                         }}
                       >
+                        {/* Resize handle left */}
                         <div
-                          className="absolute left-0 top-0 bottom-0 w-[10px] cursor-ew-resize flex items-center justify-center bg-amber-500/10 hover:bg-amber-500/30 rounded-l-lg transition-colors"
+                          className="absolute left-0 top-0 bottom-0 w-[10px] cursor-ew-resize flex items-center justify-center bg-amber-500/8 hover:bg-amber-500/30 rounded-l-lg transition-colors duration-200 z-10"
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             (e.target as HTMLElement).setPointerCapture(
@@ -2395,12 +2614,13 @@ export default function TimelineEditor({
                           }}
                         >
                           <div className="flex gap-[1.5px]">
-                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/50 group-hover:bg-amber-500/70" />
-                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/50 group-hover:bg-amber-500/70" />
+                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/40 group-hover:bg-amber-500/60 transition-colors" />
+                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/40 group-hover:bg-amber-500/60 transition-colors" />
                           </div>
                         </div>
+                        {/* Resize handle right */}
                         <div
-                          className="absolute right-0 top-0 bottom-0 w-[10px] cursor-ew-resize flex items-center justify-center bg-amber-500/10 hover:bg-amber-500/30 rounded-r-lg transition-colors"
+                          className="absolute right-0 top-0 bottom-0 w-[10px] cursor-ew-resize flex items-center justify-center bg-amber-500/8 hover:bg-amber-500/30 rounded-r-lg transition-colors duration-200 z-10"
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             (e.target as HTMLElement).setPointerCapture(
@@ -2416,12 +2636,12 @@ export default function TimelineEditor({
                           }}
                         >
                           <div className="flex gap-[1.5px]">
-                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/50 group-hover:bg-amber-500/70" />
-                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/50 group-hover:bg-amber-500/70" />
+                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/40 group-hover:bg-amber-500/60 transition-colors" />
+                            <div className="w-[1.5px] h-4 rounded-full bg-amber-500/40 group-hover:bg-amber-500/60 transition-colors" />
                           </div>
                         </div>
                         {showDetail && (
-                          <div className="absolute -top-4 left-0 right-0 flex items-center justify-between px-2">
+                          <div className="absolute -top-3.5 left-0 right-0 flex items-center justify-between px-2">
                             <span className="text-[8px] font-mono tabular-nums text-amber-700/80 bg-amber-100/90 rounded px-1 leading-tight">
                               {secToSrt(entry.start)}
                             </span>
@@ -2439,48 +2659,13 @@ export default function TimelineEditor({
                 </div>
               ))}
 
-              {/* ---- Audio Track ---- */}
-              <div
-                className="h-16 relative bg-emerald-500/[0.02] cursor-pointer flex items-end"
-                onClick={seekTimeline}
-              >
-                <div className="absolute inset-x-0 bottom-1 top-1 flex items-end">
-                  {Array.from({ length: Math.ceil(duration * 2) }, (_, i) => {
-                    const t = i / 2;
-                    const x = t * pixelsPerSec;
-                    if (x > totalWidth + 2) return null;
-                    const nearSub = allEntries.some(
-                      (e) => t >= e.start && t <= e.end,
-                    );
-                    const h = nearSub
-                      ? 0.6 + 0.3 * (Math.sin(i * 0.7) * 0.5 + 0.5)
-                      : 0.2 + 0.25 * (Math.sin(i * 0.3) * 0.5 + 0.5);
-                    const barW = Math.max(1, pixelsPerSec / 2 - 0.5);
-                    return (
-                      <div
-                        key={i}
-                        className="absolute rounded-t-[1px]"
-                        style={{
-                          left: x,
-                          width: barW,
-                          height: `${Math.max(2, h * 54)}px`,
-                          background: nearSub
-                            ? "rgba(16,185,129,0.3)"
-                            : "rgba(16,185,129,0.15)",
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* ---- TTS Voice Track (only when clips loaded) ---- */}
+              {/* ---- TTS Voice Track ---- */}
               {ttsClips.length > 0 && (
                 <div
-                  className="h-16 relative bg-cyan-500/[0.03] cursor-pointer"
+                  className="h-14 relative bg-cyan-500/[0.015] cursor-pointer"
                   onClick={seekTimeline}
                 >
-                  <div className="absolute inset-x-0 bottom-2 top-2 flex items-center opacity-30 pointer-events-none">
+                  <div className="absolute inset-x-0 bottom-2 top-2 flex items-center opacity-25 pointer-events-none">
                     {Array.from({ length: Math.ceil(duration * 2) }, (_, i) => {
                       const x = (i / 2) * pixelsPerSec;
                       if (x > totalWidth + 2) return null;
@@ -2493,7 +2678,7 @@ export default function TimelineEditor({
                             left: x,
                             width: barW,
                             height: `${Math.max(2, 20)}px`,
-                            background: "rgba(6,182,212,0.2)",
+                            background: "rgba(6,182,212,0.18)",
                           }}
                         />
                       );
@@ -2509,17 +2694,15 @@ export default function TimelineEditor({
                     return (
                       <div
                         key={i}
-                        className={`absolute top-1 bottom-1 rounded-md flex items-center justify-center z-10 transition-all duration-150 ${
+                        className={`absolute top-1 bottom-1 rounded-lg flex items-center justify-center z-10 transition-all duration-300 ${
                           isActive
-                            ? "bg-cyan-500/60 ring-2 ring-cyan-500/60 shadow-md"
+                            ? "bg-cyan-500/60 ring-2 ring-cyan-500/60 shadow-[0_2px_8px_rgba(6,182,212,0.2)]"
                             : "bg-cyan-500/20 ring-1 ring-cyan-500/30 hover:bg-cyan-500/40 cursor-pointer"
                         }`}
                         style={{ left, width }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          ttsAudioRefs.current.forEach((a) => {
-                            a.pause();
-                          });
+                          ttsAudioRefs.current.forEach((a) => a.pause());
                           ttsAudioRefs.current.clear();
                           setTtsActiveIndex(null);
                           const v = videoRef.current;
@@ -2558,10 +2741,10 @@ export default function TimelineEditor({
                       const popLeft = clip.start * pixelsPerSec;
                       return (
                         <div
-                          className="absolute -top-16 z-50 bg-white rounded-xl shadow-xl ring-1 ring-black/[0.1] px-3 py-2 flex items-center gap-2 whitespace-nowrap"
+                          className="absolute -top-16 bg-white rounded-xl shadow-2xl ring-1 ring-black/[0.08] px-3 py-2 flex items-center gap-2 whitespace-nowrap"
                           style={{
                             left: Math.max(0, popLeft - 60),
-                            zIndex: 60,
+                            zIndex: 30,
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -2587,7 +2770,7 @@ export default function TimelineEditor({
                                 }),
                               );
                             }}
-                            className="w-14 rounded border border-black/[0.1] bg-white px-1.5 py-0.5 text-[10px] text-center focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                            className="w-14 rounded-lg border border-black/[0.08] bg-white px-1.5 py-0.5 text-[10px] text-center focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
                           />
                           <label className="flex items-center gap-1 cursor-pointer select-none">
                             <input
@@ -2629,12 +2812,12 @@ export default function TimelineEditor({
 
               {/* ---- Playhead ---- */}
               <div
-                className="absolute top-0 bottom-0 z-30 pointer-events-none"
+                className="absolute top-0 bottom-0 z-20 pointer-events-none"
                 style={{ left: currentTime * pixelsPerSec }}
               >
-                <div className="absolute top-0 bottom-0 w-px bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.4)]" />
+                <div className="absolute top-0 bottom-0 w-px bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.35)]" />
                 <div
-                  className="absolute -top-0.5 -translate-x-1/2 w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-md cursor-ew-resize pointer-events-auto"
+                  className="absolute -top-0.5 -translate-x-1/2 w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-[0_0_10px_rgba(239,68,68,0.25)] cursor-ew-resize pointer-events-auto transition-transform duration-150 hover:scale-125 active:scale-110"
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     const el = scrollRef.current;
@@ -2666,122 +2849,51 @@ export default function TimelineEditor({
         </div>
 
         {/* ================================================================ */}
-        {/*  Delete track confirmation                                        */}
+        {/*  Delete Track Confirmation                                       */}
         {/* ================================================================ */}
         {confirmDeleteTrack && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/[0.15] backdrop-blur-sm">
             <div
-              className="glass-panel rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl text-center"
-              style={{ animation: "scale-in 0.2s ease forwards" }}
+              className="double-bezel !rounded-2xl w-full max-w-sm mx-4"
+              style={{
+                animation:
+                  "scale-in 0.3s ease-[cubic-bezier(0.32,0.72,0,1)] forwards",
+              }}
             >
-              <svg
-                className="w-8 h-8 text-red-500 mx-auto mb-3"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-              <p className="text-sm font-semibold text-ink mb-1">
-                Xoá track này?
-              </p>
-              <p className="text-[12px] text-ink-muted mb-5">
-                Track này có{" "}
-                {tracks.find((t) => t.id === confirmDeleteTrack)?.entries
-                  .length ?? 0}{" "}
-                phụ đề. Sau khi xoá sẽ không khôi phục được.
-              </p>
-              <div className="flex items-center justify-center gap-3">
-                <button
-                  onClick={() => setConfirmDeleteTrack(null)}
-                  className="px-5 py-2 rounded-full text-[12px] font-medium text-ink-muted bg-black/[0.03] hover:bg-black/[0.06] transition-colors cursor-pointer"
+              <div className="double-bezel-inner !rounded-[calc(1rem-1px)] p-6 text-center">
+                <svg
+                  className="w-8 h-8 text-red-500 mx-auto mb-3"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
                 >
-                  Huỷ
-                </button>
-                <button
-                  onClick={() => doDeleteTrack(confirmDeleteTrack)}
-                  className="px-5 py-2 rounded-full text-[12px] font-medium text-white bg-red-600 hover:bg-red-500 transition-colors cursor-pointer"
-                >
-                  Xoá
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================ */}
-        {/*  Text edit popup                                                 */}
-        {/* ================================================================ */}
-        {editing && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
-            <div
-              className="glass-panel rounded-2xl p-5 w-full max-w-lg mx-4 shadow-2xl"
-              style={{ animation: "scale-in 0.2s ease forwards" }}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">
-                  Sửa phụ đề #{editing.index + 1}
-                </span>
-                <button
-                  onClick={() => setEditing(null)}
-                  className="w-6 h-6 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-colors cursor-pointer"
-                >
-                  <svg
-                    className="w-3.5 h-3.5 text-ink-muted"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
-              <textarea
-                autoFocus
-                className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/30 transition-all"
-                rows={3}
-                defaultValue={editing.text}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
-                    commitEdit((e.target as HTMLTextAreaElement).value);
-                  if (e.key === "Escape") setEditing(null);
-                }}
-                ref={(el) => el?.focus()}
-              />
-              <div className="flex items-center justify-between mt-3">
-                <button
-                  onClick={() => {
-                    deleteEntry(editing.trackId, editing.index);
-                    setEditing(null);
-                  }}
-                  className="px-3 py-1.5 rounded-full text-[11px] font-medium text-red-600 ring-1 ring-red-500/20 hover:bg-red-500/10 transition-colors cursor-pointer"
-                >
-                  Xoá
-                </button>
-                <div className="flex items-center gap-2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <p className="text-sm font-semibold text-ink mb-1">
+                  Xoá track này?
+                </p>
+                <p className="text-[12px] text-ink-muted mb-5">
+                  Track này có{" "}
+                  {tracks.find((t) => t.id === confirmDeleteTrack)?.entries
+                    .length ?? 0}{" "}
+                  phụ đề. Sau khi xoá sẽ không khôi phục được.
+                </p>
+                <div className="flex items-center justify-center gap-3">
                   <button
-                    onClick={() => setEditing(null)}
-                    className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-colors cursor-pointer"
+                    onClick={() => setConfirmDeleteTrack(null)}
+                    className="px-5 py-2 rounded-full text-[12px] font-medium text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06] hover:bg-black/[0.06] transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97]"
                   >
                     Huỷ
                   </button>
                   <button
-                    onClick={() => {
-                      const ta = document.querySelector(
-                        "textarea",
-                      ) as HTMLTextAreaElement;
-                      if (ta) commitEdit(ta.value);
-                    }}
-                    className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
+                    onClick={() => doDeleteTrack(confirmDeleteTrack)}
+                    className="px-5 py-2 rounded-full text-[12px] font-medium text-white bg-red-600 hover:bg-red-500 transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97]"
                   >
-                    Lưu <span className="opacity-60 ml-0.5">⌘↵</span>
+                    Xoá
                   </button>
                 </div>
               </div>
@@ -2789,122 +2901,197 @@ export default function TimelineEditor({
           </div>
         )}
 
-        {/* toast notification */}
-        {toast && (
-          <div
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-ink/90 text-white text-xs font-medium shadow-lg"
-            style={{ animation: "fade-in 0.2s ease forwards" }}
-          >
-            {toast}
+        {/* ================================================================ */}
+        {/*  Text Edit Modal                                                 */}
+        {/* ================================================================ */}
+        {editing && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/[0.15] backdrop-blur-sm">
+            <div
+              className="double-bezel !rounded-2xl w-full max-w-lg mx-4"
+              style={{
+                animation:
+                  "scale-in 0.3s ease-[cubic-bezier(0.32,0.72,0,1)] forwards",
+              }}
+            >
+              <div className="double-bezel-inner !rounded-[calc(1rem-1px)] p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">
+                    Sửa phụ đề #{editing.index + 1}
+                  </span>
+                  <button
+                    onClick={() => setEditing(null)}
+                    className="w-6 h-6 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-all duration-300 cursor-pointer"
+                  >
+                    <IconClose className="w-3.5 h-3.5 text-ink-muted" />
+                  </button>
+                </div>
+                <textarea
+                  autoFocus
+                  className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2.5 text-[13px] text-ink resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 transition-all duration-300"
+                  rows={3}
+                  defaultValue={editing.text}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+                      commitEdit((e.target as HTMLTextAreaElement).value);
+                    if (e.key === "Escape") setEditing(null);
+                  }}
+                  ref={(el) => el?.focus()}
+                />
+                <div className="flex items-center justify-between mt-3">
+                  <button
+                    onClick={() => {
+                      deleteEntry(editing.trackId, editing.index);
+                      setEditing(null);
+                    }}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-medium text-red-600 ring-1 ring-red-500/20 hover:bg-red-500/10 transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                  >
+                    Xoá
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setEditing(null)}
+                      className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                    >
+                      Huỷ
+                    </button>
+                    <button
+                      onClick={() => {
+                        const ta = document.querySelector(
+                          "textarea",
+                        ) as HTMLTextAreaElement;
+                        if (ta) commitEdit(ta.value);
+                      }}
+                      className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                    >
+                      Lưu <span className="opacity-60 ml-0.5">⌘↵</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* settings modal */}
+        {/* ================================================================ */}
+        {/*  Settings Modal                                                  */}
+        {/* ================================================================ */}
         {showSettings && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/[0.15] backdrop-blur-sm">
             <div
-              className="glass-panel rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl"
-              style={{ animation: "scale-in 0.2s ease forwards" }}
+              className="double-bezel !rounded-2xl w-full max-w-md mx-4"
+              style={{
+                animation:
+                  "scale-in 0.3s ease-[cubic-bezier(0.32,0.72,0,1)] forwards",
+              }}
             >
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-sm font-semibold text-ink">
-                  ⚙️ Cấu hình API
-                </span>
-                <button
-                  onClick={() => {
-                    setShowSettings(false);
-                    setSettingsStatus("");
-                  }}
-                  className="w-6 h-6 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-colors cursor-pointer"
-                >
-                  <svg
-                    className="w-3.5 h-3.5 text-ink-muted"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
-                    Gemini API Key
-                  </label>
-                  <input
-                    type="password"
-                    value={settingsGeminiKey}
-                    onChange={(e) => setSettingsGeminiKey(e.target.value)}
-                    placeholder="AIzaSy..."
-                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                  />
-                  <p className="text-[9px] text-ink-light mt-1">
-                    Lấy tại{" "}
-                    <a
-                      href="https://aistudio.google.com/apikey"
-                      target="_blank"
-                      className="text-blue-500 underline"
-                    >
-                      aistudio.google.com/apikey
-                    </a>
-                  </p>
-                </div>
-                <div>
-                  <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
-                    Google Cloud TTS (Service Account JSON)
-                  </label>
-                  <textarea
-                    value={settingsTtsJson}
-                    onChange={(e) => setSettingsTtsJson(e.target.value)}
-                    placeholder='{"type": "service_account", "project_id": "..."}'
-                    rows={4}
-                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                  />
-                  <p className="text-[9px] text-ink-light mt-1">
-                    Google Cloud → IAM → Service Accounts → Create Key → JSON
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center justify-between mt-4">
-                <span
-                  className={`text-[11px] ${settingsStatus.includes("Đã lưu") ? "text-emerald-600" : settingsStatus.includes("Lỗi") || settingsStatus.includes("không") ? "text-red-500" : "text-ink-light"}`}
-                >
-                  {settingsStatus || ""}
-                </span>
-                <div className="flex gap-2">
+              <div className="double-bezel-inner !rounded-[calc(1rem-1px)] p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-semibold text-ink">
+                    ⚙️ Cấu hình API
+                  </span>
                   <button
                     onClick={() => {
                       setShowSettings(false);
                       setSettingsStatus("");
                     }}
-                    className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-colors cursor-pointer"
+                    className="w-6 h-6 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-all duration-300 cursor-pointer"
                   >
-                    Đóng
+                    <IconClose className="w-3.5 h-3.5 text-ink-muted" />
                   </button>
-                  <button
-                    onClick={saveSettings}
-                    className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
+                      Gemini API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={settingsGeminiKey}
+                      onChange={(e) => setSettingsGeminiKey(e.target.value)}
+                      placeholder="AIzaSy..."
+                      className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    />
+                    <p className="text-[9px] text-ink-light mt-1">
+                      Lấy tại{" "}
+                      <a
+                        href="https://aistudio.google.com/apikey"
+                        target="_blank"
+                        className="text-blue-500 underline"
+                      >
+                        aistudio.google.com/apikey
+                      </a>
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
+                      Google Cloud TTS (Service Account JSON)
+                    </label>
+                    <textarea
+                      value={settingsTtsJson}
+                      onChange={(e) => setSettingsTtsJson(e.target.value)}
+                      placeholder='{"type": "service_account", "project_id": "..."}'
+                      rows={4}
+                      className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    />
+                    <p className="text-[9px] text-ink-light mt-1">
+                      Google Cloud → IAM → Service Accounts → Create Key → JSON
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-4">
+                  <span
+                    className={`text-[11px] ${settingsStatus.includes("Đã lưu") ? "text-emerald-600" : settingsStatus.includes("Lỗi") || settingsStatus.includes("không") ? "text-red-500" : "text-ink-light"}`}
                   >
-                    Lưu
-                  </button>
+                    {settingsStatus || ""}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setShowSettings(false);
+                        setSettingsStatus("");
+                      }}
+                      className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                    >
+                      Đóng
+                    </button>
+                    <button
+                      onClick={saveSettings}
+                      className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                    >
+                      Lưu
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* drag cursor overlay */}
+        {/* ================================================================ */}
+        {/*  Drag cursor overlay                                             */}
+        {/* ================================================================ */}
         {dragState && (
           <div
-            className="fixed inset-0 z-50 pointer-events-none"
+            className="fixed inset-0 z-40 pointer-events-none"
             style={{
               cursor: dragState.mode === "move" ? "grabbing" : "ew-resize",
             }}
           />
+        )}
+
+        {/* ================================================================ */}
+        {/*  Toast Notification                                              */}
+        {/* ================================================================ */}
+        {toast && (
+          <div
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-full bg-ink/90 backdrop-blur-md text-white text-xs font-medium shadow-2xl ring-1 ring-white/10"
+            style={{
+              animation:
+                "fade-up 0.4s ease-[cubic-bezier(0.32,0.72,0,1)] forwards",
+            }}
+          >
+            {toast}
+          </div>
         )}
       </div>
     </div>

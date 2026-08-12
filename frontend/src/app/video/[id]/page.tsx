@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import TranscriptPlayer from "@/components/TranscriptPlayer";
 import TimelineEditor from "@/components/TimelineEditor";
+import ContextPanel from "@/components/ContextPanel";
 import { AnimatedBlock } from "@/lib/animation";
 import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
 import type { VideoMeta, LogEntry } from "@/lib/api";
@@ -231,7 +232,7 @@ function JobProgress({
   );
 }
 
-type ViewMode = "transcript" | "timeline";
+type ViewMode = "transcript" | "timeline" | "context";
 
 export default function VideoDetailPage() {
   const params = useParams<{ id: string }>();
@@ -360,38 +361,52 @@ export default function VideoDetailPage() {
         </AnimatedBlock>
       ) : meta && meta.status === "done" ? (
         <AnimatedBlock delay={200}>
-          {/* View mode toggle */}
-          <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
-            <div className="flex items-center gap-1 p-0.5 rounded-full bg-black/[0.04] ring-1 ring-black/[0.06]">
+          {/* View mode toggle — Floating glass island */}
+          <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
               <button
                 onClick={() => setViewMode("transcript")}
-                className={`px-4 py-1.5 rounded-full text-[12px] font-medium tracking-tight transition-all duration-300 cursor-pointer ${
+                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   viewMode === "transcript"
-                    ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
-                    : "text-ink-muted hover:text-ink"
+                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    : "text-ink-light hover:text-ink"
                 }`}
               >
                 Transcript
               </button>
               <button
                 onClick={() => setViewMode("timeline")}
-                className={`px-4 py-1.5 rounded-full text-[12px] font-medium tracking-tight transition-all duration-300 cursor-pointer ${
+                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   viewMode === "timeline"
-                    ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
-                    : "text-ink-muted hover:text-ink"
+                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    : "text-ink-light hover:text-ink"
                 }`}
               >
                 Timeline
               </button>
+              <button
+                onClick={() => setViewMode("context")}
+                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
+                  viewMode === "context"
+                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    : "text-ink-light hover:text-ink"
+                }`}
+              >
+                Ngữ cảnh
+              </button>
             </div>
-            <span className="text-[10px] font-mono text-ink-light tabular-nums">
-              {meta.entries} subtitle lines
-            </span>
+            <div className="px-3 py-1 rounded-full bg-black/[0.02] ring-1 ring-black/[0.04]">
+              <span className="text-[10px] font-mono text-ink-light tabular-nums">
+                {meta.entries} dòng phụ đề
+              </span>
+            </div>
           </div>
           {viewMode === "transcript" ? (
             <TranscriptPlayer videoId={videoId} />
-          ) : (
+          ) : viewMode === "timeline" ? (
             <TimelineEditor videoId={videoId} />
+          ) : (
+            <ContextPanel videoId={videoId} />
           )}
         </AnimatedBlock>
       ) : (

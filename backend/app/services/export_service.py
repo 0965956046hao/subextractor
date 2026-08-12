@@ -9,15 +9,15 @@ from app.services.tool_services import _srt_path, _video_path, parse_srt
 logger = logging.getLogger(__name__)
 
 
-def _build_ass_header() -> str:
-    return """[Script Info]
+def _build_ass_header(vw: int = 1920, vh: int = 1080) -> str:
+    return f"""[Script Info]
 Title: SubtitleExtractor Export
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 YCbCr Matrix: None
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: {vw}
+PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
@@ -62,12 +62,31 @@ def _alignment_from_xy(x_pct: float, y_pct: float) -> int:
     return col * 3 + row + 1
 
 
+def _get_video_resolution(video_path: Path) -> tuple[int, int]:
+    """Get video width and height using ffprobe."""
+    import json
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", "-select_streams", "v:0", str(video_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        info = json.loads(result.stdout)
+        stream = info["streams"][0]
+        return int(stream["width"]), int(stream["height"])
+    except Exception:
+        return 1920, 1080
+
+
 def generate_ass(video_id: str, tracks: List[Dict[str, Any]]) -> Path:
     """Generate ASS subtitle file from project tracks with full styling."""
     out_dir = settings.temp_dir / "export" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ass_lines = [_build_ass_header()]
+    video_path = _video_path(video_id)
+    vw, vh = _get_video_resolution(video_path)
+
+    ass_lines = _build_ass_header(vw, vh).split("\n")
 
     for track in tracks:
         for entry in track.get("entries", []):
@@ -79,16 +98,18 @@ def generate_ass(video_id: str, tracks: List[Dict[str, Any]]) -> Path:
             if not text:
                 continue
 
-            # Build per-entry style override
+            # Convert pixel x/y → percentages for ASS alignment
+            px = style.get("x", vw // 2)
+            py = style.get("y", int(vh * 0.93))
+            x_pct = (px / vw) * 100 if vw else 50
+            y_pct = (py / vh) * 100 if vh else 90
             font_name = style.get("fontFamily", "Arial")
-            font_size = int(style.get("fontSize", 16) * 3)  # scale up for 1920x1080
+            font_size = int(style.get("fontSize", 16) * 3)
             text_color = _rgb_to_ass_bgr(style.get("textColor", "#FFFFFF"))
             bold = -1 if style.get("bold") else 0
             italic = -1 if style.get("italic") else 0
-            x = style.get("x", 50)
-            y = style.get("y", 90)
-            alignment = _alignment_from_xy(x, y)
-            margin_v = max(10, int(100 - y))
+            alignment = _alignment_from_xy(x_pct, y_pct)
+            margin_v = max(10, int(100 - y_pct))
 
             # Build per-entry style line
             style_name = f"Entry_{entry.get('index', 0)}"

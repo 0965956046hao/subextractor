@@ -12,6 +12,7 @@ from app.config import settings
 from app.models import UpdateSrtRequest
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue
 from app.services.tool_services import _srt_path, _video_path, parse_srt
+from app.services.context_service import load_video_context, generate_video_context
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -439,3 +440,51 @@ async def serve_tts_audio(video_id: str, rest: str):
     if not path.exists():
         raise HTTPException(404, "Audio file not found")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+
+# ── GET /api/context/{video_id} ──
+
+@router.get("/api/context/{video_id}")
+async def get_context(video_id: str):
+    """Return the saved video context text, or empty."""
+    ctx = load_video_context(video_id)
+    return {"video_id": video_id, "context": ctx or ""}
+
+
+# ── POST /api/context/{video_id}/generate ──
+
+@router.post("/api/context/{video_id}/generate")
+async def generate_context(request: Request, video_id: str):
+    """Upload snapshots to Gemini and generate video context via Vision."""
+    jobs = get_jobs(request)
+    ws_clients = get_ws_clients(request)
+    queue = get_job_queue(request)
+
+    # Check API key
+    from app.services.translation_service import _read_user_config
+    import os
+    cfg = _read_user_config()
+    has_key = bool(
+        settings.gemini_api_key
+        or os.environ.get("GEMINI_API_KEY", "")
+        or cfg.get("gemini_api_key", "")
+    )
+    if not has_key:
+        raise HTTPException(400, "Gemini API key not configured. Vào Settings (⚙️) để nhập key.")
+
+    job_id = uuid.uuid4().hex[:12]
+    jobs[job_id] = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "job_type": "context",
+        "status": "queued",
+        "phase": "context",
+        "progress": 0,
+        "created_at": __import__("time").time(),
+        "cancelled": False,
+    }
+    ws_clients.setdefault(job_id, [])
+
+    logger.info("context job %s: queued for %s", job_id, video_id)
+    await queue.put(job_id)
+    return {"job_id": job_id}
