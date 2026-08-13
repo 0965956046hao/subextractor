@@ -137,3 +137,85 @@
     transform: translateX(0);
   }
 }
+
+/* ============================================================ */
+/* OpenVideo Editor — shadcn/ui theme variables (Tailwind v3)    */
+/* ============================================================ */
+:root {
+  --background: #ffffff;
+  --foreground: #1a1a1a;
+  --card: #fafafa;
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --primary: #1a1a1a;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #1a1a1a;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #1a1a1a;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #1a1a1a;
+  --chart-1: #e2e2e2;
+  --chart-2: #8a8a8a;
+  --chart-3: #707070;
+  --chart-4: #5e5e5e;
+  --chart-5: #464646;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: #1a1a1a;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #1a1a1a;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #1a1a1a;
+  --openvideo-gray: #71717a;
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: #171717;
+  --foreground: #fafafa;
+  --card: #1f1f1f;
+  --card-foreground: #fafafa;
+  --popover: #1f1f1f;
+  --popover-foreground: #fafafa;
+  --primary: #eaeaea;
+  --primary-foreground: #1f1f1f;
+  --secondary: #2a2a2a;
+  --secondary-foreground: #fafafa;
+  --muted: #2a2a2a;
+  --muted-foreground: #a1a1aa;
+  --accent: #2a2a2a;
+  --accent-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #2a2a2a;
+  --input: #333333;
+  --ring: #8a8a8a;
+  --chart-1: #2a2a2a;
+  --chart-2: #8a8a8a;
+  --chart-3: #707070;
+  --chart-4: #5e5e5e;
+  --chart-5: #464646;
+  --sidebar: #171717;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #4f46e5;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #2a2a2a;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #2a2a2a;
+  --sidebar-ring: #8a8a8a;
+}
+
+.scrollbar-hidden::-webkit-scrollbar { display: none; }
+.scrollbar-hidden { -ms-overflow-style: none; scrollbar-width: none; }
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.diagonal-stripes { background: repeating-linear-gradient(45deg, transparent 0 4px, var(--border) 4px 6px); }

@@ -152,6 +152,19 @@ export default function LibraryPage() {
               </svg>
             </span>
           </Link>
+          <Link
+            href="/download"
+            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
+          >
+            <span className="tracking-tight">Tải video</span>
+            <span className="btn-island-icon !w-7 !h-7">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </span>
+          </Link>
         </div>
       </header>
 

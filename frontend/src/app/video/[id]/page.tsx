@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TranscriptPlayer from "@/components/TranscriptPlayer";
-import TimelineEditor from "@/components/TimelineEditor";
+import OpenVideoEditor from "@/components/OpenVideoEditor";
 import ContextPanel from "@/components/ContextPanel";
 import { AnimatedBlock } from "@/lib/animation";
 import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
@@ -404,7 +404,7 @@ export default function VideoDetailPage() {
           {viewMode === "transcript" ? (
             <TranscriptPlayer videoId={videoId} />
           ) : viewMode === "timeline" ? (
-            <TimelineEditor videoId={videoId} />
+            <OpenVideoEditor videoId={videoId} />
           ) : (
             <ContextPanel videoId={videoId} />
           )}

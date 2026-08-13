@@ -2423,7 +2423,7 @@ export default function TimelineEditor({
                 }`}
                 onClick={() => setSelectedTrack(track.id)}
               >
-                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-600/70 truncate">
+                <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-amber-600/60 truncate">
                   {track.name}
                 </span>
                 {tracks.length > 1 && (
@@ -2440,8 +2440,8 @@ export default function TimelineEditor({
               </div>
             ))}
             {ttsClips.length > 0 && (
-              <div className="h-14 flex items-center px-2 border-t border-black/[0.03]">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-600/70">
+              <div className="h-14 flex items-center px-3 border-t border-black/[0.03] bg-cyan-500/[0.02]">
+                <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-cyan-500/50">
                   TTS Voice
                 </span>
               </div>
