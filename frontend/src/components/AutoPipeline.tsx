@@ -281,6 +281,9 @@ export default function AutoPipeline() {
 function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: number; onRemove: () => void }) {
   const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
   const [previewKind, setPreviewKind] = useState<"subtitle" | "dub">("subtitle");
+  const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
+
+  const canRerun = p.status === "done" || p.status === "error";
 
   const previewUrl =
     previewKind === "dub" && p.dubbedUrl
@@ -356,6 +359,19 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
                     >
                       {stepTime}
                     </span>
+                  )}
+                  {canRerun && (
+                    <button
+                      onClick={() => rerunPipeline(p.id, i)}
+                      title={`Chạy lại từ "${s.label}"`}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                      </svg>
+                      Chạy lại
+                    </button>
                   )}
                 </div>
               </div>

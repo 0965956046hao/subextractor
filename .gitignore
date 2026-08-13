@@ -9,5 +9,6 @@ __pycache__/
 !test/*.json
 *.token
 !test/*.token
+youtubeuploader/youtubeuploader
 
 

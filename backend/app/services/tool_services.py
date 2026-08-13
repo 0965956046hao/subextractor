@@ -161,6 +161,149 @@ def notify_ws_sync(loop: asyncio.AbstractEventLoop, ws_clients: dict, job_id: st
 
 # ── FFmpeg hardcoding (runs in executor) ──
 
+def _has_subtitles_filter() -> bool:
+    """Check whether ffmpeg was built with libass (subtitles filter)."""
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return "subtitles" in (out.stdout or "")
+    except Exception:
+        return False
+
+
+def _find_font() -> str | None:
+    candidates = [
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    return None
+
+
+def _render_subtitle(text: str, vw: int, vh: int, font_path):
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    max_w = max(200, vw - 120)
+    font_size = 48
+    font = None
+    while font_size > 20:
+        try:
+            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if bbox[2] - bbox[0] <= max_w:
+            break
+        font_size -= 4
+
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+
+    pad_x, pad_y = 24, 16
+    box_w = tw + pad_x * 2
+    box_h = th + pad_y * 2
+    bx = (vw - box_w) // 2
+    by = vh - box_h - 120
+
+    draw.rectangle([bx, by, bx + box_w, by + box_h], fill=(0, 0, 0, 255))
+    draw.text((bx + pad_x - bbox[0], by + pad_y - bbox[1]), text, font=font, fill=(255, 255, 255, 255))
+    return np.array(img)
+
+
+def _overlay_subtitle(frame, overlay_rgba):
+    import cv2
+    import numpy as np
+
+    alpha = overlay_rgba[:, :, 3:4].astype(np.float32) / 255.0
+    overlay_bgr = cv2.cvtColor(overlay_rgba[:, :, :3], cv2.COLOR_RGB2BGR).astype(np.float32)
+    blended = frame.astype(np.float32) * (1.0 - alpha) + overlay_bgr * alpha
+    return blended.astype(np.uint8)
+
+
+def burn_subtitles_pillow(
+    video_path_str: str,
+    srt_path_str: str,
+    out_path: str,
+    progress_callback=None,
+):
+    """Burn black-box subtitles using OpenCV + Pillow (no libass required)."""
+    import cv2
+
+    content = Path(srt_path_str).read_text(encoding="utf-8")
+    entries = parse_srt(content)
+    if not entries:
+        raise RuntimeError("No subtitle entries")
+
+    font_path = _find_font()
+
+    cap = cv2.VideoCapture(video_path_str)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path_str}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    tmp_path = str(Path(out_path).with_suffix(".burn.mp4"))
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(tmp_path, fourcc, fps, (vw, vh))
+    if not writer.isOpened():
+        cap.release()
+        raise RuntimeError("Cannot open video writer")
+
+    cache = {}
+    idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        ts = idx / fps
+        active = [e for e in entries if e.start <= ts < e.end]
+        if active:
+            text = " ".join(e.text for e in active)
+            if text not in cache:
+                cache[text] = _render_subtitle(text, vw, vh, font_path)
+            frame = _overlay_subtitle(frame, cache[text])
+        writer.write(frame)
+        idx += 1
+        if progress_callback and total and idx % 10 == 0:
+            progress_callback(min(90, int(idx / total * 90)))
+
+    cap.release()
+    writer.release()
+
+    # Mux original audio back onto the burned video
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", video_path_str,
+            "-i", tmp_path,
+            "-map", "0:a:0",
+            "-map", "1:v:0",
+            "-c", "copy",
+            out_path,
+        ],
+        check=True, capture_output=True, timeout=600,
+    )
+    Path(tmp_path).unlink(missing_ok=True)
+
+    if progress_callback:
+        progress_callback(100)
+    return Path(out_path)
+
+
 def run_hardcode_sync(
     video_path_str: str,
     srt_path_str: str,
@@ -175,11 +318,25 @@ def run_hardcode_sync(
     total_dur = _get_duration(video_path_str)
     vw, vh = _get_video_resolution(video_path_str)
 
-    # Convert SRT → ASS (black box style) and burn it into the video
     srt_content = Path(srt_path_str).read_text(encoding="utf-8")
     ass_content = srt_to_ass_blackbox(srt_content, vw, vh)
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
+
+    if not _has_subtitles_filter():
+        # ffmpeg lacks libass — fall back to OpenCV + Pillow burn
+        logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
+
+        def progress_cb(pct: int):
+            job["progress"] = pct
+            notify_ws_sync(loop, ws_clients, job_id, {
+                "type": "progress", "progress": pct, "phase": "hardcode",
+            })
+
+        burn_subtitles_pillow(video_path_str, srt_path_str, out_path, progress_callback=progress_cb)
+        job["progress"] = 100
+        notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
+        return Path(out_path)
 
     cmd = [
         "ffmpeg",
