@@ -1,3 +1,4 @@
+import json
 import logging
 import shutil
 import ssl
@@ -27,6 +28,50 @@ _merge_jobs: dict[str, dict] = {}
 class MergeRequest(BaseModel):
     video_url: str
     audio_url: str
+
+
+class ImportRequest(BaseModel):
+    url: str = ""
+    merge_id: str = ""
+    filename: str = "douyin.mp4"
+
+
+@router.post("/api/import-video")
+def import_video(body: ImportRequest):
+    """Import a video (merged file or external URL) into the OCR pipeline."""
+    if not body.merge_id and not body.url.startswith(("http://", "https://")):
+        raise HTTPException(400, "url or merge_id required")
+
+    video_id = uuid.uuid4().hex[:12]
+    video_dir = settings.temp_dir / "videos" / video_id
+    video_dir.mkdir(parents=True, exist_ok=True)
+    video_path = video_dir / "video.mp4"
+
+    try:
+        if body.merge_id:
+            src = settings.temp_dir / "merged" / f"{body.merge_id}.mp4"
+            if not src.exists():
+                raise HTTPException(404, "Merged file not found")
+            shutil.copyfile(src, video_path)
+        else:
+            _download(body.url, video_path)
+    except HTTPException:
+        shutil.rmtree(video_dir, ignore_errors=True)
+        raise
+    except Exception as e:
+        shutil.rmtree(video_dir, ignore_errors=True)
+        raise HTTPException(500, f"Import failed: {e}")
+
+    try:
+        (video_dir / "meta.json").write_text(
+            json.dumps({"filename": body.filename or "douyin.mp4"}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    logger.info("imported video %s → %s", video_id, video_path)
+    return {"video_id": video_id}
 
 
 def _download(url: str, dest: Path, on_progress=None) -> None:

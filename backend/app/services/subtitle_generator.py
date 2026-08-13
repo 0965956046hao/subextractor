@@ -180,7 +180,15 @@ def generate_srt(
 
     pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
+    # Save up to 10 snapshot frames evenly spread across the video timeline
+    snapshot_step = 1
+    if save_crops_dir and total_frames:
+        snapshot_step = max(1, total_frames // 10)
+
     for i, (crop, full_frame, timestamp) in enumerate(frames):
+        if save_crops_dir and i % snapshot_step == 0:
+            _save_crop(full_frame, save_crops_dir, i // snapshot_step, timestamp)
+
         text = ocr_engine.ocr_region_cached(crop)
         text = clean_text(text)
         pbar.update(1)
@@ -222,8 +230,6 @@ def generate_srt(
                 entries.append((start_time, boundary, prev_text.strip()))
                 if text_callback:
                     text_callback(start_time, boundary, prev_text.strip())
-                if save_crops_dir:
-                    _save_crop(full_frame, save_crops_dir, len(entries), start_time)
                 logger.info(
                     "  subtitle: %s --> %s  |  %s",
                     sec_to_srt(start_time), sec_to_srt(boundary),

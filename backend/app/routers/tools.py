@@ -145,6 +145,19 @@ async def download_hardcoded(video_id: str):
     return FileResponse(str(path), media_type="video/mp4", filename=path.name)
 
 
+# ── GET /api/preview/hardcoded/{video_id} (inline, cho iframe) ──
+
+@router.get("/api/preview/hardcoded/{video_id}")
+async def preview_hardcoded(video_id: str):
+    hd_dir = settings.temp_dir / "hardcoded" / video_id
+    if not hd_dir.exists():
+        raise HTTPException(404, "Hardcoded file not found")
+    files = list(hd_dir.glob("*_hardcoded.mp4"))
+    if not files:
+        raise HTTPException(404, "Hardcoded file not found")
+    return FileResponse(str(files[0]), media_type="video/mp4")
+
+
 # ── POST /api/align/{video_id} ──
 
 @router.post("/api/align/{video_id}")
@@ -294,6 +307,56 @@ async def download_dubbed(video_id: str):
         raise HTTPException(404, "Dubbed video not found. Run TTS first.")
     path = files[0]
     return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+
+
+# ── GET /api/preview/dubbed/{video_id} (inline, cho iframe) ──
+
+@router.get("/api/preview/dubbed/{video_id}")
+async def preview_dubbed(video_id: str):
+    tts_dir = settings.temp_dir / "tts" / video_id
+    if not tts_dir.exists():
+        raise HTTPException(404, "Dubbed video not found")
+    files = list(tts_dir.glob("dubbed_video.mp4"))
+    if not files:
+        raise HTTPException(404, "Dubbed video not found")
+    return FileResponse(str(files[0]), media_type="video/mp4")
+
+
+# ── POST /api/dub/{video_id} ──
+
+@router.post("/api/dub/{video_id}")
+async def dub_subtitles(video_id: str, request: Request):
+    """Separate vocals (keep instrumental) + Vietnamese TTS → dubbed video."""
+    _srt_path(video_id)
+    _video_path(video_id)
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    tts_voice = body.get("voice", "vi-VN-Standard-B")
+
+    jobs = get_jobs(request)
+    ws_clients = get_ws_clients(request)
+    queue = get_job_queue(request)
+
+    job_id = uuid.uuid4().hex[:12]
+    jobs[job_id] = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "job_type": "dub",
+        "status": "queued",
+        "phase": "",
+        "progress": 0,
+        "error": None,
+        "cancelled": False,
+        "tts_voice": tts_voice,
+    }
+    ws_clients.setdefault(job_id, [])
+    logger.info("dub job %s: queued for %s", job_id, video_id)
+    await queue.put(job_id)
+    return {"job_id": job_id}
 
 
 # ── GET /api/srt/{video_id}/available ──
@@ -449,6 +512,24 @@ async def get_context(video_id: str):
     """Return the saved video context text, or empty."""
     ctx = load_video_context(video_id)
     return {"video_id": video_id, "context": ctx or ""}
+
+
+# ── POST /api/context/{video_id}/share-text ──
+
+@router.post("/api/context/{video_id}/share-text")
+async def save_share_text_endpoint(video_id: str, request: Request):
+    """Persist the raw pasted share text for context generation."""
+    from app.services.context_service import save_share_text
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    text = (body.get("text") or "").strip()
+    if text:
+        save_share_text(video_id, text)
+    return {"status": "ok", "saved": bool(text)}
 
 
 # ── POST /api/context/{video_id}/generate ──

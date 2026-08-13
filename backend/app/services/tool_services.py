@@ -99,6 +99,56 @@ def _get_duration(video_path: str) -> float:
         return 0
 
 
+def _ass_time(sec: float) -> str:
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    cs = int(round((sec - int(sec)) * 100))
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def srt_to_ass_blackbox(srt_content: str, vw: int = 1920, vh: int = 1080) -> str:
+    """Convert SRT → ASS with an opaque black-box style (BlackBoxStyle)."""
+    header = f"""[Script Info]
+Title: Subtitle Black Box
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+PlayResX: {vw}
+PlayResY: {vh}
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: BlackBoxStyle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,16,0,2,50,50,120,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    lines = [header.rstrip("\n")]
+    for e in parse_srt(srt_content):
+        text = e.text.replace("{", "\\{").replace("}", "\\}")
+        lines.append(
+            f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},BlackBoxStyle,,0,0,0,,{text}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _get_video_resolution(video_path: str) -> tuple[int, int]:
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0:s=x",
+            video_path,
+        ]
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=30)
+        w, h = out.decode().strip().split("x")
+        return int(w), int(h)
+    except Exception:
+        return 1920, 1080
+
+
 class JobCancelled(Exception):
     """Raised when the user requests to cancel a running job."""
 
@@ -123,11 +173,18 @@ def run_hardcode_sync(
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "hardcode"})
 
     total_dur = _get_duration(video_path_str)
+    vw, vh = _get_video_resolution(video_path_str)
+
+    # Convert SRT → ASS (black box style) and burn it into the video
+    srt_content = Path(srt_path_str).read_text(encoding="utf-8")
+    ass_content = srt_to_ass_blackbox(srt_content, vw, vh)
+    ass_path = Path(out_path).with_suffix(".ass")
+    ass_path.write_text(ass_content, encoding="utf-8")
 
     cmd = [
         "ffmpeg",
         "-i", video_path_str,
-        "-vf", f"subtitles={shlex.quote(srt_path_str)}",
+        "-vf", f"subtitles={shlex.quote(str(ass_path))}",
         "-c:v", "libx264",
         "-crf", "23",
         "-preset", "medium",

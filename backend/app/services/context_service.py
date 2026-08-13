@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import logging
 import os
@@ -10,10 +11,15 @@ logger = logging.getLogger(__name__)
 CONTEXT_DIR_NAME = "context"
 CONTEXT_FILE_NAME = "context.txt"
 FILES_INDEX_NAME = "gemini_files.json"
+SHARE_TEXT_NAME = "share_text.txt"
 
 
 def _context_path(video_id: str) -> Path:
     return settings.temp_dir / CONTEXT_DIR_NAME / video_id / CONTEXT_FILE_NAME
+
+
+def _share_text_path(video_id: str) -> Path:
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / SHARE_TEXT_NAME
 
 
 def _files_index_path(video_id: str) -> Path:
@@ -55,6 +61,24 @@ def load_video_context(video_id: str) -> str | None:
     return None
 
 
+def save_share_text(video_id: str, text: str) -> None:
+    """Persist the raw pasted share text so context generation can use it."""
+    p = _share_text_path(video_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+def load_share_text(video_id: str) -> str | None:
+    """Load the saved share text, if any."""
+    p = _share_text_path(video_id)
+    if p.exists():
+        try:
+            return p.read_text(encoding="utf-8").strip()
+        except Exception:
+            return None
+    return None
+
+
 def generate_video_context(video_id: str) -> str | None:
     """Upload snapshot frames to Gemini File Store, then call Vision in one request.
 
@@ -71,8 +95,8 @@ def generate_video_context(video_id: str) -> str | None:
         logger.info("No snapshot images found for %s", video_id)
         return None
 
-    # Sample up to 16 frames evenly spread across the timeline
-    sample_count = min(16, len(jpg_files))
+    # Sample up to 10 frames evenly spread across the timeline
+    sample_count = min(10, len(jpg_files))
     step = max(1, len(jpg_files) // sample_count)
     sampled = jpg_files[::step][:sample_count]
     logger.info("Uploading %d/%d frames to Gemini File Store (%s)", len(sampled), len(jpg_files), video_id)
@@ -106,14 +130,20 @@ def generate_video_context(video_id: str) -> str | None:
             logger.info("Reused %d/%d files", len(uploaded_files), len(existing_names))
 
     if not uploaded_files:
-        # Upload fresh
-        for f in sampled:
+        # Upload fresh — concurrently (up to 8 at a time)
+        def _upload_one(f):
             try:
                 gf = client.files.upload(file=str(f))
-                uploaded_files.append(gf)
                 logger.info("Uploaded: %s (%s)", gf.name, f.name)
+                return gf
             except Exception as e:
                 logger.warning("Upload failed %s: %s", f.name, e)
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(_upload_one, sampled))
+
+        uploaded_files = [r for r in results if r is not None]
 
         if not uploaded_files:
             logger.warning("No frames uploaded for %s", video_id)
@@ -122,6 +152,15 @@ def generate_video_context(video_id: str) -> str | None:
         _save_files_index(video_id, [gf.name for gf in uploaded_files])
 
     # Send all File Store files to Gemini Vision in ONE request
+    share_hint = load_share_text(video_id)
+    hint_text = ""
+    if share_hint:
+        hint_text = (
+            f"\n\nSHARE TEXT (nội dung user dán kèm link, có thể chứa tiêu đề/mô tả video):\n"
+            f"{share_hint}\n"
+            "Dùng thông tin này để xác định chính xác tiêu đề, nội dung và bối cảnh video."
+        )
+
     try:
         response = client.models.generate_content(
             model=settings.gemini_model,
@@ -136,7 +175,8 @@ def generate_video_context(video_id: str) -> str | None:
                 "- How characters address each other (xưng hô: huynh-đệ, anh-em, ngài-tiểu nhân, bạn-cậu...)\n"
                 "- Overall tone (nghiêm túc / hài hước / hành động / lãng mạn...)\n"
                 "- Any notable visual style, costumes, or recurring text on screen\n\n"
-                "Be specific and detailed. This context will be used to improve subtitle translation accuracy.",
+                "Be specific and detailed. This context will be used to improve subtitle translation accuracy."
+                + hint_text,
             ],
         )
 

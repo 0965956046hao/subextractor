@@ -306,3 +306,169 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             "type": "error",
             "message": f"Lỗi TTS: {e}",
         })
+
+
+# ── Vocal separation + dubbing (Demucs instrumental + Google TTS) ──
+
+def separate_instrumental(video_path: Path, out_dir: Path) -> Path:
+    """Extract audio and run Demucs to keep the instrumental (no_vocals)."""
+    import shutil
+
+    if shutil.which("demucs") is None:
+        raise RuntimeError(
+            "demucs chưa cài đặt. Chạy: pip install demucs"
+        )
+
+    wav_path = out_dir / "audio.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-vn", "-ac", "1", "-ar", "44100", str(wav_path),
+        ],
+        check=True, capture_output=True, timeout=300,
+    )
+
+    sep_root = out_dir / "separated"
+    sep_root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["demucs", "--two-stems=vocals", "-o", str(sep_root), str(wav_path)],
+        check=True, capture_output=True, timeout=3600,
+    )
+
+    no_vocals = sep_root / "htdemucs" / "audio" / "no_vocals.wav"
+    if not no_vocals.exists():
+        raise RuntimeError("Demucs không tạo được file instrumental (no_vocals.wav)")
+    return no_vocals
+
+
+def _mix_tts_with_instrumental(
+    video_path: Path,
+    instrumental: Path,
+    audio_files: List[Path],
+    entries,
+    out_path: Path,
+) -> Path:
+    cmd = ["ffmpeg", "-y", "-i", str(video_path), "-i", str(instrumental)]
+
+    tts_inputs = []
+    next_idx = 2
+    for i, entry in enumerate(entries):
+        if i >= len(audio_files):
+            break
+        af = audio_files[i]
+        if not af or not af.exists() or af.stat().st_size == 0:
+            continue
+        cmd.extend(["-i", str(af)])
+        tts_inputs.append((next_idx, int(entry.start * 1000)))
+        next_idx += 1
+
+    if not tts_inputs:
+        raise RuntimeError("Không có file TTS nào để mix")
+
+    parts = [f"[{idx}:a]adelay={d}|{d}[t{k}]" for k, (idx, d) in enumerate(tts_inputs)]
+    mix_inputs = "".join(f"[t{k}]" for k in range(len(tts_inputs)))
+    parts.append(f"{mix_inputs}amix=inputs={len(tts_inputs)}:duration=first:dropout_transition=0[tts]")
+    parts.append("[1:a][tts]amix=inputs=2:duration=first:normalize=0[out]")
+
+    cmd += [
+        "-filter_complex", ";".join(parts),
+        "-map", "0:v:0",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        str(out_path),
+    ]
+
+    logger.info("Running FFmpeg dub mix: %s", " ".join(cmd[:6]))
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg dub mix failed: {result.stderr[-500:]}")
+    return out_path
+
+
+def dub_video_with_tts(
+    video_id: str,
+    voice_name: str = "vi-VN-Standard-B",
+    progress_callback=None,
+) -> Path:
+    """Separate vocals → synthesize Vietnamese TTS → mix into dubbed video."""
+    video_path = _video_path(video_id)
+    out_dir = settings.temp_dir / "tts" / video_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    srt_path = _srt_path(video_id)
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+
+    def cb(pct: int):
+        if progress_callback:
+            progress_callback(pct)
+
+    cb(5)
+    instrumental = separate_instrumental(video_path, out_dir)
+    cb(40)
+
+    audio_files = synthesize_srt(
+        video_id,
+        progress_callback=lambda i, total: cb(40 + int((i / total) * 40)) if total else None,
+        voice_name=voice_name,
+    )
+    cb(80)
+
+    out_path = out_dir / "dubbed_video.mp4"
+    _mix_tts_with_instrumental(video_path, instrumental, audio_files, entries, out_path)
+    cb(100)
+    return out_path
+
+
+def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
+    """Run dubbing (vocal separation + TTS + mix) in background."""
+    import time
+
+    job = jobs[job_id]
+    job["status"] = "processing"
+    job["phase"] = "dub"
+
+    try:
+        last_pct = 0
+
+        def progress(pct: int):
+            nonlocal last_pct
+            pct = int(pct)
+            if pct > last_pct:
+                last_pct = pct
+                job["progress"] = pct
+                _notify_ws_sync(loop, ws_clients, job_id, {
+                    "type": "progress", "progress": pct, "phase": "dub",
+                })
+
+        _notify_ws_sync(loop, ws_clients, job_id, {
+            "type": "log",
+            "message": "Tách giọng khỏi nhạc nền (Demucs)...",
+            "ts": time.time(), "level": "info",
+        })
+        out = dub_video_with_tts(
+            video_id,
+            voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
+            progress_callback=progress,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        job["output_path"] = str(out)
+        _notify_ws_sync(loop, ws_clients, job_id, {
+            "type": "log",
+            "message": "Lồng tiếng Việt hoàn tất!",
+            "ts": time.time(), "level": "success",
+        })
+        _notify_ws_sync(loop, ws_clients, job_id, {
+            "type": "done", "progress": 100, "video_id": video_id,
+        })
+    except Exception as e:
+        logger.exception("dub failed")
+        job["status"] = "error"
+        job["error"] = str(e)
+        _notify_ws_sync(loop, ws_clients, job_id, {
+            "type": "error",
+            "message": f"Lỗi lồng tiếng: {e}",
+        })

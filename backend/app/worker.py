@@ -531,6 +531,61 @@ async def run_tts_job(
         await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
+async def run_dub_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        from app.services.tts_service import run_dub_sync
+
+        job["status"] = "processing"
+        job["phase"] = "dub"
+        await job_log_async(job, ws_clients, "Bắt đầu lồng tiếng Việt (tách giọng + TTS)…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "dub",
+        })
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_dub_sync,
+            loop, job_id, jobs, ws_clients, job["video_id"],
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, "Lồng tiếng Việt hoàn tất!", "success")
+
+    except JobCancelled:
+        logger.info("dub job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy lồng tiếng.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
+    except asyncio.TimeoutError:
+        logger.error("dub job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("dub job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi lồng tiếng: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
 async def run_export_job(
     jobs: dict,
     ws_clients: dict,
@@ -650,6 +705,8 @@ async def worker_loop(
                     await run_translate_job(jobs, ws_clients, job_id)
                 elif job_type == "tts":
                     await run_tts_job(jobs, ws_clients, job_id)
+                elif job_type == "dub":
+                    await run_dub_job(jobs, ws_clients, job_id)
                 elif job_type == "export":
                     await run_export_job(jobs, ws_clients, job_id)
                 elif job_type == "context":

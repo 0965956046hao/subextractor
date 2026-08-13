@@ -6,18 +6,8 @@ frontend/.next/
 __pycache__/
 .env
 .DS_Store
-*.json
 !test/*.json
 *.token
 !test/*.token
-*.mp4
-*.avi
-*.mkv
-*.gz
-*.zip
-*.exe
-.*.swp
-vendor
-# /youtubeuploader/youtubeuploader
-dist/
+
 

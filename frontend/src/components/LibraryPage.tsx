@@ -140,6 +140,17 @@ export default function LibraryPage() {
             </span>
           </Link>
           <Link
+            href="/auto"
+            className="btn-island-primary group !px-5 !py-2 text-[13px]"
+          >
+            <span className="tracking-tight">Auto Pipeline</span>
+            <span className="btn-island-icon !w-7 !h-7">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+              </svg>
+            </span>
+          </Link>
+          <Link
             href="/youtube"
             className="btn-island-secondary group !px-5 !py-2 text-[13px]"
           >
