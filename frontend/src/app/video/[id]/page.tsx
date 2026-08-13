@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TranscriptPlayer from "@/components/TranscriptPlayer";
-import OpenVideoEditor from "@/components/OpenVideoEditor";
 import ContextPanel from "@/components/ContextPanel";
 import { AnimatedBlock } from "@/lib/animation";
 import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
@@ -232,7 +231,7 @@ function JobProgress({
   );
 }
 
-type ViewMode = "transcript" | "timeline" | "context";
+type ViewMode = "transcript" | "context";
 
 export default function VideoDetailPage() {
   const params = useParams<{ id: string }>();
@@ -375,16 +374,6 @@ export default function VideoDetailPage() {
                 Transcript
               </button>
               <button
-                onClick={() => setViewMode("timeline")}
-                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
-                  viewMode === "timeline"
-                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
-                    : "text-ink-light hover:text-ink"
-                }`}
-              >
-                Timeline
-              </button>
-              <button
                 onClick={() => setViewMode("context")}
                 className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   viewMode === "context"
@@ -403,8 +392,6 @@ export default function VideoDetailPage() {
           </div>
           {viewMode === "transcript" ? (
             <TranscriptPlayer videoId={videoId} />
-          ) : viewMode === "timeline" ? (
-            <OpenVideoEditor videoId={videoId} />
           ) : (
             <ContextPanel videoId={videoId} />
           )}
