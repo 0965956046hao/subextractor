@@ -310,6 +310,19 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
 
 # ── Vocal separation + dubbing (Demucs instrumental + Google TTS) ──
 
+def extract_audio(video_path: Path, out_dir: Path) -> Path:
+    """Extract mono audio from the video to a wav file."""
+    wav_path = out_dir / "audio.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-vn", "-ac", "1", "-ar", "44100", str(wav_path),
+        ],
+        check=True, capture_output=True, timeout=300,
+    )
+    return wav_path
+
+
 def separate_instrumental(video_path: Path, out_dir: Path) -> Path:
     """Extract audio and run Demucs to keep the instrumental (no_vocals)."""
     import shutil
@@ -319,14 +332,7 @@ def separate_instrumental(video_path: Path, out_dir: Path) -> Path:
             "demucs chưa cài đặt. Chạy: pip install demucs"
         )
 
-    wav_path = out_dir / "audio.wav"
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", str(video_path),
-            "-vn", "-ac", "1", "-ar", "44100", str(wav_path),
-        ],
-        check=True, capture_output=True, timeout=300,
-    )
+    wav_path = extract_audio(video_path, out_dir)
 
     sep_root = out_dir / "separated"
     sep_root.mkdir(parents=True, exist_ok=True)
@@ -341,16 +347,34 @@ def separate_instrumental(video_path: Path, out_dir: Path) -> Path:
     return no_vocals
 
 
+def _get_audio_duration(path: Path) -> float:
+    """Return audio duration in seconds via ffprobe (0.0 on failure)."""
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        return float(out.stdout.strip())
+    except Exception:
+        return 0.0
+
+
 def _mix_tts_with_instrumental(
     video_path: Path,
     instrumental: Path,
     audio_files: List[Path],
     entries,
     out_path: Path,
+    background_volume: float = 1.0,
 ) -> Path:
     cmd = ["ffmpeg", "-y", "-i", str(video_path), "-i", str(instrumental)]
 
-    tts_inputs = []
+    tts_inputs = []  # (input_idx, delay_ms, tempo_chain)
     next_idx = 2
     for i, entry in enumerate(entries):
         if i >= len(audio_files):
@@ -359,16 +383,37 @@ def _mix_tts_with_instrumental(
         if not af or not af.exists() or af.stat().st_size == 0:
             continue
         cmd.extend(["-i", str(af)])
-        tts_inputs.append((next_idx, int(entry.start * 1000)))
+
+        srt_dur = entry.end - entry.start
+        mp3_dur = _get_audio_duration(af)
+        tempo = ""
+        if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
+            speed = mp3_dur / srt_dur
+            chain = []
+            while speed > 2.0:
+                chain.append("atempo=2.0")
+                speed /= 2.0
+            chain.append(f"atempo={speed:.4f}")
+            tempo = ",".join(chain) + ","
+
+        tts_inputs.append((next_idx, int(entry.start * 1000), tempo))
         next_idx += 1
 
     if not tts_inputs:
         raise RuntimeError("Không có file TTS nào để mix")
 
-    parts = [f"[{idx}:a]adelay={d}|{d}[t{k}]" for k, (idx, d) in enumerate(tts_inputs)]
+    parts = [
+        f"[{idx}:a]{tempo}adelay={d}|{d}[t{k}]"
+        for k, (idx, d, tempo) in enumerate(tts_inputs)
+    ]
     mix_inputs = "".join(f"[t{k}]" for k in range(len(tts_inputs)))
     parts.append(f"{mix_inputs}amix=inputs={len(tts_inputs)}:duration=first:dropout_transition=0[tts]")
-    parts.append("[1:a][tts]amix=inputs=2:duration=first:normalize=0[out]")
+
+    if background_volume < 1.0:
+        parts.append(f"[1:a]volume={background_volume}[bg]")
+        parts.append("[bg][tts]amix=inputs=2:duration=first:normalize=0[out]")
+    else:
+        parts.append("[1:a][tts]amix=inputs=2:duration=first:normalize=0[out]")
 
     cmd += [
         "-filter_complex", ";".join(parts),
@@ -405,7 +450,13 @@ def dub_video_with_tts(
             progress_callback(pct)
 
     cb(5)
-    instrumental = separate_instrumental(video_path, out_dir)
+    try:
+        instrumental = separate_instrumental(video_path, out_dir)
+        background_volume = 1.0
+    except Exception as e:
+        logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
+        instrumental = extract_audio(video_path, out_dir)
+        background_volume = 0.3
     cb(40)
 
     audio_files = synthesize_srt(
@@ -416,7 +467,10 @@ def dub_video_with_tts(
     cb(80)
 
     out_path = out_dir / "dubbed_video.mp4"
-    _mix_tts_with_instrumental(video_path, instrumental, audio_files, entries, out_path)
+    _mix_tts_with_instrumental(
+        video_path, instrumental, audio_files, entries, out_path,
+        background_volume=background_volume,
+    )
     cb(100)
     return out_path
 

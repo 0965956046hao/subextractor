@@ -119,7 +119,7 @@ PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: BlackBoxStyle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,16,0,2,50,50,120,1
+Style: BlackBoxStyle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,16,0,2,50,50,80,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -237,6 +237,7 @@ def burn_subtitles_pillow(
     srt_path_str: str,
     out_path: str,
     progress_callback=None,
+    audio_source: str | None = None,
 ):
     """Burn black-box subtitles using OpenCV + Pillow (no libass required)."""
     import cv2
@@ -284,11 +285,12 @@ def burn_subtitles_pillow(
     cap.release()
     writer.release()
 
-    # Mux original audio back onto the burned video
+    # Mux audio back onto the burned video (dubbed audio if available)
+    audio_src = audio_source or video_path_str
     subprocess.run(
         [
             "ffmpeg", "-y",
-            "-i", video_path_str,
+            "-i", audio_src,
             "-i", tmp_path,
             "-map", "0:a:0",
             "-map", "1:v:0",
@@ -323,6 +325,18 @@ def run_hardcode_sync(
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
 
+    # Chạy ffmpeg từ thư mục chứa file .ass, chỉ truyền tên file tương đối
+    # để tránh lỗi escape đường dẫn tuyệt đối trong filter `subtitles`.
+    ass_dir = str(ass_path.parent)
+    ass_filename = ass_path.name
+
+    # Use dubbed (instrumental + TTS Việt) audio if it exists, else original audio
+    video_id = Path(video_path_str).parent.name
+    dubbed_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+    use_dubbed = dubbed_path.exists()
+    if use_dubbed:
+        logger.info("hardcode job %s: using dubbed audio (%s)", job_id, dubbed_path.name)
+
     if not _has_subtitles_filter():
         # ffmpeg lacks libass — fall back to OpenCV + Pillow burn
         logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
@@ -333,27 +347,49 @@ def run_hardcode_sync(
                 "type": "progress", "progress": pct, "phase": "hardcode",
             })
 
-        burn_subtitles_pillow(video_path_str, srt_path_str, out_path, progress_callback=progress_cb)
+        burn_subtitles_pillow(
+            video_path_str, srt_path_str, out_path,
+            progress_callback=progress_cb,
+            audio_source=str(dubbed_path) if use_dubbed else None,
+        )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
         return Path(out_path)
 
-    cmd = [
-        "ffmpeg",
-        "-i", video_path_str,
-        "-vf", f"subtitles={shlex.quote(str(ass_path))}",
-        "-c:v", "libx264",
-        "-crf", "23",
-        "-preset", "medium",
-        "-c:a", "copy",
-        "-y",
-        out_path,
-    ]
+    if use_dubbed:
+        cmd = [
+            "ffmpeg",
+            "-i", video_path_str,
+            "-i", str(dubbed_path),
+            "-vf", f"subtitles={ass_filename}",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264",
+            "-crf", "23",
+            "-preset", "medium",
+            "-c:a", "copy",
+            "-shortest",
+            "-y",
+            out_path,
+        ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-i", video_path_str,
+            "-vf", f"subtitles={ass_filename}",
+            "-c:v", "libx264",
+            "-crf", "23",
+            "-preset", "medium",
+            "-c:a", "copy",
+            "-y",
+            out_path,
+        ]
 
     logger.info("hardcode job %s: %s", job_id, " ".join(shlex.quote(str(p)) for p in cmd))
 
     proc = subprocess.Popen(
         cmd,
+        cwd=ass_dir,
         stderr=subprocess.PIPE,
         universal_newlines=True,
         bufsize=1,
