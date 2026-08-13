@@ -18,6 +18,6 @@ __pycache__/
 *.exe
 .*.swp
 vendor
-/youtubeuploader/youtubeuploader
+# /youtubeuploader/youtubeuploader
 dist/
 

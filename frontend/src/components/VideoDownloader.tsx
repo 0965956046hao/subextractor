@@ -110,6 +110,7 @@ export default function VideoDownloader() {
   const [mergeError, setMergeError] = useState("");
   const [mergeProgress, setMergeProgress] = useState(0);
   const [mergeStage, setMergeStage] = useState("");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const handleOpenLogin = async () => {
     setOpeningLogin(true);
@@ -135,6 +136,7 @@ export default function VideoDownloader() {
     setCopiedKey(null);
     setMerged(null);
     setMergeError("");
+    setPreviewUrl(null);
     try {
       const res = await fetch("/api/video-download/resolve", {
         method: "POST",
@@ -144,6 +146,7 @@ export default function VideoDownloader() {
       const data = await res.json();
       if (res.ok) {
         setResult(data);
+        setPreviewUrl(data.urls?.[0] ?? null);
       } else {
         setError(data.detail || "Không thể phân tích link.");
       }
@@ -347,6 +350,29 @@ export default function VideoDownloader() {
                         <IconLink className="w-3.5 h-3.5" />
                         Mở link
                       </a>
+                      <button
+                        onClick={() => setPreviewUrl(u)}
+                        className={`flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium transition-all duration-300 active:scale-[0.97] cursor-pointer ${
+                          previewUrl === u
+                            ? "bg-black/[0.08] ring-1 ring-black/[0.12] text-ink"
+                            : "bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink"
+                        }`}
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <rect x="2" y="4" width="20" height="14" rx="2" />
+                          <path d="M8 21h8" />
+                          <path d="M12 18v3" />
+                        </svg>
+                        Nhúng
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -426,10 +452,10 @@ export default function VideoDownloader() {
                 </div>
               )}
 
-              {result.urls[0] && (
+              {previewUrl && (
                 <div className="mt-4">
                   <iframe
-                    src={result.urls[0]}
+                    src={previewUrl}
                     title="Video preview"
                     className="w-full aspect-video rounded-xl ring-1 ring-black/[0.06] bg-black"
                     allow="autoplay; fullscreen; encrypted-media"
