@@ -1,7 +1,12 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import puppeteer, { type Browser, type Page, type Cookie, type CookieParam } from "puppeteer-core";
+import puppeteer, {
+  type Browser,
+  type Page,
+  type Cookie,
+  type CookieParam,
+} from "puppeteer-core";
 
 export const CHROME_PATH =
   process.env.CHROME_PATH ||
@@ -25,7 +30,11 @@ export const COOKIE_FILE =
 export const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
 
-export const SOURCE_SELECTOR = "xg-video-container video source[src]";
+export const SOURCE_SELECTORS = [
+  "xg-video-container video source[src]",
+  "xg-video-container source[src]",
+  "xg-video-container video[src]",
+];
 
 const URL_HINTS = [
   "zjcdn",
@@ -42,14 +51,32 @@ export function isVideoUrl(u: string): boolean {
   return /^https?:\/\//.test(low) && URL_HINTS.some((h) => low.includes(h));
 }
 
+export function isMp4Url(u: string): boolean {
+  return /\.mp4(\?|$)|video_mp4|mime_type=video_mp4/i.test(u);
+}
+
+export function classifyTrack(u: string): "video" | "audio" | "unknown" {
+  if (/media-audio|media_audio|audio-und|mp4a/i.test(u)) return "audio";
+  if (/media-video|media_video|video-/i.test(u)) return "video";
+  return "unknown";
+}
+
 export type BrowserHandle = { browser: Browser; persistent: boolean };
+
+export const HEADLESS =
+  process.env.DOUYIN_HEADLESS === undefined
+    ? true
+    : process.env.DOUYIN_HEADLESS !== "false";
 
 /**
  * Attach to an already-running Chrome via CDP if it exposes the debugging
  * port; otherwise launch a fresh Chrome bound to that same port + persistent
  * profile, so every later call can `connect()` instead of re-launching.
  */
-export async function openBrowser(): Promise<BrowserHandle> {
+export async function openBrowser(options?: {
+  headless?: boolean;
+}): Promise<BrowserHandle> {
+  const headless = options?.headless ?? HEADLESS;
   try {
     const browser = await puppeteer.connect({
       browserURL: CDP_URL,
@@ -59,7 +86,7 @@ export async function openBrowser(): Promise<BrowserHandle> {
   } catch {
     const browser = await puppeteer.launch({
       executablePath: CHROME_PATH,
-      headless: false,
+      headless,
       userDataDir: PROFILE_DIR,
       args: [
         "--disable-blink-features=AutomationControlled",

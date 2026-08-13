@@ -5,8 +5,15 @@ import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
 
 interface ResolveResult {
-  url: string;
+  urls: string[];
+  video_url: string | null;
+  audio_url: string | null;
   title: string;
+}
+
+interface MergeResult {
+  url: string;
+  filename: string;
 }
 
 function IconSpinner({ className = "w-4 h-4" }) {
@@ -96,8 +103,13 @@ export default function VideoDownloader() {
   const [resolving, setResolving] = useState(false);
   const [result, setResult] = useState<ResolveResult | null>(null);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [openingLogin, setOpeningLogin] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const [merged, setMerged] = useState<MergeResult | null>(null);
+  const [mergeError, setMergeError] = useState("");
+  const [mergeProgress, setMergeProgress] = useState(0);
+  const [mergeStage, setMergeStage] = useState("");
 
   const handleOpenLogin = async () => {
     setOpeningLogin(true);
@@ -120,7 +132,9 @@ export default function VideoDownloader() {
     setResolving(true);
     setError("");
     setResult(null);
-    setCopied(false);
+    setCopiedKey(null);
+    setMerged(null);
+    setMergeError("");
     try {
       const res = await fetch("/api/video-download/resolve", {
         method: "POST",
@@ -139,15 +153,61 @@ export default function VideoDownloader() {
     setResolving(false);
   };
 
-  const handleCopy = async () => {
-    if (!result?.url) return;
+  const handleCopy = async (text: string, key: string) => {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(result.url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 2000);
     } catch {
       // ignore
     }
+  };
+
+  const handleMerge = async () => {
+    if (!result?.video_url || !result?.audio_url) return;
+    setMerging(true);
+    setMergeError("");
+    setMerged(null);
+    setMergeProgress(0);
+    setMergeStage("Đang gửi yêu cầu...");
+    try {
+      const res = await fetch("/api/video-merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          video_url: result.video_url,
+          audio_url: result.audio_url,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMergeError(data.detail || "Merge thất bại.");
+        setMerging(false);
+        return;
+      }
+
+      const jobId = data.job_id;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 800));
+        const sres = await fetch(`/api/video-merge/${jobId}`);
+        if (!sres.ok) continue;
+        const s = await sres.json();
+        setMergeProgress(s.progress ?? 0);
+        setMergeStage(s.stage ?? "");
+        if (s.status === "done") {
+          setMerged({ url: s.url, filename: s.filename });
+          break;
+        }
+        if (s.status === "error") {
+          setMergeError(s.error || "Merge thất bại.");
+          break;
+        }
+      }
+    } catch {
+      setMergeError("Lỗi kết nối tới backend.");
+    }
+    setMerging(false);
   };
 
   return (
@@ -181,8 +241,7 @@ export default function VideoDownloader() {
           Tải video từ Douyin / TikTok
         </h1>
         <p className="mt-4 text-sm text-ink-muted max-w-lg leading-relaxed">
-          Dán link chia sẻ Douyin/TikTok để lấy URL video gốc trong URL trả về
-          có chữ ký &amp; thời hạn — chỉ dùng tạm thời.
+          Dán link chia sẻ Douyin/TikTok để lấy URL
         </p>
         <button
           onClick={handleOpenLogin}
@@ -244,7 +303,7 @@ export default function VideoDownloader() {
             <div className="double-bezel-inner p-5 sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
-                  2. URL video
+                  2. URL video ({result.urls.length})
                 </p>
                 {result.title && (
                   <span className="text-[11px] text-ink-light truncate ml-4">
@@ -253,52 +312,136 @@ export default function VideoDownloader() {
                 )}
               </div>
 
-              <div className="flex items-stretch gap-2">
-                <div className="flex-1 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.06] px-3 py-3 text-[12px] font-mono text-ink break-all leading-relaxed">
-                  {result.url}
-                </div>
-                <div className="flex flex-col gap-2 flex-shrink-0">
-                  <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
-                  >
-                    {copied ? (
-                      <>
-                        <IconCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="text-emerald-700">Đã sao chép</span>
-                      </>
-                    ) : (
-                      <>
-                        <IconCopy className="w-3.5 h-3.5" />
-                        <span>Sao chép</span>
-                      </>
-                    )}
-                  </button>
-                  <a
-                    href={result.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-all duration-300 active:scale-[0.97]"
-                  >
-                    <IconLink className="w-3.5 h-3.5" />
-                    Mở link
-                  </a>
-                </div>
+              <div className="space-y-2">
+                {result.urls.map((u, i) => (
+                  <div key={u} className="flex items-stretch gap-2">
+                    <div className="flex-1 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.06] px-3 py-3 text-[12px] font-mono text-ink break-all leading-relaxed">
+                      <span className="text-ink-light mr-2">#{i + 1}</span>
+                      {u}
+                    </div>
+                    <div className="flex flex-col gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => handleCopy(u, u)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
+                      >
+                        {copiedKey === u ? (
+                          <>
+                            <IconCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            <span className="text-emerald-700">
+                              Đã sao chép
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <IconCopy className="w-3.5 h-3.5" />
+                            <span>Sao chép</span>
+                          </>
+                        )}
+                      </button>
+                      <a
+                        href={u}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-all duration-300 active:scale-[0.97]"
+                      >
+                        <IconLink className="w-3.5 h-3.5" />
+                        Mở link
+                      </a>
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              <div className="mt-4">
-                <iframe
-                  src={result.url}
-                  title="Video preview"
-                  className="w-full aspect-video rounded-xl ring-1 ring-black/[0.06] bg-black"
-                  allow="autoplay; fullscreen; encrypted-media"
-                  allowFullScreen
-                  referrerPolicy="no-referrer"
-                />
-                <p className="mt-2 text-[11px] text-ink-light">
-                  Nếu khung trống, CDN đang chặn nhúng — dùng nút "Mở link" để xem trực tiếp.
-                </p>
-              </div>
+              {result.urls.length > 1 && (
+                <button
+                  onClick={() => handleCopy(result.urls.join("\n"), "all")}
+                  className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
+                >
+                  {copiedKey === "all" ? (
+                    <>
+                      <IconCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">
+                        Đã sao chép tất cả
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <IconCopy className="w-3.5 h-3.5" />
+                      <span>Sao chép tất cả</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {result.audio_url && result.video_url && (
+                <div className="mt-4 p-4 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.06]">
+                  <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-2">
+                    3. Merge video + audio
+                  </p>
+                  {merging ? (
+                    <div className="mt-2">
+                      <div className="flex items-center gap-2 text-[13px] text-ink mb-2">
+                        <IconSpinner className="w-3.5 h-3.5" />
+                        <span>{mergeStage || "Đang xử lý..."}</span>
+                        <span className="ml-auto text-[12px] text-ink-muted font-mono">
+                          {mergeProgress}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-black/[0.06] overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                          style={{ width: `${mergeProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : merged ? (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={merged.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-all duration-300 active:scale-[0.97]"
+                      >
+                        <IconLink className="w-3.5 h-3.5" />
+                        Tải video đã merge
+                      </a>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleMerge}
+                      disabled={merging}
+                      className="btn-island-primary group text-sm !px-5 !py-2.5"
+                    >
+                      <IconLink className="w-3.5 h-3.5" />
+                      <span className="tracking-tight">
+                        Merge &amp; tải video hoàn chỉnh
+                      </span>
+                    </button>
+                  )}
+                  {mergeError && (
+                    <div className="mt-3 p-3 rounded-xl bg-red-500/8 ring-1 ring-red-500/15 text-[12px] text-red-600/80 whitespace-pre-wrap">
+                      {mergeError}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {result.urls[0] && (
+                <div className="mt-4">
+                  <iframe
+                    src={result.urls[0]}
+                    title="Video preview"
+                    className="w-full aspect-video rounded-xl ring-1 ring-black/[0.06] bg-black"
+                    allow="autoplay; fullscreen; encrypted-media"
+                    allowFullScreen
+                    referrerPolicy="no-referrer"
+                  />
+                  <p className="mt-2 text-[11px] text-ink-light">
+                    Nếu khung trống, CDN đang chặn nhúng — dùng nút "Mở link" để
+                    xem trực tiếp.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </AnimatedBlock>

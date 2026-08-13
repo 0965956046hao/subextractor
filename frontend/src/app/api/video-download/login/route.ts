@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function POST() {
   let handle: BrowserHandle;
   try {
-    handle = await openBrowser();
+    handle = await openBrowser({ headless: false });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
