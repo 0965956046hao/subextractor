@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.config import settings
 from app.models import UpdateSrtRequest
@@ -103,6 +103,68 @@ async def download_muxed(video_id: str):
     return FileResponse(str(path), media_type="video/mp4", filename=path.name)
 
 
+# ── POST /api/preview/subtitle/{video_id} ──
+
+@router.post("/api/preview/subtitle/{video_id}")
+async def preview_subtitle(video_id: str, request: Request):
+    """Render the first frame with a subtitle overlay using a given style, for
+    the manual "tự chỉnh vị trí" preview step.
+
+    Body: { region: {x1,y1,x2,y2}, style: {font_size, margin_v, ...}, text? }
+    Returns a JPEG of the frame with the subtitle burned at the given style.
+    """
+    import cv2
+
+    video_path = _video_path(video_id)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    region = body.get("region")
+    style_override = body.get("style") or {}
+    sample_text = body.get("text") or "Phụ đề tiếng Việt"
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise HTTPException(500, "Không đọc được video")
+    ok, frame = cap.read()
+    vh, vw = frame.shape[:2]
+    cap.release()
+    if not ok:
+        raise HTTPException(500, "Không đọc được frame từ video")
+
+    from app.services.hardcode_service import (
+        auto_fit_style,
+        apply_style_override,
+        _find_font,
+        _render_subtitle,
+        _overlay_subtitle,
+    )
+    from app.routers.config_router import get_subtitle_style
+
+    # Base style: start from the region-fit (matches what auto_fit would pick),
+    # then let the user override font size / vertical position / etc.
+    style = get_subtitle_style()
+    if region and isinstance(region, dict):
+        style = auto_fit_style(style, region, vh, vw)
+    style = apply_style_override(style, style_override)
+
+    font_path = _find_font(
+        style.get("font_family", "Arial"),
+        style.get("bold"),
+        style.get("italic"),
+    )
+    overlay = _render_subtitle(sample_text, vw, vh, font_path, style, fixed_size=True)
+    frame = _overlay_subtitle(frame, overlay)
+
+    ok_jpg, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ok_jpg:
+        raise HTTPException(500, "Không encode được JPEG")
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
 # ── POST /api/hardcode/{video_id} ──
 
 @router.post("/api/hardcode/{video_id}")
@@ -113,6 +175,25 @@ async def hardcode_subtitles(video_id: str, request: Request):
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
+
+    # Optional body: { auto_fit: bool, region: {x1,y1,x2,y2}, style: {...} }
+    auto_fit = False
+    region = None
+    style = None
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            auto_fit = bool(raw.get("auto_fit", False))
+            region = raw.get("region")
+            if region and not all(
+                isinstance(region.get(k), (int, float))
+                for k in ("x1", "y1", "x2", "y2")
+            ):
+                region = None
+            if isinstance(raw.get("style"), dict):
+                style = raw["style"]
+    except Exception:
+        pass
 
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -125,9 +206,15 @@ async def hardcode_subtitles(video_id: str, request: Request):
         "progress": 0,
         "error": None,
         "cancelled": False,
+        "auto_fit": auto_fit,
+        "region": region,
+        "style": style,
     }
     jobs[job_id] = job
-    logger.info("hardcode job %s: queued for %s", job_id, video_id)
+    logger.info(
+        "hardcode job %s: queued for %s (auto_fit=%s)",
+        job_id, video_id, auto_fit,
+    )
     await queue.put(job_id)
     return {"job_id": job_id}
 

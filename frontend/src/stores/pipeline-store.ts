@@ -1,12 +1,13 @@
 "use client";
 
 import { create } from "zustand";
-import type { Region } from "@/lib/api";
+import type { Region, SubtitleStyle } from "@/lib/api";
 
 export const STEPS = [
   { label: "Phân tích link", detail: "Mở link Douyin lấy URL video" },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
   { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
+  { label: "Chỉnh kích thước & vị trí sub", detail: "Xem trước, chỉnh cỡ chữ và vị trí" },
   { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
   { label: "Dịch Gemini", detail: "Dịch phụ đề sang tiếng Việt" },
@@ -19,6 +20,7 @@ export type Stage =
   | "resolving"
   | "merging"
   | "region"
+  | "subtitle_preview"
   | "processing"
   | "context"
   | "translating"
@@ -32,12 +34,13 @@ export const STEP_STAGE: Record<string, number> = {
   resolving: 0,
   merging: 1,
   region: 2,
-  processing: 3,
-  context: 4,
-  translating: 5,
-  saving: 5,
-  dub: 6,
-  muxing: 7,
+  subtitle_preview: 3,
+  processing: 4,
+  context: 5,
+  translating: 6,
+  saving: 6,
+  dub: 7,
+  muxing: 8,
 };
 
 export const DEFAULT_REGION: Region = { x1: 0.114, y1: 0.748, x2: 0.863, y2: 0.972 };
@@ -74,10 +77,12 @@ export interface Pipeline {
   contextOn: boolean;
   region: Region | null;
   regionMode: "manual" | "auto";
+  subtitleStyle: Partial<SubtitleStyle> | null;
   dubEngine: "google" | "capcut";
   dubVoice: string;
   muteOriginal: boolean;
   originalGainDb: number;
+  autoFit: boolean;
 }
 
 export interface DubOptions {
@@ -96,12 +101,13 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
   rerunPipeline: (id: string, step: number) => void;
   confirmRegion: (id: string, region: Region) => void;
+  confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
 }
 
@@ -113,7 +119,8 @@ function newPipeline(
   id: string,
   url: string,
   regionMode: "manual" | "auto" = "manual",
-  dub: Partial<DubOptions> = {}
+  dub: Partial<DubOptions> = {},
+  autoFit = true,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -142,18 +149,20 @@ function newPipeline(
     contextOn: false,
     region: null,
     regionMode,
+    subtitleStyle: null,
     dubEngine: d.engine,
     dubVoice: d.voice,
     muteOriginal: d.muteOriginal,
     originalGainDb: d.originalGainDb,
+    autoFit,
   };
 }
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}) => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit)] }));
     enqueue(id);
     return id;
   },
@@ -178,13 +187,29 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     if (!s) return;
     set((st) => ({
       pipelines: st.pipelines.map((p) =>
-        p.id === id ? { ...p, region, stage: "processing" } : p
+        p.id === id
+          ? { ...p, region, stage: p.autoFit ? "processing" : "subtitle_preview" }
+          : p
       ),
     }));
     const resolve = regionWaiters.get(id);
     if (resolve) {
       regionWaiters.delete(id);
       resolve.resolve(region);
+    }
+  },
+  confirmSubtitleStyle: (id, style) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s) return;
+    set((st) => ({
+      pipelines: st.pipelines.map((p) =>
+        p.id === id ? { ...p, subtitleStyle: style, stage: "processing" } : p
+      ),
+    }));
+    const resolve = subtitleStyleWaiters.get(id);
+    if (resolve) {
+      subtitleStyleWaiters.delete(id);
+      resolve.resolve(style);
     }
   },
   cancelPipeline: async (id) => {
@@ -194,6 +219,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     abortedPipelines.add(id);
     set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
     rejectRegion(id);
+    rejectSubtitleStyle(id);
     if (videoId) {
       try {
         await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -302,6 +328,7 @@ let queue: { id: string; startStep: number }[] = [];
 let processing = false;
 const abortedPipelines = new Set<string>();
 const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
+const subtitleStyleWaiters = new Map<string, { resolve: (s: Partial<SubtitleStyle>) => void; reject: () => void }>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -313,6 +340,20 @@ function rejectRegion(id: string) {
   const w = regionWaiters.get(id);
   if (w) {
     regionWaiters.delete(id);
+    w.reject();
+  }
+}
+
+function waitForSubtitleStyle(id: string): Promise<Partial<SubtitleStyle>> {
+  return new Promise<Partial<SubtitleStyle>>((resolve, reject) => {
+    subtitleStyleWaiters.set(id, { resolve, reject });
+  });
+}
+
+function rejectSubtitleStyle(id: string) {
+  const w = subtitleStyleWaiters.get(id);
+  if (w) {
+    subtitleStyleWaiters.delete(id);
     w.reject();
   }
 }
@@ -422,7 +463,7 @@ async function runPipeline(id: string, startStep = 0) {
   const ocrType = detectOcrType();
   let region = cur.region;
 
-  const stageForStart = ["resolving", "merging", "region", "processing", "context", "translating", "dub", "muxing"][startStep] ?? "resolving";
+  const stageForStart = ["resolving", "merging", "region", "subtitle_preview", "processing", "context", "translating", "dub", "muxing"][startStep] ?? "resolving";
 
   patch(id, {
     status: "running",
@@ -439,6 +480,7 @@ async function runPipeline(id: string, startStep = 0) {
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
     region: startStep === 2 ? null : cur.region,
+    subtitleStyle: startStep <= 3 ? null : cur.subtitleStyle,
   });
 
   try {
@@ -543,15 +585,38 @@ async function runPipeline(id: string, startStep = 0) {
       }
     }
 
-    // 3. OCR
+    // 3. Subtitle style preview: only when NOT auto-fit (manual adjust).
+    //    Skipped when auto_fit is on (backend computes size automatically).
     if (startStep <= 3) {
+      if (cur.autoFit) {
+        markStepSkipped(id, 3);
+        appendLog(id, "Tự động khớp vị trí — bỏ qua bước chỉnh tay.");
+      } else {
+        patch(id, { stage: "subtitle_preview" });
+        markStepStart(id, 3);
+        appendLog(id, "Chỉnh kích thước & vị trí phụ đề trên frame đầu tiên, nhấn Xác nhận để tiếp tục...");
+        let style = cur.subtitleStyle;
+        if (!style) {
+          style = await waitForSubtitleStyle(id);
+        }
+        patch(id, { subtitleStyle: style });
+        appendLog(
+          id,
+          `Cỡ chữ ${style.font_size ?? 48}px · cách đáy ${style.margin_v ?? 40}px`,
+        );
+        markStepEnd(id, 3);
+      }
+    }
+
+    // 4. OCR
+    if (startStep <= 4) {
       if (!region) {
         region = DEFAULT_REGION;
         patch(id, { region });
         markStepSkipped(id, 2);
       }
       patch(id, { stage: "processing" });
-      markStepStart(id, 3);
+      markStepStart(id, 4);
       appendLog(id, "Chạy OCR trích phụ đề...");
       const pr = await fetch("/api/process", {
         method: "POST",
@@ -565,23 +630,23 @@ async function runPipeline(id: string, startStep = 0) {
       });
       const pd = await pr.json();
       if (!pr.ok) throw new Error(pd.detail || "Không thể bắt đầu OCR");
-      const ps = await pollJob(pd.job_id, tick(3));
+      const ps = await pollJob(pd.job_id, tick(4));
       if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
       appendLog(id, "OCR xong, đã có phụ đề.");
-      markStepEnd(id, 3);
+      markStepEnd(id, 4);
     }
 
-    // 4. Context
-    if (startStep <= 4) {
+    // 5. Context
+    if (startStep <= 5) {
       patch(id, { stage: "context" });
-      markStepStart(id, 4);
+      markStepStart(id, 5);
       appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
       try {
         const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
         const cd = await cr.json();
         if (cr.ok && cd.job_id) {
           patch(id, { contextOn: true });
-          const cs = await pollJob(cd.job_id, tick(4));
+          const cs = await pollJob(cd.job_id, tick(5));
           appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
         } else {
           appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
@@ -589,13 +654,13 @@ async function runPipeline(id: string, startStep = 0) {
       } catch {
         appendLog(id, "Bỏ qua ngữ cảnh.");
       }
-      markStepEnd(id, 4);
+      markStepEnd(id, 5);
     }
 
-    // 5. Translate + save
-    if (startStep <= 5) {
+    // 6. Translate + save
+    if (startStep <= 6) {
       patch(id, { stage: "translating" });
-      markStepStart(id, 5);
+      markStepStart(id, 6);
       appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
       const tr = await fetch(`/api/translate/${videoId}`, {
         method: "POST",
@@ -604,7 +669,7 @@ async function runPipeline(id: string, startStep = 0) {
       });
       const td = await tr.json();
       if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-      const ts = await pollJob(td.job_id, tick(5));
+      const ts = await pollJob(td.job_id, tick(6));
       if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
       appendLog(id, "Dịch xong.");
 
@@ -617,13 +682,13 @@ async function runPipeline(id: string, startStep = 0) {
         headers: JSON_HEADERS,
         body: JSON.stringify({ content: srtText }),
       });
-      markStepEnd(id, 5);
+      markStepEnd(id, 6);
     }
 
-    // 6. Dub
-    if (startStep <= 6) {
+    // 7. Dub
+    if (startStep <= 7) {
       patch(id, { stage: "dub" });
-      markStepStart(id, 6);
+      markStepStart(id, 7);
       const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
       const voice = cur.dubVoice || (engine === "capcut" ? "BV421_vivn_streaming" : "vi-VN-Standard-B");
       appendLog(id, engine === "capcut"
@@ -642,7 +707,7 @@ async function runPipeline(id: string, startStep = 0) {
         });
         const dd = await dr.json();
         if (dr.ok && dd.job_id) {
-          const ds = await pollJob(dd.job_id, tick(6));
+          const ds = await pollJob(dd.job_id, tick(7));
           if (ds.status === "done") {
             patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
             appendLog(id, "Lồng tiếng Việt xong.");
@@ -655,20 +720,28 @@ async function runPipeline(id: string, startStep = 0) {
       } catch {
         appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
       }
-      markStepEnd(id, 6);
+      markStepEnd(id, 7);
     }
 
-    // 7. Hardcode
-    if (startStep <= 7) {
+    // 8. Hardcode
+    if (startStep <= 8) {
       patch(id, { stage: "muxing" });
-      markStepStart(id, 7);
+      markStepStart(id, 8);
       appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
-      const hr = await fetch(`/api/hardcode/${videoId}`, { method: "POST" });
+      const hr = await fetch(`/api/hardcode/${videoId}`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          auto_fit: cur.autoFit,
+          region: cur.region ?? DEFAULT_REGION,
+          style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
+        }),
+      });
       const hd = await hr.json();
       if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
-      const hs = await pollJob(hd.job_id, tick(7));
+      const hs = await pollJob(hd.job_id, tick(8));
       if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
-      markStepEnd(id, 7);
+      markStepEnd(id, 8);
     }
 
     patch(id, {

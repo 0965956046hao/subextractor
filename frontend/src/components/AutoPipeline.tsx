@@ -5,10 +5,12 @@ import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
 import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, type PipelineHealth, type CapCutVoice } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
+import SubtitlePreview from "@/components/SubtitlePreview";
 import {
   usePipelineStore,
   STEPS,
   STEP_STAGE,
+  DEFAULT_REGION,
   langLabel,
   fmtElapsed,
   type Pipeline,
@@ -51,14 +53,20 @@ function stepDetail(p: Pipeline): string {
         ? `Đã chọn vùng x ${p.region.x1}–${p.region.x2} · y ${p.region.y1}–${p.region.y2}`
         : "Kéo vùng quét lấy phụ đề trên video";
     case 3:
-      return p.ocrEngine ? `${p.ocrEngine} · ${langLabel(p.ocrLang)}` : "Nhận dạng chữ trong vùng đã chọn";
+      return p.subtitleStyle
+        ? `Cỡ chữ ${p.subtitleStyle.font_size ?? 48}px · cách đáy ${p.subtitleStyle.margin_v ?? 40}px`
+        : p.autoFit
+        ? "Tự động khớp vị trí sub gốc"
+        : "Xem trước, chỉnh cỡ chữ và vị trí phụ đề";
     case 4:
-      return `Gemini Vision · ${p.contextOn ? "đã bật" : "chưa bật"}`;
+      return p.ocrEngine ? `${p.ocrEngine} · ${langLabel(p.ocrLang)}` : "Nhận dạng chữ trong vùng đã chọn";
     case 5:
-      return p.srcLang ? `Gemini · ${langLabel(p.srcLang)} → Tiếng Việt` : "Gemini dịch phụ đề sang tiếng Việt";
+      return `Gemini Vision · ${p.contextOn ? "đã bật" : "chưa bật"}`;
     case 6:
-      return "Demucs tách giọng + TTS Việt (giữ nhạc nền)";
+      return p.srcLang ? `Gemini · ${langLabel(p.srcLang)} → Tiếng Việt` : "Gemini dịch phụ đề sang tiếng Việt";
     case 7:
+      return "Demucs tách giọng + TTS Việt (giữ nhạc nền)";
+    case 8:
       return "FFmpeg nhúng SRT (ASS BlackBox) vào MP4";
     default:
       return "";
@@ -85,6 +93,7 @@ export default function AutoPipeline() {
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
   const [muteOriginal, setMuteOriginal] = useState(true);
   const [originalGainDb, setOriginalGainDb] = useState(6);
+  const [autoFitSubs, setAutoFitSubs] = useState(true);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -205,7 +214,7 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    });
+    }, autoFitSubs);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
@@ -525,6 +534,41 @@ export default function AutoPipeline() {
                     : `Giọng nói và nhạc nền gốc sẽ giảm ${originalGainDb} dB để giọng đọc Việt nổi bật hơn.`}
                 </p>
               )}
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4 flex items-center gap-3 flex-wrap">
+                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+                  Căn chỉnh phụ đề:
+                </span>
+                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+                  <button
+                    onClick={() => setAutoFitSubs(true)}
+                    disabled={optionsDisabled}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      autoFitSubs
+                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        : "text-ink-light hover:text-ink"
+                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    Tự động khớp vị trí sub gốc
+                  </button>
+                  <button
+                    onClick={() => setAutoFitSubs(false)}
+                    disabled={optionsDisabled}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      !autoFitSubs
+                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        : "text-ink-light hover:text-ink"
+                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    Tự chỉnh kích thước & vị trí
+                  </button>
+                </div>
+                <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                  {autoFitSubs
+                    ? "Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video."
+                    : "Thêm bước xem trước trong pipeline để bạn chỉnh cỡ chữ và vị trí phụ đề trước khi nhúng."}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -610,7 +654,7 @@ export default function AutoPipeline() {
                             <p className="text-[11px] text-blue-600/80 mt-1 truncate">
                               {(() => {
                                 const idx = STEP_STAGE[p.stage];
-                                return idx != null ? `Bước ${idx + 1}/8 · ${STEPS[idx]?.label ?? p.stage} · ${p.progress}%` : p.stage;
+                                return idx != null ? `Bước ${idx + 1}/9 · ${STEPS[idx]?.label ?? p.stage} · ${p.progress}%` : p.stage;
                               })()}
                             </p>
                           )}
@@ -695,6 +739,7 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
   const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
+  const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -737,6 +782,16 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
         {p.stage === "region" && p.videoId && (
           <div className="mb-5">
             <RegionSelector videoId={p.videoId} onConfirmed={(r) => confirmRegion(p.id, r)} />
+          </div>
+        )}
+
+        {p.stage === "subtitle_preview" && p.videoId && (
+          <div className="mb-5">
+            <SubtitlePreview
+              videoId={p.videoId}
+              region={p.region ?? DEFAULT_REGION}
+              onConfirmed={(s) => confirmSubtitleStyle(p.id, s)}
+            />
           </div>
         )}
 

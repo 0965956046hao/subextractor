@@ -137,7 +137,10 @@ def generate_segments_to_dir(
     job_id = submit_job(segments, voice, rate, prefix)
     logger.info("capcut tts job %s submitted (%d segments, voice=%s)", job_id, len(segments), voice)
 
-    job = poll_job(job_id)
+    # First-time voice synthesis is slow (~3s/segment); scale the poll timeout
+    # with the segment count so long videos don't hit the default ceiling.
+    timeout = max(settings.capcut_tts_timeout, len(segments) * 10 + 120)
+    job = poll_job(job_id, timeout=timeout)
     status = job.get("status")
     if status != "done":
         raise CapCutTTSError(f"Job TTS CapCut {job_id} kết thúc với status={status}: {job.get('error', '')}")

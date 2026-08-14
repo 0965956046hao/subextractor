@@ -20,6 +20,26 @@ from app.routers.config_router import get_subtitle_style
 logger = logging.getLogger(__name__)
 
 
+def apply_style_override(style: dict, override: dict | None) -> dict:
+    """Coerce + merge a partial style override onto a base style dict."""
+    out = dict(style)
+    if not isinstance(override, dict):
+        return out
+    for k, v in override.items():
+        if v is None:
+            continue
+        try:
+            if isinstance(out.get(k), bool):
+                out[k] = bool(v)
+            elif isinstance(out.get(k), (int, float)):
+                out[k] = int(v)
+            else:
+                out[k] = v
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def _ass_time(sec: float) -> str:
     h = int(sec // 3600)
     m = int((sec % 3600) // 60)
@@ -99,6 +119,64 @@ Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bol
     return "\n".join(lines) + "\n"
 
 
+def auto_fit_style(
+    style: dict,
+    region: dict,
+    vh: int,
+    vw: int,
+    srt_content: str = "",
+) -> dict:
+    """Derive a SINGLE uniform font size + margin_v so the burned sub covers the
+    original sub region.
+
+    region is normalized (0–1). The font size is computed ONCE from the region
+    height (smallest size whose box just covers the region), then uniformly
+    shrunk (still one size for all lines) only if the widest SRT line would
+    overflow the region width. margin_v places the box bottom inside the region.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    s = dict(style)
+    x1 = max(0.0, min(1.0, float(region.get("x1", 0.0))))
+    y1 = max(0.0, min(1.0, float(region.get("y1", 0.0))))
+    x2 = max(0.0, min(1.0, float(region.get("x2", 1.0))))
+    y2 = max(0.0, min(1.0, float(region.get("y2", 1.0))))
+    rh = max(0.01, y2 - y1)
+    rw = max(0.05, x2 - x1)
+
+    region_h = max(40, int(rh * vh))
+    region_w = max(100, int(rw * vw))
+
+    font_path = _find_font(
+        s.get("font_family", "Arial"),
+        bool(s.get("bold")),
+        bool(s.get("italic")),
+    )
+    texts = [e.text for e in parse_srt(srt_content)] or [" "]
+
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+
+    # Smallest font whose rendered box (~ font*1.25 + 32px padding) covers the region height
+    font_px = max(18, int((region_h - 32) / 1.25))
+    font_px = min(240, font_px)
+
+    # Uniformly shrink while the widest line still overflows the region width.
+    while font_px > 18:
+        try:
+            font = ImageFont.truetype(font_path, font_px) if font_path else ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+        widest = max((draw.textbbox((0, 0), t, font=font)[2] for t in texts), default=0)
+        if widest <= region_w - 16:
+            break
+        font_px -= 2
+
+    # _render_subtitle scales font_size by vh/1080, so store the 1080p reference.
+    s["font_size"] = max(18, int(font_px * 1080 / vh))
+    s["margin_v"] = max(0, int((1 - y2) * vh - 40))
+    return s
+
+
 def _has_subtitles_filter() -> bool:
     """Check whether ffmpeg was built with libass (subtitles filter)."""
     try:
@@ -155,7 +233,14 @@ def _find_font(family: str = "Arial", bold: bool = False, italic: bool = False) 
     return None
 
 
-def _render_subtitle(text: str, vw: int, vh: int, font_path: str | None, style: dict | None = None):
+def _render_subtitle(
+    text: str,
+    vw: int,
+    vh: int,
+    font_path: str | None,
+    style: dict | None = None,
+    fixed_size: bool = False,
+):
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
 
@@ -183,16 +268,17 @@ def _render_subtitle(text: str, vw: int, vh: int, font_path: str | None, style: 
     draw = ImageDraw.Draw(img)
 
     max_w = max(200, vw - 160)
-    # shrink text if too wide for the video
-    while font_size > 16:
-        try:
-            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
-        except Exception:
-            font = ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), text, font=font)
-        if bbox[2] - bbox[0] <= max_w:
-            break
-        font_size -= 2
+    # shrink text if too wide for the video (unless a single uniform size is required)
+    if not fixed_size:
+        while font_size > 16:
+            try:
+                font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+            except Exception:
+                font = ImageFont.load_default()
+            bbox = draw.textbbox((0, 0), text, font=font)
+            if bbox[2] - bbox[0] <= max_w:
+                break
+            font_size -= 2
 
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
@@ -252,6 +338,7 @@ def burn_subtitles_pillow(
     progress_callback=None,
     audio_source: str | None = None,
     style: dict | None = None,
+    fixed_size: bool = False,
 ):
     """Burn subtitles using OpenCV + Pillow (no libass required)."""
     import cv2
@@ -293,7 +380,7 @@ def burn_subtitles_pillow(
         if active:
             text = " ".join(e.text for e in active)
             if text not in cache:
-                cache[text] = _render_subtitle(text, vw, vh, font_path, style)
+                cache[text] = _render_subtitle(text, vw, vh, font_path, style, fixed_size)
             frame = _overlay_subtitle(frame, cache[text])
         writer.write(frame)
         idx += 1
@@ -354,8 +441,20 @@ def run_hardcode_sync(
     total_dur = _get_duration(video_path_str)
     vw, vh = _get_video_resolution(video_path_str)
 
-    style = get_subtitle_style()
     srt_content = Path(srt_path_str).read_text(encoding="utf-8")
+    style = get_subtitle_style()
+    if job.get("auto_fit") and job.get("region"):
+        style = auto_fit_style(style, job["region"], vh, vw, srt_content)
+        logger.info(
+            "hardcode job %s: auto-fit ON → font_size=%s margin_v=%s",
+            job_id, style["font_size"], style["margin_v"],
+        )
+    elif job.get("style"):
+        style = apply_style_override(style, job["style"])
+        logger.info(
+            "hardcode job %s: manual style → font_size=%s margin_v=%s",
+            job_id, style.get("font_size"), style.get("margin_v"),
+        )
     ass_content = srt_to_ass_blackbox(srt_content, vw, vh, style)
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
@@ -394,6 +493,7 @@ def run_hardcode_sync(
             progress_callback=progress_cb,
             audio_source=str(audio_src) if use_dubbed else None,
             style=style,
+            fixed_size=bool(job.get("auto_fit")),
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     capcut_tts_url: str = "http://localhost:8100"
     capcut_tts_default_voice: str = "BV421_vivn_streaming"
     capcut_tts_default_rate: str = "1.0"
-    capcut_tts_timeout: int = 120
+    capcut_tts_timeout: int = 600
 
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
