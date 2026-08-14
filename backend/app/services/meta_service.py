@@ -21,7 +21,6 @@ PROMPT = """Parse the following video metadata into a valid JSON object with thi
   "original_description": "Original short description"
 }}
 
-Rules:
 - title: catchy Vietnamese title, include episode number if provided
 - description: detailed Vietnamese description with paragraphs separated by \\n\\n, include info about genre, episode number, series name
 - tags: 10-15 relevant search keywords in Vietnamese and original language

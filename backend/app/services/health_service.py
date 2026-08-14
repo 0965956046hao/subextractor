@@ -44,11 +44,12 @@ def _resolve_tts_credentials() -> str:
 
 
 def _resolve_fal_key() -> str:
-    return (
+    key = (
         settings.fal_key
         or os.environ.get("FAL_KEY", "")
         or _read_user_config().get("fal_key", "")
     )
+    return key.strip()
 
 
 def check_gemini() -> dict:

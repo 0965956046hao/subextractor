@@ -326,7 +326,13 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
       const r = await fetch(`/api/youtube/upload/${jobId}`);
       if (!r.ok) continue;
       const d = await r.json();
-      onTick({ progress: d.progress ?? 0 });
+      const lines: string[] = Array.isArray(d.output_lines) ? d.output_lines : [];
+      const logs: LogEntry[] = lines.map((m: string) => ({
+        message: m,
+        ts: 0,
+        level: "info",
+      }));
+      onTick({ progress: d.progress ?? 0, logs });
       if (d.status === "done") return d;
       if (d.status === "error") return { status: "error", error: d.error };
     } catch {
@@ -818,16 +824,39 @@ async function runPipeline(id: string, startStep = 0) {
       } else {
         appendLog(id, "Cập nhật thumbnail (fal.ai)...");
         try {
-          const fr = await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
-          const fd = await fr.json();
-          if (fr.ok && fd.thumbnail_url) {
-            patch(id, { updatedThumbnailUrl: fd.thumbnail_url });
-            appendLog(id, `Thumbnail mới: ${fd.thumbnail_url}`);
-          } else {
-            appendLog(id, `Không cập nhật được thumbnail: ${fd.detail || "lỗi"}`);
+          await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
+
+          const deadline = Date.now() + 100_000;
+          let thumbUrl: string | null = null;
+          let errorMsg: string | null = null;
+          let done = false;
+
+          while (!done && Date.now() < deadline) {
+            try {
+              const st = await fetch(`/api/thumbnail/${videoId}/status`).then((r) => r.json());
+              if (st.status === "done" && st.thumbnail_url) {
+                thumbUrl = st.thumbnail_url;
+                done = true;
+              } else if (st.status === "error") {
+                errorMsg = st.error || "lỗi";
+                done = true;
+              }
+            } catch {
+              // ignore transient poll errors
+            }
+            if (!done) await new Promise((r) => setTimeout(r, 2000));
           }
-        } catch {
-          appendLog(id, "Bỏ qua cập nhật thumbnail (lỗi).");
+
+          if (thumbUrl) {
+            patch(id, { updatedThumbnailUrl: thumbUrl });
+            appendLog(id, `Thumbnail mới: ${thumbUrl}`);
+          } else if (errorMsg) {
+            appendLog(id, `Không cập nhật được thumbnail: ${errorMsg}`);
+          } else {
+            appendLog(id, "Hết thời gian chờ thumbnail (100s).");
+          }
+        } catch (e) {
+          appendLog(id, `Bỏ qua cập nhật thumbnail (lỗi): ${(e as Error)?.message || e}`);
         }
         markStepEnd(id, 9);
       }

@@ -50,7 +50,7 @@ async def save_config(body: SaveConfigRequest):
         cfg["gemini_api_key"] = body.gemini_api_key
 
     if body.fal_key:
-        cfg["fal_key"] = body.fal_key
+        cfg["fal_key"] = body.fal_key.strip()
 
     if body.google_tts_json:
         # Validate it's a valid service account JSON

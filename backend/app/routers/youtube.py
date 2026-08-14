@@ -247,7 +247,7 @@ async def setup_youtube_environment():
 
     # Build youtubeuploader
     output_lines.append("Building youtubeuploader...")
-    rc, _, stderr = run(["go", "build", "-o", "youtubeuploader", "."])
+    rc, _, stderr = run(["go", "build", "-o", "youtubeuploader", "./cmd/youtubeuploader"])
     if rc != 0:
         return {"status": "error", "output": output_lines,
                 "error": f"Build failed: {stderr}"}
