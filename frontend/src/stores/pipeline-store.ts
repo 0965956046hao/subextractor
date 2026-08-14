@@ -40,7 +40,12 @@ export const STEP_STAGE: Record<string, number> = {
   muxing: 7,
 };
 
-export const DEFAULT_REGION: Region = { x1: 0.114, y1: 0.748, x2: 0.863, y2: 0.972 };
+export const DEFAULT_REGION: Region = {
+  x1: 0.114,
+  y1: 0.748,
+  x2: 0.863,
+  y2: 0.972,
+};
 
 export interface LogEntry {
   message: string;
@@ -52,6 +57,7 @@ export interface Pipeline {
   id: string;
   url: string;
   title: string;
+  thumbnail: string | null;
   status: "queued" | "running" | "done" | "error";
   stage: Stage;
   progress: number;
@@ -85,17 +91,23 @@ interface PipelineState {
   rerunPipeline: (id: string, step: number) => void;
   confirmRegion: (id: string, region: Region) => void;
   cancelPipeline: (id: string) => void;
+  hydrate: (pipelines: Pipeline[]) => void;
 }
 
 function emptySteps<T>(v: T): T[] {
   return STEPS.map(() => v);
 }
 
-function newPipeline(id: string, url: string, regionMode: "manual" | "auto" = "auto"): Pipeline {
+function newPipeline(
+  id: string,
+  url: string,
+  regionMode: "manual" | "auto" = "auto",
+): Pipeline {
   return {
     id,
     url,
     title: "",
+    thumbnail: null,
     status: "queued",
     stage: "idle",
     progress: 0,
@@ -121,26 +133,48 @@ function newPipeline(id: string, url: string, regionMode: "manual" | "auto" = "a
   };
 }
 
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePersist() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const { pipelines } = usePipelineStore.getState();
+    fetch("/api/pipelines", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pipelines }),
+    }).catch(() => {});
+  }, 800);
+}
+
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
   addPipeline: (url, regionMode = "auto") => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode)] }));
+    set((s) => ({
+      pipelines: [...s.pipelines, newPipeline(id, url, regionMode)],
+    }));
     enqueue(id);
+    schedulePersist();
     return id;
   },
   updatePipeline: (id, patch) => {
     set((s) => ({
       pipelines: s.pipelines.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     }));
+    schedulePersist();
   },
   removePipeline: (id) => {
     set((s) => ({ pipelines: s.pipelines.filter((p) => p.id !== id) }));
+    schedulePersist();
   },
   clearFinished: () => {
     set((s) => ({
-      pipelines: s.pipelines.filter((p) => p.status !== "done" && p.status !== "error"),
+      pipelines: s.pipelines.filter(
+        (p) => p.status !== "done" && p.status !== "error",
+      ),
     }));
+    schedulePersist();
   },
   rerunPipeline: (id, step) => {
     enqueue(id, step);
@@ -150,7 +184,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     if (!s) return;
     set((st) => ({
       pipelines: st.pipelines.map((p) =>
-        p.id === id ? { ...p, region, stage: "processing" } : p
+        p.id === id ? { ...p, region, stage: "processing" } : p,
       ),
     }));
     const resolve = regionWaiters.get(id);
@@ -174,6 +208,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       }
     }
   },
+  hydrate: (pipelines) => set({ pipelines }),
 }));
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -273,7 +308,10 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
 let queue: { id: string; startStep: number }[] = [];
 let processing = false;
 const abortedPipelines = new Set<string>();
-const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
+const regionWaiters = new Map<
+  string,
+  { resolve: (r: Region) => void; reject: () => void }
+>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -321,8 +359,12 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
   if (!Array.isArray(entries) || entries.length === 0) return;
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  const seen = new Set(cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`));
-  const fresh = entries.filter((e) => !seen.has(`${Math.round(e.ts)}::${e.message}`));
+  const seen = new Set(
+    cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`),
+  );
+  const fresh = entries.filter(
+    (e) => !seen.has(`${Math.round(e.ts)}::${e.message}`),
+  );
   if (fresh.length === 0) return;
   patch(id, { logs: [...cur.logs, ...fresh] });
 }
@@ -330,7 +372,9 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
 function setStepProgress(id: string, i: number, p: number) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  patch(id, { stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)) });
+  patch(id, {
+    stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)),
+  });
 }
 
 function recalcOverall(id: string) {
@@ -394,7 +438,17 @@ async function runPipeline(id: string, startStep = 0) {
   const ocrType = detectOcrType();
   let region = cur.region;
 
-  const stageForStart = ["resolving", "merging", "region", "processing", "context", "translating", "dub", "muxing"][startStep] ?? "resolving";
+  const stageForStart =
+    [
+      "resolving",
+      "merging",
+      "region",
+      "processing",
+      "context",
+      "translating",
+      "dub",
+      "muxing",
+    ][startStep] ?? "resolving";
 
   patch(id, {
     status: "running",
@@ -418,7 +472,10 @@ async function runPipeline(id: string, startStep = 0) {
     // 0. Resolve link
     if (startStep <= 0) {
       const cleaned = extractUrl(rawUrl);
-      if (!cleaned) throw new Error("Không tìm thấy link (https://...) trong nội dung đã dán.");
+      if (!cleaned)
+        throw new Error(
+          "Không tìm thấy link (https://...) trong nội dung đã dán.",
+        );
       markStepStart(id, 0);
       appendLog(id, "Đang phân tích link...");
       const r = await fetch("/api/video-download/resolve", {
@@ -440,8 +497,29 @@ async function runPipeline(id: string, startStep = 0) {
         ocrLang,
         ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
       });
-      appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+      appendLog(
+        id,
+        `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`,
+      );
       markStepEnd(id, 0);
+
+      // Luồng puppeteer riêng lấy thumbnail (sau khi có URL video)
+      try {
+        const tr = await fetch("/api/video-download/thumbnail", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ url: cleaned }),
+        });
+        const td = await tr.json();
+        if (td.thumbnail) {
+          patch(id, { thumbnail: td.thumbnail });
+          appendLog(id, `Thumbnail: ${td.thumbnail}`);
+        } else {
+          appendLog(id, "Thumbnail: không lấy được");
+        }
+      } catch {
+        appendLog(id, "Thumbnail: không lấy được");
+      }
     }
 
     // 1. Merge + import (silent)
@@ -507,10 +585,16 @@ async function runPipeline(id: string, startStep = 0) {
       } else {
         patch(id, { stage: "region" });
         markStepStart(id, 2);
-        appendLog(id, "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...");
+        appendLog(
+          id,
+          "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...",
+        );
         region = cur.region ?? (await waitForRegion(id));
         patch(id, { region });
-        appendLog(id, `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`);
+        appendLog(
+          id,
+          `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`,
+        );
         markStepEnd(id, 2);
       }
     }
@@ -549,14 +633,22 @@ async function runPipeline(id: string, startStep = 0) {
       markStepStart(id, 4);
       appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
       try {
-        const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
+        const cr = await fetch(`/api/context/${videoId}/generate`, {
+          method: "POST",
+        });
         const cd = await cr.json();
         if (cr.ok && cd.job_id) {
           patch(id, { contextOn: true });
           const cs = await pollJob(cd.job_id, tick(4));
-          appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
+          appendLog(
+            id,
+            cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.",
+          );
         } else {
-          appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
+          appendLog(
+            id,
+            "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.",
+          );
         }
       } catch {
         appendLog(id, "Bỏ qua ngữ cảnh.");
@@ -613,7 +705,10 @@ async function runPipeline(id: string, startStep = 0) {
             appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
           }
         } else {
-          appendLog(id, `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`);
+          appendLog(
+            id,
+            `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`,
+          );
         }
       } catch {
         appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
@@ -630,7 +725,8 @@ async function runPipeline(id: string, startStep = 0) {
       const hd = await hr.json();
       if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
       const hs = await pollJob(hd.job_id, tick(7));
-      if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
+      if (hs.status !== "done")
+        throw new Error(hs.error || "Nhúng SRT thất bại");
       markStepEnd(id, 7);
     }
 

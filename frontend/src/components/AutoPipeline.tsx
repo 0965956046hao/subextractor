@@ -78,6 +78,7 @@ export default function AutoPipeline() {
   const addPipeline = usePipelineStore((s) => s.addPipeline);
   const removePipeline = usePipelineStore((s) => s.removePipeline);
   const clearFinished = usePipelineStore((s) => s.clearFinished);
+  const hydrate = usePipelineStore((s) => s.hydrate);
 
   const [url, setUrl] = useState("");
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("auto");
@@ -108,6 +109,28 @@ export default function AutoPipeline() {
     const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
   }, []);
+
+  // Khôi phục danh sách pipeline đã lưu khi F5 trang
+  useEffect(() => {
+    fetch("/api/pipelines")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.pipelines?.length) {
+          const restored = d.pipelines.map((p: Pipeline) =>
+            p.status === "running" || p.status === "queued"
+              ? {
+                  ...p,
+                  status: "error" as const,
+                  stage: "error" as const,
+                  error: p.error || "Đã bị gián đoạn do tải lại trang",
+                }
+              : p
+          );
+          hydrate(restored);
+        }
+      })
+      .catch(() => {});
+  }, [hydrate]);
 
   const selected =
     pipelines.find((p) => p.id === selectedId) ??
@@ -476,9 +499,18 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
     <div className="double-bezel">
       <div className="double-bezel-inner p-5 sm:p-6">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink truncate">{p.title || "Đang phân tích..."}</p>
-            <p className="text-[11px] text-ink-light font-mono truncate">{p.url}</p>
+          <div className="flex items-center gap-3 min-w-0">
+            {p.thumbnail && (
+              <img
+                src={p.thumbnail}
+                alt=""
+                className="w-16 h-16 rounded-xl object-cover ring-1 ring-black/[0.06] bg-black/[0.04] flex-shrink-0"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink truncate">{p.title || "Đang phân tích..."}</p>
+              <p className="text-[11px] text-ink-light font-mono truncate">{p.url}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {(p.status === "running" || p.status === "queued") && (
@@ -618,6 +650,24 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
           })}
         </div>
 
+        {p.thumbnail ? (
+          <div className="mt-4 flex items-center gap-3 p-3 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05]">
+            <img
+              src={p.thumbnail}
+              alt=""
+              className="w-24 h-24 rounded-xl object-cover ring-1 ring-black/[0.06] bg-black/[0.04] flex-shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="text-[10px] font-medium uppercase tracking-[0.15em] text-ink-muted mb-1">Thumbnail</p>
+              <p className="text-[11px] text-ink-muted font-mono break-all leading-snug">{p.thumbnail}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 p-3 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] text-[12px] text-ink-muted">
+            Thumbnail: không lấy được
+          </div>
+        )}
+
         {p.logs.length > 0 && (
           <div className="mt-4 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden">
             <div className="px-4 py-2 border-b border-black/[0.05] bg-white/40 flex items-center justify-between">
@@ -685,6 +735,15 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
                     </svg>
                   </span>
                 </a>
+              )}
+              {p.thumbnail && (
+                <button
+                  onClick={() => navigator.clipboard.writeText(p.thumbnail || "")}
+                  title="Sao chép URL ảnh thumbnail"
+                  className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                >
+                  Sao chép URL ảnh
+                </button>
               )}
             </div>
 

@@ -65,7 +65,7 @@ export type BrowserHandle = { browser: Browser; persistent: boolean };
 
 export const HEADLESS =
   process.env.DOUYIN_HEADLESS === undefined
-    ? true
+    ? false
     : process.env.DOUYIN_HEADLESS !== "false";
 
 /**
@@ -151,9 +151,6 @@ export async function disconnectBrowser(handle: BrowserHandle): Promise<void> {
 
 /** Close the browser we launched, or just disconnect if it is the user's. */
 export async function closeBrowser(handle: BrowserHandle): Promise<void> {
-  if (handle.persistent) {
-    await handle.browser.disconnect();
-  } else {
-    await handle.browser.close();
-  }
+  // TẠM TẮT: không đóng trình duyệt (để debug) — chỉ ngắt kết nối
+  await handle.browser.disconnect();
 }
