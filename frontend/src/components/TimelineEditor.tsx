@@ -931,11 +931,6 @@ export default function TimelineEditor({
               /* ignore */
             }
           }
-          if (toolJob.type === "export") {
-            setToolJob((prev) =>
-              prev ? { ...prev, status: "done", progress: 100 } : prev,
-            );
-          }
           if (toolJob.type === "tts") {
             setToolJob((prev) =>
               prev ? { ...prev, status: "done", progress: 100 } : prev,
@@ -1204,24 +1199,8 @@ export default function TimelineEditor({
     setSaved(false);
   };
 
-  const runToolJob = async (type: "translate" | "tts" | "export") => {
+  const runToolJob = async (type: "translate" | "tts") => {
     try {
-      if (type === "export") {
-        const res = await fetch(`/api/export/${videoId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tracks, ttsClips: ttsClips }),
-        });
-        const data = await res.json();
-        setToolJob({
-          type,
-          jobId: data.job_id,
-          status: data.status,
-          progress: data.progress,
-          error: data.error || "",
-        });
-        return;
-      }
       const track = selectedTrack
         ? tracks.find((t) => t.id === selectedTrack)
         : tracks[0] || null;
@@ -1738,16 +1717,6 @@ export default function TimelineEditor({
             >
               Lồng tiếng
             </PillButton>
-
-            <div className="w-px h-4 bg-black/[0.06] mx-0.5" />
-
-            <PillButton
-              onClick={() => runToolJob("export")}
-              disabled={!!toolJob}
-              color="rose"
-            >
-              Xuất video
-            </PillButton>
           </div>
         </div>
 
@@ -1762,9 +1731,7 @@ export default function TimelineEditor({
                 <span className="text-[11px] font-medium text-ink-muted flex-1">
                   {toolJob.type === "translate"
                     ? "Đang dịch với Gemini..."
-                    : toolJob.type === "tts"
-                      ? "Đang tổng hợp giọng nói..."
-                      : "Đang xuất video..."}
+                    : "Đang tổng hợp giọng nói..."}
                 </span>
                 <div className="w-28 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
                   <div
@@ -1782,9 +1749,7 @@ export default function TimelineEditor({
                 <span className="text-[11px] font-medium text-emerald-700 flex-1">
                   {toolJob.type === "translate"
                     ? "Dịch hoàn tất"
-                    : toolJob.type === "tts"
-                      ? "Lồng tiếng hoàn tất"
-                      : "Xuất video hoàn tất"}
+                    : "Lồng tiếng hoàn tất"}
                 </span>
                 {toolJob.type === "translate" ? (
                   <a
@@ -1793,14 +1758,6 @@ export default function TimelineEditor({
                     className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
                   >
                     Tải SRT Việt
-                  </a>
-                ) : toolJob.type === "export" ? (
-                  <a
-                    href={`/api/download/exported/${videoId}`}
-                    download
-                    className="px-3 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
-                  >
-                    Tải Video
                   </a>
                 ) : (
                   <span className="text-[10px] text-cyan-600/70">

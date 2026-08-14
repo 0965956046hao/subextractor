@@ -148,18 +148,10 @@ export default function OpenVideoEditor({ videoId }: { videoId: string }) {
     return () => clearInterval(timer);
   }, [toolJob]);
 
-  const runToolJob = async (type: "translate" | "tts" | "export") => {
+  const runToolJob = async (type: "translate" | "tts") => {
     try {
       const srtContent = entriesToSrt(entries);
-      if (type === "export") {
-        const res = await fetch(`/api/export/${videoId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tracks: [], tts_clips: [] }),
-        });
-        const data = await res.json();
-        setToolJob({ type, jobId: data.job_id, status: data.status, progress: data.progress, error: data.error || "" });
-      } else if (type === "tts") {
+      if (type === "tts") {
         const res = await fetch(`/api/tts/${videoId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

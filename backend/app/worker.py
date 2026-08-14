@@ -583,61 +583,6 @@ async def run_dub_job(
         await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
-async def run_export_job(
-    jobs: dict,
-    ws_clients: dict,
-    job_id: str,
-):
-    job = jobs.get(job_id)
-    if not job:
-        return
-
-    try:
-        from app.services.export_service import run_export
-
-        job["status"] = "processing"
-        job["phase"] = "export"
-        await job_log_async(job, ws_clients, "Bắt đầu xuất video...")
-        await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "export"})
-
-        loop = asyncio.get_event_loop()
-        tracks = job.get("tracks", [])
-        tts_clips = job.get("tts_clips", [])
-
-        def progress_cb(pct, msg):
-            job["progress"] = pct
-            if msg:
-                _notify_sync(loop, ws_clients, job_id, {
-                    "type": "log", "message": msg, "ts": time.time(), "level": "info",
-                })
-            _notify_sync(loop, ws_clients, job_id, {
-                "type": "progress", "progress": pct, "phase": "export",
-            })
-
-        fn = functools.partial(
-            run_export,
-            job["video_id"], tracks, tts_clips, progress_cb,
-        )
-
-        out_path = await asyncio.wait_for(
-            loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
-        )
-
-        job["status"] = "done"
-        job["progress"] = 100
-        await job_log_async(job, ws_clients, "Xuất video hoàn tất!", "success")
-
-    except JobCancelled:
-        job["status"] = "cancelled"
-        await job_log_async(job, ws_clients, "Đã huỷ xuất video.", "warn")
-    except Exception as e:
-        logger.exception("export job %s: FAILED", job_id)
-        job["status"] = "error"
-        job["error"] = str(e)
-        await job_log_async(job, ws_clients, f"Lỗi xuất: {e}", "error")
-
-
 async def _auto_context(video_id: str, generate_fn, loop):
     """Fire-and-forget context generation after OCR completes."""
     try:
@@ -704,8 +649,6 @@ async def worker_loop(
                     await run_tts_job(jobs, ws_clients, job_id)
                 elif job_type == "dub":
                     await run_dub_job(jobs, ws_clients, job_id)
-                elif job_type == "export":
-                    await run_export_job(jobs, ws_clients, job_id)
                 elif job_type == "context":
                     await run_context_job(jobs, ws_clients, job_id)
                 else:
