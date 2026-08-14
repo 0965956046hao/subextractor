@@ -10,13 +10,10 @@ from app.config import settings
 from app.services.video_processor import stream_frames_generator, crop_region, resolve_video_path
 from app.services.ocr_engine import BaseOCREngine
 from app.services.subtitle_generator import generate_srt, sec_to_srt
-from app.services.tool_services import (
-    run_hardcode_sync,
-    run_align_sync,
-    JobCancelled,
-    notify_ws_sync,
-    _srt_path,
-)
+from app.services.hardcode_service import run_hardcode_sync
+from app.services.align_service import run_align_sync
+from app.services.job_utils import JobCancelled, notify_ws_sync
+from app.services.media_utils import _srt_path
 
 logger = logging.getLogger(__name__)
 
@@ -541,7 +538,7 @@ async def run_dub_job(
         return
 
     try:
-        from app.services.tts_service import run_dub_sync
+        from app.services.dub_service import run_dub_sync
 
         job["status"] = "processing"
         job["phase"] = "dub"

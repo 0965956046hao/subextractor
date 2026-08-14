@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import settings
-from app.services.tool_services import parse_srt, entries_to_srt, _srt_path, _video_path
+from app.services.media_utils import _srt_path, _video_path
+from app.services.srt_utils import parse_srt, entries_to_srt
 from app.services.context_service import load_video_context
+from app.services.job_utils import notify_ws_sync
 
 logger = logging.getLogger(__name__)
 
@@ -209,18 +211,6 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     return out_content
 
 
-def _notify_ws_sync(loop, ws_clients, job_id, data):
-    import asyncio
-    async def _send():
-        for ws in ws_clients.get(job_id, []):
-            try:
-                await ws.send_json(data)
-            except Exception:
-                pass
-    if loop:
-        asyncio.run_coroutine_threadsafe(_send(), loop)
-
-
 def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
     """Run translation in background, reporting progress via WebSocket."""
     job = jobs[job_id]
@@ -228,13 +218,13 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
     job["phase"] = "translating"
 
     try:
-        _notify_ws_sync(loop, ws_clients, job_id, {
+        notify_ws_sync(loop, ws_clients, job_id, {
             "type": "log",
             "message": "Bắt đầu dịch với Gemini...",
             "ts": __import__("time").time(),
             "level": "info",
         })
-        _notify_ws_sync(loop, ws_clients, job_id, {
+        notify_ws_sync(loop, ws_clients, job_id, {
             "type": "progress",
             "progress": 10,
             "phase": "translating",
@@ -251,7 +241,7 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
         job["phase"] = "done"
         job["status"] = "done"
 
-        _notify_ws_sync(loop, ws_clients, job_id, {
+        notify_ws_sync(loop, ws_clients, job_id, {
             "type": "done",
             "progress": 100,
             "message": "Dịch hoàn tất",
@@ -261,7 +251,7 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
         logger.exception("Translation failed")
         job["status"] = "error"
         job["error"] = str(e)
-        _notify_ws_sync(loop, ws_clients, job_id, {
+        notify_ws_sync(loop, ws_clients, job_id, {
             "type": "error",
             "message": f"Lỗi dịch: {e}",
         })

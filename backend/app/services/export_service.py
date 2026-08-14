@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from app.config import settings
-from app.services.tool_services import _srt_path, _video_path, parse_srt
+from app.services.media_utils import _srt_path, _video_path
+from app.services.srt_utils import parse_srt
 
 logger = logging.getLogger(__name__)
 
