@@ -241,6 +241,20 @@ export async function capCutPreview(voice: string, text?: string): Promise<Blob>
   return res.data;
 }
 
+export async function getGoogleTtsVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
+  const res = await api.get<CapCutVoice[]>("/google-tts/voices", { params: { lang } });
+  return res.data;
+}
+
+export async function googleTtsPreview(voice: string, text?: string): Promise<Blob> {
+  const res = await api.post<Blob>(
+    "/google-tts/preview",
+    { voice, text },
+    { responseType: "blob" }
+  );
+  return res.data;
+}
+
 export async function clearTempData(): Promise<{ cleared: boolean; subdirs_wiped: number }> {
   const res = await api.post("/temp/clear");
   return res.data;
@@ -272,6 +286,9 @@ export interface AppConfig {
   tts_credentials_info: string;
   auto_context_enabled: boolean;
   subtitle_style: SubtitleStyle;
+  watermark_text: string;
+  has_watermark_logo: boolean;
+  watermark_logo_name: string;
 }
 
 export async function getAppConfig(): Promise<AppConfig> {
@@ -284,7 +301,24 @@ export async function saveAppConfig(body: {
   google_tts_json?: string;
   auto_context_enabled?: boolean;
   subtitle_style?: Partial<SubtitleStyle>;
+  watermark_text?: string;
 }): Promise<{ status: string; error?: string; saved?: string[] }> {
   const res = await api.post("/config", body);
   return res.data;
+}
+
+export async function uploadWatermarkLogo(file: File): Promise<{ status: string; watermark_logo_name?: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await api.post("/config/logo", fd);
+  return res.data;
+}
+
+export async function deleteWatermarkLogo(): Promise<{ status: string; removed?: boolean }> {
+  const res = await api.delete("/config/logo");
+  return res.data;
+}
+
+export function watermarkLogoUrl(): string {
+  return "/api/config/logo";
 }

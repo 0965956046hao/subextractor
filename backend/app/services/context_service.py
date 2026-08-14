@@ -13,6 +13,7 @@ CONTEXT_DIR_NAME = "context"
 CONTEXT_FILE_NAME = "context.txt"
 FILES_INDEX_NAME = "gemini_files.json"
 SHARE_TEXT_NAME = "share_text.txt"
+TRANSLATION_CONTEXT_NAME = "translation_context.txt"
 
 
 def _context_path(video_id: str) -> Path:
@@ -25,6 +26,27 @@ def _share_text_path(video_id: str) -> Path:
 
 def _files_index_path(video_id: str) -> Path:
     return settings.temp_dir / CONTEXT_DIR_NAME / video_id / FILES_INDEX_NAME
+
+
+def _translation_context_path(video_id: str) -> Path:
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / TRANSLATION_CONTEXT_NAME
+
+
+def load_translation_context(video_id: str) -> str | None:
+    """Load the accumulated translation context (built patch-by-patch)."""
+    p = _translation_context_path(video_id)
+    if p.exists():
+        return p.read_text(encoding="utf-8").strip()
+    return None
+
+
+def append_translation_context(video_id: str, note: str) -> None:
+    """Append a patch context note to the translation-context file."""
+    p = _translation_context_path(video_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    prev = load_translation_context(video_id)
+    content = f"{prev}\n\n{note}" if prev else note
+    p.write_text(content, encoding="utf-8")
 
 
 def _save_files_index(video_id: str, file_names: list[str]):
@@ -96,8 +118,8 @@ def generate_video_context(video_id: str) -> str | None:
         logger.info("No snapshot images found for %s", video_id)
         return None
 
-    # Sample up to 10 frames evenly spread across the timeline
-    sample_count = min(10, len(jpg_files))
+    # Sample up to 20 frames evenly spread across the timeline (min 10 when available)
+    sample_count = min(20, len(jpg_files))
     step = max(1, len(jpg_files) // sample_count)
     sampled = jpg_files[::step][:sample_count]
     logger.info("Uploading %d/%d frames to Gemini File Store (%s)", len(sampled), len(jpg_files), video_id)

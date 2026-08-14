@@ -92,6 +92,7 @@ export interface Pipeline {
   muteOriginal: boolean;
   originalGainDb: number;
   autoFit: boolean;
+  watermark: boolean;
 }
 
 export interface DubOptions {
@@ -116,7 +117,7 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
@@ -137,6 +138,7 @@ function newPipeline(
   regionMode: "manual" | "auto" = "manual",
   dub: Partial<DubOptions> = {},
   autoFit = true,
+  watermark = false,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -172,14 +174,15 @@ function newPipeline(
     muteOriginal: d.muteOriginal,
     originalGainDb: d.originalGainDb,
     autoFit,
+    watermark,
   };
 }
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true) => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark)] }));
     runPrep(id);
     return id;
   },
@@ -794,7 +797,15 @@ async function runPipeline(id: string, startStep = 4) {
       patch(id, { stage: "dub" });
       markStepStart(id, 7);
       const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
-      const voice = cur.dubVoice || (engine === "capcut" ? "BV421_vivn_streaming" : "vi-VN-Standard-B");
+      // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
+      // Google TTS with 400 "Voice does not exist". Only send dubVoice when the
+      // engine is CapCut; Google always uses a Google voice.
+      const voice =
+        engine === "capcut"
+          ? cur.dubVoice || "BV421_vivn_streaming"
+          : cur.dubVoice && !cur.dubVoice.startsWith("BV") && !cur.dubVoice.startsWith("AV")
+            ? cur.dubVoice
+            : "vi-VN-Standard-B";
       appendLog(id, engine === "capcut"
         ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
         : "Tách giọng & lồng tiếng Việt (Google TTS)...");
@@ -839,6 +850,7 @@ async function runPipeline(id: string, startStep = 4) {
           auto_fit: cur.autoFit,
           region: cur.region ?? DEFAULT_REGION,
           style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
+          watermark: cur.watermark,
         }),
       });
       const hd = await hr.json();

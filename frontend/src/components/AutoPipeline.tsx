@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getFrameUrl, listVideos, deleteVideo, type PipelineHealth, type CapCutVoice, type VideoMeta } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, type PipelineHealth, type CapCutVoice, type VideoMeta } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import {
@@ -95,7 +95,9 @@ export default function AutoPipeline() {
   const [muteOriginal, setMuteOriginal] = useState(true);
   const [originalGainDb, setOriginalGainDb] = useState(6);
   const [autoFitSubs, setAutoFitSubs] = useState(true);
+  const [watermarkOn, setWatermarkOn] = useState(false);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
+  const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -113,13 +115,6 @@ export default function AutoPipeline() {
     urlInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     urlInputRef.current?.focus();
   }, []);
-
-  // "Thêm video tiếp theo": start prepping a NEW upload, so deselect the running
-  // pipeline (re-enables the top options for the next video) and focus the URL input.
-  const handleAddNext = useCallback(() => {
-    setSelectedId(null);
-    focusNewVideo();
-  }, [focusNewVideo]);
 
   const checkHealth = async () => {
     setHealthLoading(true);
@@ -175,6 +170,21 @@ export default function AutoPipeline() {
         .finally(() => {
           if (mounted) setVoicesLoading(false);
         });
+    } else {
+      setVoicesLoading(true);
+      getGoogleTtsVoices("vi-VN")
+        .then((vs) => {
+          if (mounted) {
+            setGoogleVoices(vs);
+            setDubVoice((v) => (vs.some((x) => x.voice_type === v) ? v : vs[0]?.voice_type ?? v));
+          }
+        })
+        .catch(() => {
+          if (mounted) setGoogleVoices([]);
+        })
+        .finally(() => {
+          if (mounted) setVoicesLoading(false);
+        });
     }
     return () => {
       mounted = false;
@@ -185,7 +195,15 @@ export default function AutoPipeline() {
     setDubEngine(engine);
     setPreviewUrl(null);
     setPreviewError(false);
-    if (engine === "capcut" && capcutVoices.length === 0) {
+    if (engine === "google") {
+      if (googleVoices.length > 0) {
+        setDubVoice((v) => (googleVoices.some((x) => x.voice_type === v) ? v : googleVoices[0]?.voice_type ?? "vi-VN-Standard-B"));
+      } else {
+        // Google voices differ from CapCut (BV/AV*) — reset so a CapCut voice is
+        // never sent to Google TTS. Effect below will populate googleVoices.
+        setDubVoice("vi-VN-Standard-B");
+      }
+    } else if (capcutVoices.length === 0) {
       setVoicesLoading(true);
       try {
         const vs = await getCapCutVoices("vi-VN");
@@ -205,7 +223,10 @@ export default function AutoPipeline() {
     setPreviewUrl(null);
     setPreviewError(false);
     try {
-      const blob = await capCutPreview(dubVoice);
+      const blob =
+        dubEngine === "google"
+          ? await googleTtsPreview(dubVoice)
+          : await capCutPreview(dubVoice);
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
       setPreviewUrl(null);
@@ -218,11 +239,18 @@ export default function AutoPipeline() {
   const refreshVoices = async () => {
     setVoicesLoading(true);
     try {
-      const vs = await getCapCutVoices("vi-VN");
-      setCapcutVoices(vs);
-      if (vs.length > 0) setDubVoice(vs[0].voice_type);
+      if (dubEngine === "google") {
+        const vs = await getGoogleTtsVoices("vi-VN");
+        setGoogleVoices(vs);
+        if (vs.length > 0) setDubVoice(vs[0].voice_type);
+      } else {
+        const vs = await getCapCutVoices("vi-VN");
+        setCapcutVoices(vs);
+        if (vs.length > 0) setDubVoice(vs[0].voice_type);
+      }
     } catch {
-      setCapcutVoices([]);
+      if (dubEngine === "google") setGoogleVoices([]);
+      else setCapcutVoices([]);
     } finally {
       setVoicesLoading(false);
     }
@@ -245,7 +273,7 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    }, autoFitSubs);
+    }, autoFitSubs, watermarkOn);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
@@ -262,23 +290,6 @@ export default function AutoPipeline() {
   );
   const finishedCount = donePipelines.length + historyVideosDone.length;
   const hasFinished = finishedCount > 0;
-  // Options at the top only apply to the NEXT upload. Disable them while a
-  // processing video is selected so the user can't change dub/region options
-  // for a video that's already queued/running.
-  const optionsDisabled =
-    selectedId != null &&
-    selected != null &&
-    (selected.status === "running" || selected.status === "queued");
-
-  // "Thêm video tiếp theo" appears right above the tabs, only once the active
-  // pipeline has finished the interactive region + subtitle steps (done or
-  // skipped) — so the user can prep the next video while heavy steps
-  // (OCR → hardcode) run in the queue.
-  const canAddNext =
-    selected != null &&
-    (selected.status === "running" || selected.status === "queued") &&
-    (selected.stepSkipped[2] || selected.stepEnds[2] != null) &&
-    (selected.stepSkipped[3] || selected.stepEnds[3] != null);
 
   const handleClearTemp = async () => {
     setConfirmingClear(false);
@@ -416,29 +427,29 @@ export default function AutoPipeline() {
               </button>
             </div>
             <div className="mt-4 flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                 Vùng quét phụ đề:
               </span>
-              <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+              <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}>
                 <button
                   onClick={() => setRegionMode("auto")}
-                  disabled={optionsDisabled}
+                  
                   className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                     regionMode === "auto"
-                      ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                      ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                       : "text-ink-light hover:text-ink"
-                  } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  } "cursor-pointer"}`}
                 >
                   Tự động (vùng mặc định)
                 </button>
                 <button
                   onClick={() => setRegionMode("manual")}
-                  disabled={optionsDisabled}
+                  
                   className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                     regionMode === "manual"
-                      ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                      ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                       : "text-ink-light hover:text-ink"
-                  } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  } "cursor-pointer"}`}
                 >
                   Chọn vùng thủ công
                 </button>
@@ -451,38 +462,38 @@ export default function AutoPipeline() {
             </div>
             <div className="mt-4 border-t border-black/[0.05] pt-4">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   Lồng tiếng:
                 </span>
-                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}>
                   <button
                     onClick={() => switchDubEngine("google")}
-                    disabled={optionsDisabled}
+                    
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       dubEngine === "google"
-                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                         : "text-ink-light hover:text-ink"
-                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    } "cursor-pointer"}`}
                   >
                     Google TTS
                   </button>
                   <button
                     onClick={() => switchDubEngine("capcut")}
-                    disabled={optionsDisabled}
+                    
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       dubEngine === "capcut"
-                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                         : "text-ink-light hover:text-ink"
-                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    } "cursor-pointer"}`}
                   >
                     CapCut
                   </button>
                 </div>
-                {dubEngine === "capcut" && !voicesLoading && capcutVoices.length > 0 && (
+                {(dubEngine === "capcut" ? (capcutVoices.length > 0 && !voicesLoading) : (googleVoices.length > 0 && !voicesLoading)) && (
                   <>
                     <select
                       value={dubVoice}
-                      disabled={optionsDisabled}
+                      
                       onChange={(e) => {
                         setDubVoice(e.target.value);
                         setPreviewUrl(null);
@@ -490,7 +501,7 @@ export default function AutoPipeline() {
                       }}
                       className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {capcutVoices.map((v) => (
+                      {(dubEngine === "capcut" ? capcutVoices : googleVoices).map((v) => (
                         <option key={v.voice_type} value={v.voice_type}>
                           {v.display_name} ({v.voice_type})
                         </option>
@@ -498,7 +509,7 @@ export default function AutoPipeline() {
                     </select>
                     <button
                       onClick={handlePreviewVoice}
-                      disabled={previewing || optionsDisabled}
+                      disabled={previewing}
                       className="px-4 py-2 rounded-full text-[11px] font-medium bg-blue-500/10 ring-1 ring-blue-500/20 text-blue-700 hover:bg-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {previewing ? "Đang tạo audio..." : "Nghe thử"}
@@ -513,17 +524,17 @@ export default function AutoPipeline() {
                     )}
                   </>
                 )}
-                {dubEngine === "capcut" && voicesLoading && (
+                {voicesLoading && (
                   <span className="text-[11px] text-ink-light flex items-center gap-1.5">
-                    <IconSpinner className="w-3 h-3" /> Đang tải giọng CapCut...
+                    <IconSpinner className="w-3 h-3" /> Đang tải giọng {dubEngine === "google" ? "Google TTS" : "CapCut"}...
                   </span>
                 )}
-                {dubEngine === "capcut" && !voicesLoading && capcutVoices.length === 0 && (
+                {!voicesLoading && (dubEngine === "capcut" ? capcutVoices.length === 0 : googleVoices.length === 0) && (
                   <span className="text-[11px] text-amber-700 flex items-center gap-2">
-                    Không tải được danh sách giọng CapCut (service :8100).
+                    Không tải được danh sách giọng {dubEngine === "google" ? "Google TTS (kiểm tra Service Account trong Settings ⚙️)" : "CapCut (service :8100)"}.
                     <button
                       onClick={refreshVoices}
-                      disabled={optionsDisabled}
+                      
                       className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       Thử lại
@@ -533,34 +544,34 @@ export default function AutoPipeline() {
               </div>
               <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
                 {dubEngine === "google"
-                  ? "Dùng Google Cloud TTS (cần Service Account trong Settings ⚙️)."
+                  ? "Dùng Google Cloud TTS (cần Service Account trong Settings ⚙️). Chọn giọng và bấm Nghe thử để nghe trước."
                   : "Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100)."}
               </p>
 
               <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   Voice gốc:
                 </span>
-                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}>
                   <button
                     onClick={() => setMuteOriginal(true)}
-                    disabled={optionsDisabled}
+                    
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       muteOriginal
-                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                         : "text-ink-light hover:text-ink"
-                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    } "cursor-pointer"}`}
                   >
                     Tắt (tách bằng Demucs)
                   </button>
                   <button
                     onClick={() => setMuteOriginal(false)}
-                    disabled={optionsDisabled}
+                    
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       !muteOriginal
-                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                         : "text-ink-light hover:text-ink"
-                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    } "cursor-pointer"}`}
                   >
                     Giữ lại (giảm âm lượng)
                   </button>
@@ -574,7 +585,7 @@ export default function AutoPipeline() {
                       max={30}
                       step={1}
                       value={originalGainDb}
-                      disabled={optionsDisabled}
+                      
                       onChange={(e) => setOriginalGainDb(Number(e.target.value))}
                       className="w-40 accent-blue-600 disabled:opacity-40"
                     />
@@ -593,29 +604,29 @@ export default function AutoPipeline() {
               )}
 
               <div className="mt-4 border-t border-black/[0.05] pt-4 flex items-center gap-3 flex-wrap">
-                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   Căn chỉnh phụ đề:
                 </span>
-                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}>
                   <button
                     onClick={() => setAutoFitSubs(true)}
-                    disabled={optionsDisabled}
+                    
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       autoFitSubs
-                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                         : "text-ink-light hover:text-ink"
-                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    } "cursor-pointer"}`}
                   >
                     Tự động khớp vị trí sub gốc
                   </button>
                   <button
                     onClick={() => setAutoFitSubs(false)}
-                    disabled={optionsDisabled}
+                    
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       !autoFitSubs
-                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
                         : "text-ink-light hover:text-ink"
-                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    } "cursor-pointer"}`}
                   >
                     Tự chỉnh kích thước & vị trí
                   </button>
@@ -625,6 +636,33 @@ export default function AutoPipeline() {
                     ? "Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video."
                     : "Thêm bước xem trước trong pipeline để bạn chỉnh cỡ chữ và vị trí phụ đề trước khi nhúng."}
                 </p>
+              </div>
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Logo + Watermark
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (dùng logo & nội dung trong Settings ⚙️).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWatermarkOn(!watermarkOn)}
+                    
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 ${
+                      watermarkOn ? "bg-blue-600" : "bg-black/10"
+                    } "cursor-pointer"}`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        watermarkOn ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -672,17 +710,6 @@ export default function AutoPipeline() {
               )}
             </button>
           </div>
-          {canAddNext && (
-            <button
-              onClick={handleAddNext}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-medium tracking-tight bg-blue-600 text-white hover:bg-blue-500 shadow-sm active:scale-[0.97] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
-              </svg>
-              <span className="tracking-tight">Thêm video tiếp theo</span>
-            </button>
-          )}
         </div>
       </AnimatedBlock>
 
@@ -826,6 +853,7 @@ export default function AutoPipeline() {
 
 function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; onOpen: () => void; onRemove: () => void }) {
   const meta = STATUS_META[p.status] ?? STATUS_META.queued;
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
     if (p.status !== "running") return null;
     const idx = STEP_STAGE[p.stage];
@@ -902,21 +930,98 @@ function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; o
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onRemove();
+          setConfirmingRemove(true);
         }}
-        title="Xoá"
+        title={p.status === "running" || p.status === "queued" ? "Hủy xử lý" : "Xoá"}
         className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
       >
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
+        {p.status === "running" || p.status === "queued" ? (
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        ) : (
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" />
+            <path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+          </svg>
+        )}
       </button>
+
+      {confirmingRemove && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          onClick={() => setConfirmingRemove(false)}
+        >
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards" }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              {p.status === "running" || p.status === "queued" ? (
+                <>
+                  <p className="text-sm font-semibold text-ink mb-1">Hủy xử lý?</p>
+                  <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
+                    Nếu hủy sẽ mất hết tiến độ hiện tại và xóa toàn bộ file tạm của video này
+                    (video, khung hình, phụ đề). Quá trình sẽ phải làm lại từ đầu.
+                  </p>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      onClick={() => setConfirmingRemove(false)}
+                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                    >
+                      Không, tiếp tục
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConfirmingRemove(false);
+                        onRemove();
+                      }}
+                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                    >
+                      Xác nhận hủy
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-semibold text-ink mb-1">Xoá job này?</p>
+                  <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
+                    Sẽ xóa job khỏi danh sách xử lý.
+                  </p>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      onClick={() => setConfirmingRemove(false)}
+                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                    >
+                      Không, giữ lại
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConfirmingRemove(false);
+                        onRemove();
+                      }}
+                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                    >
+                      Xoá
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function HistoryRow({ v, onOpen, onDelete }: { v: VideoMeta; onOpen: () => void; onDelete: () => void }) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   return (
     <div
       onClick={onOpen}
@@ -959,16 +1064,57 @@ function HistoryRow({ v, onOpen, onDelete }: { v: VideoMeta; onOpen: () => void;
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onDelete();
+          setConfirmingDelete(true);
         }}
         title="Xoá toàn bộ video"
         className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
       >
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 6h18" />
+          <path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+          <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+          <line x1="10" y1="11" x2="10" y2="17" />
+          <line x1="14" y1="11" x2="14" y2="17" />
         </svg>
       </button>
+
+      {confirmingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          onClick={() => setConfirmingDelete(false)}
+        >
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards" }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <p className="text-sm font-semibold text-ink mb-1">Xoá toàn bộ video?</p>
+              <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
+                Sẽ xóa toàn bộ file của video này (video gốc, phụ đề, video lồng tiếng,
+                phụ đề cứng và file đã gộp). Không thể khôi phục.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setConfirmingDelete(false)}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                >
+                  Không, giữ lại
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmingDelete(false);
+                    onDelete();
+                  }}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                >
+                  Xoá toàn bộ
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1145,7 +1291,7 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                       {stepTime}
                     </span>
                   )}
-                  {canRerun && (
+                  {/* {canRerun && (
                     <button
                       onClick={() => rerunPipeline(p.id, i)}
                       title={`Chạy lại từ "${s.label}"`}
@@ -1157,7 +1303,7 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                       </svg>
                       Chạy lại
                     </button>
-                  )}
+                  )} */}
                 </div>
               </div>
             );

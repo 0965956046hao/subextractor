@@ -223,10 +223,11 @@ async def hardcode_subtitles(video_id: str, request: Request):
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
 
-    # Optional body: { auto_fit: bool, region: {x1,y1,x2,y2}, style: {...} }
+    # Optional body: { auto_fit: bool, region: {x1,y1,x2,y2}, style: {...}, watermark: bool }
     auto_fit = False
     region = None
     style = None
+    watermark = False
     try:
         raw = await request.json()
         if isinstance(raw, dict):
@@ -239,6 +240,7 @@ async def hardcode_subtitles(video_id: str, request: Request):
                 region = None
             if isinstance(raw.get("style"), dict):
                 style = raw["style"]
+            watermark = bool(raw.get("watermark", False))
     except Exception:
         pass
 
@@ -256,11 +258,12 @@ async def hardcode_subtitles(video_id: str, request: Request):
         "auto_fit": auto_fit,
         "region": region,
         "style": style,
+        "watermark": watermark,
     }
     jobs[job_id] = job
     logger.info(
-        "hardcode job %s: queued for %s (auto_fit=%s)",
-        job_id, video_id, auto_fit,
+        "hardcode job %s: queued for %s (auto_fit=%s, watermark=%s)",
+        job_id, video_id, auto_fit, watermark,
     )
     await queue.put(job_id)
     return {"job_id": job_id}

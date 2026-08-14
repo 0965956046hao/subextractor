@@ -271,7 +271,8 @@ def _render_subtitle(
     s = style or get_subtitle_style()
     font_size = max(10, int(s.get("font_size", 48)))
     # scale font size relative to 1080p reference so it looks consistent
-    font_size = max(10, int(font_size * vh / 1080))
+    scale = vh / 1080
+    font_size = max(10, int(font_size * scale))
     font_path = font_path or _find_font(s.get("font_family", "Arial"), s.get("bold"), s.get("italic"))
     try:
         font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
@@ -280,15 +281,15 @@ def _render_subtitle(
 
     text_color = _hex_to_rgba(s.get("text_color", "#FFFFFF"))
     outline_color = _hex_to_rgba(s.get("outline_color", "#000000"))
-    outline_w = max(0, int(s.get("outline_width", 0)))
+    outline_w = max(0, int(int(s.get("outline_width", 0)) * scale))
     box_on = bool(s.get("box_enabled", True))
     box_color = _hex_to_rgba(s.get("box_color", "#000000"), int(s.get("box_opacity", 210)))
-    box_radius = max(0, int(s.get("box_radius", 12)))
+    box_radius = max(0, int(int(s.get("box_radius", 12)) * scale))
     box_border_color = _hex_to_rgba(s.get("box_border_color", "#000000"))
-    box_border_w = max(0, int(s.get("box_border_width", 0)))
+    box_border_w = max(0, int(int(s.get("box_border_width", 0)) * scale))
     # margin_v is a 1080p reference, same as font_size, so the box stays at the
     # same proportional position when the video resolution changes.
-    margin_v = max(0, int(int(s.get("margin_v", 40)) * vh / 1080))
+    margin_v = max(0, int(int(s.get("margin_v", 40)) * scale))
     # margin_h is a 1920px reference for horizontal offset (positive = right).
     margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
 
@@ -321,7 +322,7 @@ def _render_subtitle(
     line_gap = max(2, int(font_size * 0.15))
     th = sum(line_heights) + line_gap * (len(lines) - 1)
 
-    pad_x, pad_y = 24, 16
+    pad_x, pad_y = max(6, int(24 * scale)), max(4, int(16 * scale))
     box_w = tw + pad_x * 2 + outline_w * 2
     box_h = th + pad_y * 2 + outline_w * 2
     bx = (vw - box_w) // 2 + margin_h
@@ -372,6 +373,85 @@ def _overlay_subtitle(frame, overlay_rgba):
     return blended.astype(np.uint8)
 
 
+def _render_watermark_frame(
+    vw: int,
+    vh: int,
+    ts: float,
+    duration: float,
+    watermark: dict,
+):
+    """Build an RGBA overlay for the watermark: logo top-left + scrolling text.
+
+    The scrolling text travels around the clip border in a full loop from the
+    start of the video until the end (one revolution per video duration).
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    text = (watermark.get("text") or "").strip()
+    logo_path = watermark.get("logo_path")
+    if not text and not logo_path:
+        return None
+
+    img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # --- Logo: top-left, height = 1/7 of frame height; margin from top & left = half logo height. ---
+    if logo_path:
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            logo_h = max(36, int(vh / 7))
+            logo_w = int(logo.width * logo_h / logo.height)
+            margin = logo_h // 2.5
+            logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
+            img.paste(logo, (margin, margin), logo)
+        except Exception:
+            pass
+
+    if text:
+        # Font scaled by resolution (~3.2% of height); white fill, no outline.
+        font_size = max(30, int(vh * 0.04))
+        font_path = _find_font("Arial", False, False)
+        try:
+            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+
+        # One full revolution per video duration. Position advances along a
+        # rectangular perimeter: top (L→R), right (T→B), bottom (R→L), left (B→T).
+        gap = max(12, int(vh * 0.022))
+        perim = 2 * vw + 2 * vh
+        dur = duration if duration and duration > 0 else 1.0
+        dist = (ts / dur) % 1.0
+        total = perim + 2 * tw
+        d = dist * total
+
+        if d <= vw:
+            x, y = d - tw, gap
+        elif d <= vw + vh:
+            t = d - vw
+            x, y = vw - tw - gap, t
+        elif d <= 2 * vw + vh:
+            t = d - vw - vh
+            x, y = vw - t, vh - th - gap
+        else:
+            t = d - 2 * vw - vh
+            x, y = gap, vh - t
+
+        draw.text(
+            (x, y),
+            text,
+            font=font,
+            fill=(255, 255, 255, 153),
+        )
+
+    return np.array(img)
+
+
 def burn_subtitles_pillow(
     video_path_str: str,
     srt_path_str: str,
@@ -380,6 +460,7 @@ def burn_subtitles_pillow(
     audio_source: str | None = None,
     style: dict | None = None,
     fixed_size: bool = False,
+    watermark: dict | None = None,
 ):
     """Burn subtitles using OpenCV + Pillow (no libass required)."""
     import cv2
@@ -402,6 +483,7 @@ def burn_subtitles_pillow(
     vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = (total / fps) if fps and total else 0.0
 
     tmp_path = str(Path(out_path).with_suffix(".burn.mp4"))
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -411,6 +493,7 @@ def burn_subtitles_pillow(
         raise RuntimeError("Cannot open video writer")
 
     cache = {}
+    wm_cache = {}
     idx = 0
     while True:
         ret, frame = cap.read()
@@ -423,6 +506,13 @@ def burn_subtitles_pillow(
             if text not in cache:
                 cache[text] = _render_subtitle(text, vw, vh, font_path, style, fixed_size)
             frame = _overlay_subtitle(frame, cache[text])
+        if watermark:
+            wm_key = f"{int(ts * 10)}"
+            if wm_key not in wm_cache:
+                wm_cache[wm_key] = _render_watermark_frame(vw, vh, ts, duration, watermark)
+            wm = wm_cache[wm_key]
+            if wm is not None:
+                frame = _overlay_subtitle(frame, wm)
         writer.write(frame)
         idx += 1
         if progress_callback and total and idx % 10 == 0:
@@ -523,6 +613,17 @@ def run_hardcode_sync(
         # ffmpeg lacks libass — fall back to OpenCV + Pillow burn
         logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
 
+        # Watermark (logo + scrolling text) is rendered by the Pillow path.
+        watermark = None
+        if job.get("watermark"):
+            from app.routers.config_router import get_watermark
+            watermark = get_watermark()
+            if watermark.get("text") or watermark.get("logo_path"):
+                logger.info("hardcode job %s: watermark ON (%s)", job_id, "text+logo" if watermark.get("logo_path") else "text")
+            else:
+                logger.info("hardcode job %s: watermark requested but no text/logo configured", job_id)
+                watermark = None
+
         def progress_cb(pct: int):
             job["progress"] = pct
             notify_ws_sync(loop, ws_clients, job_id, {
@@ -536,6 +637,7 @@ def run_hardcode_sync(
             style=style,
             # auto-fit or manual style must render at the exact size chosen.
             fixed_size=bool(job.get("auto_fit")) or bool(job.get("style")),
+            watermark=watermark,
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})

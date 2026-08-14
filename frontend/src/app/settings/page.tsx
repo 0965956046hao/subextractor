@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getAppConfig, saveAppConfig, getPipelineHealth } from "@/lib/api";
+import { getAppConfig, saveAppConfig, getPipelineHealth, uploadWatermarkLogo, deleteWatermarkLogo, watermarkLogoUrl } from "@/lib/api";
 import type { SubtitleStyle } from "@/lib/api";
 import type { PipelineHealth } from "@/lib/api";
 
@@ -190,6 +190,10 @@ export default function SettingsPage() {
   const [health, setHealth] = useState<PipelineHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [ttsInfo, setTtsInfo] = useState("");
+  const [watermarkText, setWatermarkText] = useState("");
+  const [hasLogo, setHasLogo] = useState(false);
+  const [logoUrl, setLogoUrl] = useState("");
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -201,6 +205,8 @@ export default function SettingsPage() {
         setTtsJson(cfg.google_tts_credentials || "");
         setTtsInfo(cfg.tts_credentials_info || "");
         setStyle({ ...DEFAULTS, ...cfg.subtitle_style });
+        setWatermarkText(cfg.watermark_text || "");
+        setHasLogo(cfg.has_watermark_logo);
         setHealth(h);
       } catch {
         setError("Không kết nối được backend.");
@@ -220,6 +226,7 @@ export default function SettingsPage() {
         gemini_api_key: geminiKey || undefined,
         google_tts_json: ttsJson || undefined,
         subtitle_style: style,
+        watermark_text: watermarkText,
       });
       if (res.error) {
         setError(res.error);
@@ -233,10 +240,41 @@ export default function SettingsPage() {
       setGeminiKey(cfg.gemini_api_key || "");
       setTtsJson(cfg.google_tts_credentials || "");
       setTtsInfo(cfg.tts_credentials_info || "");
+      setWatermarkText(cfg.watermark_text || "");
+      setHasLogo(cfg.has_watermark_logo);
       setTimeout(() => setStatus(""), 2500);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
       setStatus("");
+    }
+  };
+
+  const handleLogoUpload = async (file: File) => {
+    setError("");
+    setUploadingLogo(true);
+    try {
+      const res = await uploadWatermarkLogo(file);
+      if (res.status !== "ok") {
+        setError("Tải logo thất bại.");
+        return;
+      }
+      setHasLogo(true);
+      setLogoUrl(`${watermarkLogoUrl()}?t=${Date.now()}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi tải logo.");
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleLogoDelete = async () => {
+    setError("");
+    try {
+      await deleteWatermarkLogo();
+      setHasLogo(false);
+      setLogoUrl("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi xoá logo.");
     }
   };
 
@@ -385,6 +423,70 @@ export default function SettingsPage() {
 
               <div className="pt-2">
                 <SliderField label={STYLE_LABELS.margin_v} value={style.margin_v} min={0} max={200} suffix="px" onChange={(v) => set({ margin_v: v })} />
+              </div>
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={280}>
+        <div className="double-bezel mb-6">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
+              4. Watermark (logo + chữ)
+            </p>
+            <p className="text-[11px] text-ink-light mb-5">
+              Logo và dòng chữ hiển thị dưới dạng watermark trên video output. Bấm Lưu cấu hình để áp dụng nội dung chữ.
+            </p>
+
+            <div className="mb-5">
+              <p className="text-[12px] text-ink-muted mb-2">Nội dung watermark (dạng chữ)</p>
+              <input
+                type="text"
+                value={watermarkText}
+                onChange={(e) => setWatermarkText(e.target.value)}
+                placeholder="Nhập nội dung watermark..."
+                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+              />
+            </div>
+
+            <div>
+              <p className="text-[12px] text-ink-muted mb-2">Logo watermark</p>
+              <div className="flex items-center gap-4">
+                {hasLogo ? (
+                  <div className="relative w-20 h-20 rounded-xl overflow-hidden border border-black/[0.08] bg-white flex items-center justify-center shrink-0">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={logoUrl || `${watermarkLogoUrl()}?t=${Date.now()}`} alt="Logo" className="max-w-full max-h-full object-contain" />
+                  </div>
+                ) : (
+                  <div className="w-20 h-20 rounded-xl border border-dashed border-black/15 bg-white/60 flex items-center justify-center shrink-0">
+                    <span className="text-[10px] text-ink-light px-2 text-center leading-tight">Chưa có logo</span>
+                  </div>
+                )}
+                <div className="flex flex-col gap-2">
+                  <label className="btn-island-secondary group !px-4 !py-2 text-[12px] cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      className="hidden"
+                      disabled={uploadingLogo}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleLogoUpload(f);
+                        e.target.value = "";
+                      }}
+                    />
+                    <span className="tracking-tight">{uploadingLogo ? "Đang tải..." : hasLogo ? "Thay logo" : "Tải logo lên"}</span>
+                  </label>
+                  {hasLogo && (
+                    <button
+                      onClick={handleLogoDelete}
+                      className="text-[12px] text-red-600 hover:text-red-700 text-left px-2 py-1"
+                    >
+                      Xoá logo
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

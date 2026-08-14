@@ -218,11 +218,30 @@ async def delete_video(video_id: str):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
     removed: list[str] = []
+    # Merged sources are flat files `temp/merged/{merge_id}.mp4` keyed by a
+    # merge_id different from video_id. Read meta.json BEFORE the videos dir
+    # is removed so we can also clean up the flat merged file(s).
+    merge_id = None
+    meta_file = settings.temp_dir / "videos" / video_id / "meta.json"
+    if meta_file.exists():
+        try:
+            import json as _json
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+            merge_id = meta.get("source_merge_id")
+        except Exception:
+            merge_id = None
     for name in TEMP_DATA_SUBDIRS:
         d = settings.temp_dir / name / video_id
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
             removed.append(name)
+    if merge_id:
+        merged_dir = settings.temp_dir / "merged"
+        for suffix in ("", "_video", "_audio"):
+            f = merged_dir / f"{merge_id}{suffix}.mp4"
+            if f.exists():
+                f.unlink(missing_ok=True)
+                removed.append("merged")
     if not removed:
         raise HTTPException(404, "Video not found")
     return {"deleted": video_id, "removed": removed}

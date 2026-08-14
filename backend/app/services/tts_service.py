@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import List
 
@@ -83,6 +84,99 @@ def synthesize_entry(client, entry, out_dir: Path, index: int, voice_name: str =
     return out_path
 
 
+def list_google_voices(lang: str = "vi-VN", max_results: int = 100) -> List[dict]:
+    """List available Google TTS voices for a language (for the UI dropdown)."""
+    try:
+        from google.cloud import texttospeech
+    except ImportError:
+        raise ImportError("google-cloud-texttospeech not installed")
+
+    client = _get_tts_client()
+    response = client.list_voices(language_code=lang)
+    voices = []
+    for v in response.voices:
+        voices.append({
+            "voice_type": v.name,
+            "display_name": f"{v.name}",
+            "language_codes": list(v.language_codes or []),
+            "gender": v.ssml_gender.name if v.ssml_gender else "",
+        })
+    # Google sorts by code; prefer the requested language first, keep stable.
+    voices.sort(key=lambda x: (x["voice_type"]))
+    return voices[:max_results]
+
+
+def synthesize_preview(voice_name: str, text: str, out_path: Path) -> Path:
+    """Synthesize a short preview MP3 for a voice (one-shot, no file reuse)."""
+    try:
+        from google.cloud import texttospeech
+    except ImportError:
+        raise ImportError("google-cloud-texttospeech not installed")
+
+    if not voice_name:
+        raise ValueError("Chưa chọn giọng.")
+
+    client = _get_tts_client()
+    synthesis_input = texttospeech.SynthesisInput(text=text)
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="vi-VN",
+        name=voice_name,
+        ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
+    )
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3,
+        speaking_rate=1.0,
+        pitch=0.0,
+    )
+    response = client.synthesize_speech(
+        input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+    out_path.write_bytes(response.audio_content)
+    logger.info("Google TTS preview %s → %s", voice_name, out_path.name)
+    return out_path
+
+
+def _is_transient_tts_error(e: Exception) -> bool:
+    """Return True only for retryable errors (quota / rate-limit / server 5xx)."""
+    code = getattr(e, "code", None) or getattr(e, "status_code", None) or getattr(e, "status", None)
+    if isinstance(code, int) and code in (408, 429, 500, 502, 503, 504):
+        return True
+    name = type(e).__name__.lower()
+    return any(hint in name for hint in ("resourceexhausted", "ratelimit", "quota", "serviceunavailable", "deadlineexceeded", "backenderror", "unavailable"))
+
+
+_TTS_MAX_ATTEMPTS = 5
+
+
+def _synthesize_with_retry(client, entry, out_dir: Path, index: int, voice_name: str = "vi-VN-Standard-A", log_fn=None) -> Path:
+    """Synthesize one entry, retrying transient errors with an increasing delay.
+
+    Transient failures (quota / rate-limit / server 5xx) retry with a growing
+    wait time (1s, 2s, 4s, 8s, … capped at 60s) up to `_TTS_MAX_ATTEMPTS` times,
+    then raise. Permanent errors (400 invalid voice, 401 auth, …) raise
+    immediately — retrying them is pointless.
+    """
+    wait = 1.0
+    attempt = 0
+    last_err = None
+    while attempt < _TTS_MAX_ATTEMPTS:
+        attempt += 1
+        try:
+            return synthesize_entry(client, entry, out_dir, index, voice_name=voice_name)
+        except Exception as e:
+            last_err = e
+            if not _is_transient_tts_error(e):
+                raise
+            if log_fn and attempt == 1:
+                log_fn(f"  TTS dòng {index} lỗi tạm thời ({e}), thử lại với thời gian chờ tăng dần...", level="warning")
+            logger.warning("TTS transient error for entry %d (attempt %d/%d): %s", index, attempt, _TTS_MAX_ATTEMPTS, e)
+            if attempt >= _TTS_MAX_ATTEMPTS:
+                break
+            time.sleep(wait)
+            wait = min(wait * 2, 60.0)
+    raise RuntimeError(f"TTS failed for entry {index} after {_TTS_MAX_ATTEMPTS} attempts: {last_err}") from last_err
+
+
 def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "vi-VN-Standard-A", log_fn=None) -> List[Path]:
     """Convert all SRT entries to individual MP3 files."""
     voice_key = voice_name.replace("-", "_")
@@ -116,23 +210,15 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         log_fn(f"TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name}...")
 
     synth_ok = 0
-    synth_fail = 0
     for i, entry in enumerate(entries):
         if progress_callback:
             progress_callback(i, total)
 
-        try:
-            path = synthesize_entry(client, entry, out_dir, i + 1, voice_name=voice_name)
-            if path:
-                audio_files.append(path)
-                synth_ok += 1
-        except Exception as e:
-            logger.warning("TTS failed for entry %d: %s", i + 1, e)
-            synth_fail += 1
-            # Create silent placeholder
-            silent_path = out_dir / f"{i + 1:04d}.mp3"
-            _create_silence(silent_path, max(entry.end - entry.start, 0.5))
-            audio_files.append(silent_path)
+        # Retry with increasing delay until success — no silent placeholder.
+        path = _synthesize_with_retry(client, entry, out_dir, i + 1, voice_name=voice_name, log_fn=log_fn)
+        if path:
+            audio_files.append(path)
+            synth_ok += 1
 
     if progress_callback:
         progress_callback(total, total)
@@ -140,9 +226,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
     logger.info("TTS complete: %d audio files in %s", len(audio_files), out_dir)
     if log_fn:
         ok_note = f"TTS xong: {synth_ok} file giọng nói."
-        if synth_fail:
-            ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
-        log_fn(ok_note, level="success" if synth_fail == 0 else "warning")
+        log_fn(ok_note, level="success")
     return audio_files
 
 

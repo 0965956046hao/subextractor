@@ -180,10 +180,11 @@ def generate_srt(
 
     pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
-    # Save up to 10 snapshot frames evenly spread across the video timeline
+    # Save up to 20 snapshot frames evenly spread across the video timeline
+    # (target 10–20 frames: at least 10 for good context coverage).
     snapshot_step = 1
     if save_crops_dir and total_frames:
-        snapshot_step = max(1, total_frames // 10)
+        snapshot_step = max(1, (total_frames + 19) // 20)
 
     for i, (crop, full_frame, timestamp) in enumerate(frames):
         if save_crops_dir and i % snapshot_step == 0:

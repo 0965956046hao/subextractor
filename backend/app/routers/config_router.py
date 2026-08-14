@@ -1,8 +1,10 @@
 import json
 import logging
+import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import settings
@@ -11,6 +13,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 CONFIG_FILE = settings.temp_dir / "user_config.json"
+
+ALLOWED_LOGO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+LOGO_DIR = settings.temp_dir / "logo"
+LOGO_FILENAME = "watermark_logo"
 
 
 def _read_config() -> dict:
@@ -64,6 +70,29 @@ class SaveConfigRequest(BaseModel):
     google_tts_json: str = ""
     auto_context_enabled: bool | None = None
     subtitle_style: dict | None = None
+    watermark_text: str | None = None
+
+
+def _logo_path() -> Path | None:
+    """Return the current logo file path, or None if not uploaded yet."""
+    cfg = _read_config()
+    name = cfg.get("watermark_logo") or ""
+    if not name:
+        return None
+    p = LOGO_DIR / name
+    return p if p.exists() else None
+
+
+def _has_logo() -> bool:
+    return _logo_path() is not None
+
+
+def get_watermark() -> dict:
+    """Return the watermark config for burning: {text, logo_path}."""
+    cfg = _read_config()
+    text = (cfg.get("watermark_text") or "").strip()
+    logo = _logo_path()
+    return {"text": text, "logo_path": str(logo) if logo else None}
 
 
 @router.get("/api/config")
@@ -95,6 +124,9 @@ async def get_config():
         "tts_credentials_info": tts_info,
         "auto_context_enabled": cfg.get("auto_context_enabled", True),
         "subtitle_style": get_subtitle_style(),
+        "watermark_text": cfg.get("watermark_text", ""),
+        "has_watermark_logo": _has_logo(),
+        "watermark_logo_name": (cfg.get("watermark_logo") or "") if _has_logo() else "",
     }
 
 
@@ -119,6 +151,9 @@ async def save_config(body: SaveConfigRequest):
     if body.auto_context_enabled is not None:
         cfg["auto_context_enabled"] = body.auto_context_enabled
 
+    if body.watermark_text is not None:
+        cfg["watermark_text"] = body.watermark_text.strip()
+
     if body.subtitle_style is not None:
         merged = get_subtitle_style()
         merged.update(body.subtitle_style)
@@ -128,3 +163,60 @@ async def save_config(body: SaveConfigRequest):
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("User config saved to %s", CONFIG_FILE)
     return {"status": "ok", "saved": list(cfg.keys())}
+
+
+@router.post("/api/config/logo")
+async def upload_logo(file: UploadFile = File(...)):
+    """Upload a watermark logo image. Stored under temp/logo/, not wiped by temp clear."""
+    if not file.filename:
+        raise HTTPException(400, "No file provided")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_LOGO_EXTS:
+        raise HTTPException(400, f"Unsupported image type: {ext or '(none)'}")
+
+    # Remove any previous logo, then save the new one under a stable name.
+    cfg = _read_config()
+    old_name = cfg.get("watermark_logo") or ""
+    if old_name:
+        (LOGO_DIR / old_name).unlink(missing_ok=True)
+
+    LOGO_DIR.mkdir(parents=True, exist_ok=True)
+    new_name = f"{LOGO_FILENAME}{ext}"
+    dest = LOGO_DIR / new_name
+
+    try:
+        with open(dest, "wb") as f:
+            while chunk := await file.read(64 * 1024):
+                f.write(chunk)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(500, f"Logo upload failed: {e}")
+
+    cfg["watermark_logo"] = new_name
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Watermark logo uploaded to %s", dest)
+    return {"status": "ok", "watermark_logo_name": new_name}
+
+
+@router.get("/api/config/logo")
+async def get_logo():
+    """Serve the uploaded watermark logo image."""
+    path = _logo_path()
+    if not path:
+        raise HTTPException(404, "No logo uploaded")
+    return FileResponse(path)
+
+
+@router.delete("/api/config/logo")
+async def delete_logo():
+    """Remove the uploaded watermark logo."""
+    cfg = _read_config()
+    old_name = cfg.get("watermark_logo") or ""
+    if old_name:
+        (LOGO_DIR / old_name).unlink(missing_ok=True)
+    cfg.pop("watermark_logo", None)
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok", "removed": True}

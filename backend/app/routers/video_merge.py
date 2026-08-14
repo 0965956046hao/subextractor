@@ -64,8 +64,11 @@ def import_video(body: ImportRequest):
         raise HTTPException(500, f"Import failed: {e}")
 
     try:
+        meta = {"filename": body.filename or "douyin.mp4"}
+        if body.merge_id:
+            meta["source_merge_id"] = body.merge_id
         (video_dir / "meta.json").write_text(
-            json.dumps({"filename": body.filename or "douyin.mp4"}),
+            json.dumps(meta, ensure_ascii=False),
             encoding="utf-8",
         )
     except Exception:
