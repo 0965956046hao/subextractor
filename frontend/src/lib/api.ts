@@ -48,6 +48,7 @@ export interface VideoMeta {
   video_id: string;
   filename: string;
   has_video: boolean;
+  has_dubbed?: boolean;
   entries: number;
   created_at: string;
   status?: VideoStatus;

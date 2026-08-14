@@ -238,6 +238,25 @@ def _find_font(family: str = "Arial", bold: bool = False, italic: bool = False) 
     return None
 
 
+def _wrap_text(draw, text: str, font, max_w: int) -> list[str]:
+    """Wrap text into multiple lines so no line exceeds max_w (video width)."""
+    if not text:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        trial = f"{current} {word}".strip()
+        bbox = draw.textbbox((0, 0), trial, font=font)
+        if current and bbox[2] - bbox[0] > max_w:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
 def _render_subtitle(
     text: str,
     vw: int,
@@ -277,22 +296,30 @@ def _render_subtitle(
     draw = ImageDraw.Draw(img)
 
     max_w = max(200, vw - 160)
-    # shrink text if too wide for the video (unless a single uniform size is required)
+    # shrink text only if even the widest single word is too wide for the video
     if not fixed_size:
         while font_size > 16:
             try:
                 font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
             except Exception:
                 font = ImageFont.load_default()
-            bbox = draw.textbbox((0, 0), text, font=font)
-            if bbox[2] - bbox[0] <= max_w:
+            widest = max(
+                (draw.textbbox((0, 0), w, font=font)[2] - draw.textbbox((0, 0), w, font=font)[0] for w in text.split()),
+                default=0,
+            )
+            if widest <= max_w:
                 break
             font_size -= 2
 
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    top = bbox[1]
+    # Wrap long lines so they fit within the video width (auto line break).
+    lines = _wrap_text(draw, text, font, max_w)
+
+    line_boxes = [draw.textbbox((0, 0), ln, font=font) for ln in lines]
+    tw = max((b[2] - b[0] for b in line_boxes), default=0)
+    line_heights = [b[3] - b[1] for b in line_boxes]
+    line_tops = [b[1] for b in line_boxes]
+    line_gap = max(2, int(font_size * 0.15))
+    th = sum(line_heights) + line_gap * (len(lines) - 1)
 
     pad_x, pad_y = 24, 16
     box_w = tw + pad_x * 2 + outline_w * 2
@@ -318,15 +345,20 @@ def _render_subtitle(
                 width=box_border_w,
             )
 
-    # draw text with optional outline stroke
-    draw.text(
-        (bx + pad_x + outline_w, by + pad_y + outline_w - top),
-        text,
-        font=font,
-        fill=text_color,
-        stroke_width=outline_w,
-        stroke_fill=outline_color,
-    )
+    # draw each wrapped line centered inside the box
+    y = by + pad_y + outline_w
+    for i, ln in enumerate(lines):
+        lw = line_boxes[i][2] - line_boxes[i][0]
+        lx = bx + pad_x + outline_w + (tw - lw) // 2
+        draw.text(
+            (lx, y - line_tops[i]),
+            ln,
+            font=font,
+            fill=text_color,
+            stroke_width=outline_w,
+            stroke_fill=outline_color,
+        )
+        y += line_heights[i] + line_gap
     return np.array(img)
 
 

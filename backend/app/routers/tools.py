@@ -19,6 +19,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _original_download_name(video_id: str, suffix: str, ext: str = ".mp4") -> str:
+    """Build a download filename from the original video name (meta.json).
+
+    Falls back to the internal file name if no original name is recorded.
+    """
+    try:
+        meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+        if meta_path.exists():
+            original = json.loads(meta_path.read_text(encoding="utf-8")).get("filename") or ""
+            if original:
+                return f"{Path(original).stem}{suffix}{ext}"
+    except Exception:
+        pass
+    return f"video{suffix}{ext}"
+
+
 # ── GET /api/srt/{video_id}/entries ──
 
 @router.get("/api/srt/{video_id}/entries")
@@ -100,7 +116,7 @@ async def download_muxed(video_id: str):
     if not files:
         raise HTTPException(404, "Muxed file not found. Run mux first.")
     path = files[0]
-    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_muxed"))
 
 
 # ── POST /api/preview/subtitle/{video_id} ──
@@ -261,7 +277,7 @@ async def download_hardcoded(video_id: str):
     if not files:
         raise HTTPException(404, "Hardcoded file not found. Run hardcode first.")
     path = files[0]
-    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_hardcoded"))
 
 
 # ── GET /api/preview/hardcoded/{video_id} (inline, cho iframe) ──
@@ -425,7 +441,7 @@ async def download_dubbed(video_id: str):
     if not files:
         raise HTTPException(404, "Dubbed video not found. Run TTS first.")
     path = files[0]
-    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_dubbed"))
 
 
 # ── GET /api/preview/dubbed/{video_id} (inline, cho iframe) ──
@@ -630,7 +646,7 @@ async def download_exported(video_id: str):
     files = list(exp_dir.glob("exported.mp4"))
     if not files:
         raise HTTPException(404, "Exported file not found. Run export first.")
-    return FileResponse(str(files[0]), media_type="video/mp4", filename=files[0].name)
+    return FileResponse(str(files[0]), media_type="video/mp4", filename=_original_download_name(video_id, "_exported"))
 
 @router.get("/api/tts-audio/{video_id}/{rest:path}")
 async def serve_tts_audio(video_id: str, rest: str):

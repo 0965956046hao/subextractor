@@ -99,19 +99,19 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             if row and row["status"] not in ("cancelled",):
                 continue
             seen.add(video_id)
-            vdir = settings.temp_dir / "videos" / video_id
-            has_video = (
-                any(f.stem.startswith("video") for f in vdir.iterdir())
-                if vdir.exists()
-                else False
-            )
+            try:
+                has_video = _get_video_path(video_id).exists()
+            except Exception:
+                has_video = False
             filename = _meta_filename(video_id) or video_id
             content = srt_path.read_text(encoding="utf-8")
             entries = sum(1 for block in content.split("\n\n") if "-->" in block)
+            has_dubbed = (settings.temp_dir / "tts" / video_id / "dubbed_video.mp4").exists()
             videos.append({
                 "video_id": video_id,
                 "filename": filename,
                 "has_video": has_video,
+                "has_dubbed": has_dubbed,
                 "entries": entries,
                 "created_at": datetime.fromtimestamp(
                     srt_path.stat().st_mtime, tz=timezone.utc
@@ -217,17 +217,15 @@ async def cleanup_video(video_id: str):
 async def delete_video(video_id: str):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
-    srt_dir = settings.temp_dir / "srt" / video_id
-    video_dir = settings.temp_dir / "videos" / video_id
-    frames_dir = settings.temp_dir / "frames" / video_id
-    removed_any = False
-    for d in (srt_dir, video_dir, frames_dir):
+    removed: list[str] = []
+    for name in TEMP_DATA_SUBDIRS:
+        d = settings.temp_dir / name / video_id
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
-            removed_any = True
-    if not removed_any:
+            removed.append(name)
+    if not removed:
         raise HTTPException(404, "Video not found")
-    return {"deleted": video_id}
+    return {"deleted": video_id, "removed": removed}
 
 
 @router.post("/api/video/{video_id}/abort")

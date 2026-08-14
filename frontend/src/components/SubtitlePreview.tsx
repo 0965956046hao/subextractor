@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Region, SubtitleStyle } from "@/lib/api";
-import { getVideoUrl } from "@/lib/api";
+import VideoPlayer from "@/components/VideoPlayer";
 
 interface Props {
   videoId: string;
@@ -21,7 +21,6 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const [timeLabel, setTimeLabel] = useState("00:00");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTimeRef = useRef(0);
@@ -73,7 +72,6 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   const refresh = useCallback(
     (fs: number, mv: number, mh: number) => {
       const t = videoRef.current?.currentTime ?? 0;
-      setTimeLabel(fmtTime(t));
       // force=true: a style change must always re-render even if the video
       // hasn't moved (otherwise the time-throttle silently drops the update).
       fetchOverlay(fs, mv, mh, t, true);
@@ -104,9 +102,12 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
 
   const handleTimeUpdate = () => {
     const t = videoRef.current?.currentTime ?? 0;
-    setTimeLabel(fmtTime(t));
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => fetchOverlay(fontSize, marginV, marginH, t), 200);
+  };
+
+  const handleSeeked = () => {
+    fetchOverlay(fontSize, marginV, marginH, videoRef.current?.currentTime ?? 0, true);
   };
 
   const handleConfirm = () => {
@@ -161,26 +162,18 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         </div>
       </div>
 
-      <div className="double-bezel">
-        <div className="double-bezel-inner overflow-hidden">
-          <div
-            ref={containerRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-            className="relative bg-black select-none aspect-video w-full flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
-          >
-            <video
-              ref={videoRef}
-              src={getVideoUrl(videoId)}
-              controls
-              playsInline
-              preload="auto"
-              onTimeUpdate={handleTimeUpdate}
-              onSeeked={() => fetchOverlay(fontSize, marginV, marginH, videoRef.current?.currentTime ?? 0, true)}
-              className="absolute inset-0 w-full h-full object-contain"
-            />
+      <VideoPlayer
+        videoId={videoId}
+        videoRef={videoRef}
+        containerRef={containerRef}
+        onTimeUpdate={handleTimeUpdate}
+        onSeeked={handleSeeked}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        cursorClass="cursor-grab active:cursor-grabbing"
+        overlay={
+          <>
             {overlayUrl && (
               <img
                 src={overlayUrl}
@@ -189,20 +182,28 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
                 draggable={false}
               />
             )}
-            <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/50 text-white text-[11px] font-mono tabular-nums pointer-events-none">
-              {timeLabel}
-            </div>
-            <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/40 text-white/80 text-[10px] pointer-events-none">
-              Kéo phụ đề trên video để di chuyển
-            </div>
             {loading && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               </div>
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+        badge={
+          <>
+            <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/40 text-white/80 text-[10px] pointer-events-none">
+              Kéo phụ đề trên video để di chuyển
+            </div>
+            {error && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 pointer-events-none">
+                <p className="text-white/90 text-[12px] px-4 text-center">
+                  Không thể tạo bản xem trước. Kiểm tra video/srt.
+                </p>
+              </div>
+            )}
+          </>
+        }
+      />
 
       <div className="glass-panel rounded-2xl p-4 sm:p-5 space-y-4">
         <label className="block">
@@ -265,10 +266,6 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           />
         </label>
 
-        {error && (
-          <p className="text-[11px] text-red-600">Không thể tạo bản xem trước. Kiểm tra video/srt.</p>
-        )}
-
         <div className="flex items-center justify-end gap-2 pt-1">
           <button
             onClick={handleConfirm}
@@ -286,13 +283,4 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
       </div>
     </div>
   );
-}
-
-function fmtTime(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "00:00";
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }

@@ -3,6 +3,14 @@
 import { create } from "zustand";
 import type { Region, SubtitleStyle } from "@/lib/api";
 
+function sanitizeFilename(name: string): string {
+  return (name || "")
+    .replace(/[\u0000-\u001f<>:"/\\|?*\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
 export const STEPS = [
   { label: "Phân tích link", detail: "Mở link Douyin lấy URL video" },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
@@ -55,6 +63,7 @@ export interface Pipeline {
   id: string;
   url: string;
   title: string;
+  originalName: string;
   status: "queued" | "running" | "done" | "error";
   stage: Stage;
   progress: number;
@@ -92,6 +101,12 @@ export interface DubOptions {
   originalGainDb: number;
 }
 
+export interface ImportedDone {
+  videoId: string;
+  title: string;
+  hasDubbed: boolean;
+}
+
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
   voice: "BV421_vivn_streaming",
@@ -102,6 +117,7 @@ const DEFAULT_DUB: DubOptions = {
 interface PipelineState {
   pipelines: Pipeline[];
   addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean) => string;
+  importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
@@ -127,6 +143,7 @@ function newPipeline(
     id,
     url,
     title: "",
+    originalName: "",
     status: "queued",
     stage: "idle",
     progress: 0,
@@ -164,6 +181,28 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     const id = Math.random().toString(36).slice(2, 10);
     set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit)] }));
     runPrep(id);
+    return id;
+  },
+  importDone: (v) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const p: Pipeline = {
+      ...newPipeline(id, "", "manual", {}, true),
+      status: "done",
+      stage: "done",
+      progress: 100,
+      title: v.title,
+      originalName: v.title,
+      videoId: v.videoId,
+      resultUrl: `/api/download/hardcoded/${v.videoId}`,
+      dubbedUrl: v.hasDubbed ? `/api/download/dubbed/${v.videoId}` : null,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      stepProgress: STEPS.map(() => 100),
+      stepStarts: STEPS.map(() => Date.now() - 1000),
+      stepEnds: STEPS.map(() => Date.now()),
+      logs: [{ message: "Đã nhập lại video đã xử lý trước đó.", ts: Date.now() / 1000, level: "info" }],
+    };
+    set((s) => ({ pipelines: [...s.pipelines, p] }));
     return id;
   },
   updatePipeline: (id, patch) => {
@@ -477,6 +516,7 @@ async function runPrep(id: string, startStep = 0) {
   let ocrLang = cur.ocrLang || "ch";
   const ocrType = detectOcrType();
   let region = cur.region;
+  let originalName = cur.originalName || "";
 
   const stageForStart = ["resolving", "merging", "region", "subtitle_preview"][startStep] ?? "resolving";
 
@@ -517,10 +557,12 @@ async function runPrep(id: string, startStep = 0) {
       audioUrl = rd.audio_url ?? null;
       sourceLang = detectSourceLang(cleaned);
       ocrLang = detectOcrLang(sourceLang);
+      const originalName = sanitizeFilename(rd.title || "") || "video";
       patch(id, {
         videoUrl,
         audioUrl,
         title: rd.title || "",
+        originalName,
         srcLang: sourceLang,
         ocrLang,
         ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
@@ -554,9 +596,10 @@ async function runPrep(id: string, startStep = 0) {
       }
 
       appendLog(id, "Đăng ký video vào hệ thống...");
+      const impName = `${originalName || "video"}.mp4`;
       const impBody = mergeId
-        ? { merge_id: mergeId, filename: "douyin.mp4" }
-        : { url: videoUrl, filename: "douyin.mp4" };
+        ? { merge_id: mergeId, filename: impName }
+        : { url: videoUrl, filename: impName };
       const ir = await fetch("/api/import-video", {
         method: "POST",
         headers: JSON_HEADERS,

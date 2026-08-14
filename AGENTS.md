@@ -168,12 +168,22 @@ frontend/
 | GET | `/api/status/{job_id}` | Poll job status (fallback for WS) |
 | WS | `/api/ws/{job_id}` | WebSocket: `{type:"progress"|"log"|"done"|"error", ...}` |
 | GET | `/api/download/{video_id}?format=srt\|txt` | Download subtitle file (filename = `{original}.original.srt`) |
+| GET | `/api/download/muxed/{video_id}` | Download merged video (filename = `{original}_muxed.mp4`) |
+| GET | `/api/download/hardcoded/{video_id}` | Download hardcoded video (filename = `{original}_hardcoded.mp4`) |
+| GET | `/api/download/dubbed/{video_id}` | Download dubbed video (filename = `{original}_dubbed.mp4`) |
+| GET | `/api/download/exported/{video_id}` | Download exported video (filename = `{original}_exported.mp4`) |
 | GET | `/api/srt/{video_id}` | Raw SRT content as JSON `{content: "..."}` |
 | GET | `/api/capcut/voices?lang=vi-VN` | List CapCut voices (proxy → service :8100) |
 | GET | `/api/capcut/health` | CapCut TTS service status |
 | POST | `/api/capcut/preview` | Generate voice preview MP3 (body `{voice, text?}`) → audio/mpeg |
 
 ## Key Architecture
+
+### Original filename flow (Auto Pipeline)
+Khi resolve link Douyin (`/api/video-download/resolve`), frontend `pipeline-store.ts` lưu `rd.title` (tên gốc) vào `originalName` sau khi sanitize (`sanitizeFilename`), rồi gửi nó làm `filename` trong `POST /api/import-video` (thay vì hardcode `douyin.mp4`). Backend lưu vào `videos/{video_id}/meta.json`. Các endpoint download dùng tên này:
+- `tools.py::_original_download_name(video_id, suffix)` → `{original}_muxed/hardcoded/dubbed/exported.mp4`
+- `download.py::_download_name` → `{original}.original.srt/txt`
+- `video.py::_meta_filename` → hiển thị tên trong library
 
 ### No temp frame files
 OpenCV `VideoCapture` → in-memory frames → crop → OCR on numpy arrays. Only the first frame is written to disk (for region selector).

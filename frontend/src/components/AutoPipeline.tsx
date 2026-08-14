@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, type PipelineHealth, type CapCutVoice } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getFrameUrl, listVideos, deleteVideo, type PipelineHealth, type CapCutVoice, type VideoMeta } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import {
@@ -86,6 +86,7 @@ export default function AutoPipeline() {
   const addPipeline = usePipelineStore((s) => s.addPipeline);
   const removePipeline = usePipelineStore((s) => s.removePipeline);
   const clearFinished = usePipelineStore((s) => s.clearFinished);
+  const importDone = usePipelineStore((s) => s.importDone);
 
   const [url, setUrl] = useState("");
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
@@ -99,18 +100,26 @@ export default function AutoPipeline() {
   const [previewing, setPreviewing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState(false);
-  const [tab, setTab] = useState<"detail" | "list">("detail");
+  const [tab, setTab] = useState<"detail" | "active" | "done">("detail");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [health, setHealth] = useState<PipelineHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
 
   const focusNewVideo = useCallback(() => {
     urlInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     urlInputRef.current?.focus();
   }, []);
+
+  // "Thêm video tiếp theo": start prepping a NEW upload, so deselect the running
+  // pipeline (re-enables the top options for the next video) and focus the URL input.
+  const handleAddNext = useCallback(() => {
+    setSelectedId(null);
+    focusNewVideo();
+  }, [focusNewVideo]);
 
   const checkHealth = async () => {
     setHealthLoading(true);
@@ -131,6 +140,22 @@ export default function AutoPipeline() {
     checkHealth();
     const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
+  }, []);
+
+  // Load previously-completed videos from the backend so the "Đã xử lý" tab
+  // survives page reloads (the pipeline store is in-memory only).
+  useEffect(() => {
+    let mounted = true;
+    listVideos()
+      .then((videos) => {
+        if (mounted) setHistoryVideos(videos);
+      })
+      .catch(() => {
+        // ignore — no history available
+      });
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -227,12 +252,27 @@ export default function AutoPipeline() {
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
-  const optionsDisabled = false;
-  const hasFinished = pipelines.some((p) => p.status === "done" || p.status === "error");
+  const activePipelines = pipelines.filter((p) => p.status === "queued" || p.status === "running");
+  const donePipelines = pipelines.filter((p) => p.status === "done" || p.status === "error");
+  // Persisted completed videos from the backend (survive page reloads), minus
+  // any that are already represented by an in-memory pipeline (matched by videoId).
+  const sessionVideoIds = new Set(pipelines.map((p) => p.videoId).filter(Boolean));
+  const historyVideosDone = historyVideos.filter(
+    (v) => v.status === "done" && !sessionVideoIds.has(v.video_id)
+  );
+  const finishedCount = donePipelines.length + historyVideosDone.length;
+  const hasFinished = finishedCount > 0;
+  // Options at the top only apply to the NEXT upload. Disable them while a
+  // processing video is selected so the user can't change dub/region options
+  // for a video that's already queued/running.
+  const optionsDisabled =
+    selectedId != null &&
+    selected != null &&
+    (selected.status === "running" || selected.status === "queued");
 
-  // "Thêm video tiếp theo" appears OUTSIDE the processing card, only once the
-  // active pipeline has finished the interactive region + subtitle steps
-  // (done or skipped) — so the user can prep the next video while heavy steps
+  // "Thêm video tiếp theo" appears right above the tabs, only once the active
+  // pipeline has finished the interactive region + subtitle steps (done or
+  // skipped) — so the user can prep the next video while heavy steps
   // (OCR → hardcode) run in the queue.
   const canAddNext =
     selected != null &&
@@ -265,19 +305,6 @@ export default function AutoPipeline() {
             </span>
             <span className="tracking-tight">Back to library</span>
           </Link>
-          {canAddNext && (
-            <button
-              onClick={focusNewVideo}
-              className="btn-island-primary group !px-5 !py-2 text-[13px]"
-            >
-              <span className="tracking-tight">Thêm video tiếp theo</span>
-              <span className="btn-island-icon !w-7 !h-7">
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
-                </svg>
-              </span>
-            </button>
-          )}
           {hasFinished && (
             <button
               onClick={clearFinished}
@@ -606,106 +633,133 @@ export default function AutoPipeline() {
 
       {/* Tabs */}
       <AnimatedBlock delay={200}>
-        <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] w-max mb-6">
-          <button
-            onClick={() => setTab("detail")}
-            className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
-              tab === "detail"
-                ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
-                : "text-ink-light hover:text-ink"
-            }`}
-          >
-            Tiến trình
-          </button>
-          <button
-            onClick={() => setTab("list")}
-            className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
-              tab === "list"
-                ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
-                : "text-ink-light hover:text-ink"
-            }`}
-          >
-            Danh sách đang xử lý
-            {activeCount > 0 && (
-              <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-blue-500/15 text-[10px] text-blue-600">{activeCount}</span>
-            )}
-          </button>
+        <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+          <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] w-max">
+            <button
+              onClick={() => setTab("detail")}
+              className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
+                tab === "detail"
+                  ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                  : "text-ink-light hover:text-ink"
+              }`}
+            >
+              Tiến trình
+            </button>
+            <button
+              onClick={() => setTab("active")}
+              className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
+                tab === "active"
+                  ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                  : "text-ink-light hover:text-ink"
+              }`}
+            >
+              Đang xử lý
+              {activeCount > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-blue-500/15 text-[10px] text-blue-600">{activeCount}</span>
+              )}
+            </button>
+            <button
+              onClick={() => setTab("done")}
+              className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
+                tab === "done"
+                  ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                  : "text-ink-light hover:text-ink"
+              }`}
+            >
+              Đã xử lý
+              {finishedCount > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-[10px] text-emerald-600">{finishedCount}</span>
+              )}
+            </button>
+          </div>
+          {canAddNext && (
+            <button
+              onClick={handleAddNext}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-medium tracking-tight bg-blue-600 text-white hover:bg-blue-500 shadow-sm active:scale-[0.97] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+              </svg>
+              <span className="tracking-tight">Thêm video tiếp theo</span>
+            </button>
+          )}
         </div>
       </AnimatedBlock>
 
-      {tab === "list" ? (
+      {tab === "active" ? (
         <AnimatedBlock delay={250}>
           <div className="double-bezel">
             <div className="double-bezel-inner p-5 sm:p-6">
-              {pipelines.length === 0 ? (
-                <p className="text-sm text-ink-muted text-center py-8">Chưa có job nào.</p>
+              {activePipelines.length === 0 ? (
+                <p className="text-sm text-ink-muted text-center py-8">Không có video nào đang xử lý.</p>
               ) : (
                 <div className="space-y-2">
-                  {pipelines.map((p) => {
-                    const meta = STATUS_META[p.status] ?? STATUS_META.queued;
-                    return (
-                      <div
-                        key={p.id}
-                        onClick={() => {
-                          setSelectedId(p.id);
-                          setTab("detail");
-                        }}
-                        className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-black/[0.06] bg-black/[0.02] hover:bg-black/[0.04] transition-colors cursor-pointer"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${meta.dot}`} />
-                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 ${meta.cls}`}>
-                              {meta.label}
-                            </span>
-                            <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
-                              {pipelineElapsed(p, now)}
-                            </span>
-                          </div>
-                          <p className="text-[12px] font-medium text-ink truncate">
-                            {p.title || p.url || `Job ${p.id}`}
-                          </p>
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <div className="flex-1 h-1 rounded-full bg-black/[0.06] overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all duration-500 ${
-                                  p.status === "error" ? "bg-red-500" : p.status === "done" ? "bg-emerald-500" : "bg-blue-500"
-                                }`}
-                                style={{ width: `${p.status === "done" ? 100 : Math.max(p.status === "error" ? 0 : p.progress, 2)}%` }}
-                              />
-                            </div>
-                            {(p.status === "running" || p.status === "done") && (
-                              <span className="text-[10px] font-mono text-ink-light tabular-nums">
-                                {p.status === "done" ? 100 : p.progress}%
-                              </span>
-                            )}
-                          </div>
-                          {p.status === "running" && (
-                            <p className="text-[11px] text-blue-600/80 mt-1 truncate">
-                              {(() => {
-                                const idx = STEP_STAGE[p.stage];
-                                return idx != null ? `Bước ${idx + 1}/9 · ${STEPS[idx]?.label ?? p.stage} · ${p.progress}%` : p.stage;
-                              })()}
-                            </p>
-                          )}
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removePipeline(p.id);
-                            if (selectedId === p.id) setSelectedId(null);
-                          }}
-                          title="Xoá"
-                          className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
-                        >
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                          </svg>
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {activePipelines.map((p) => (
+                    <PipelineRow
+                      key={p.id}
+                      p={p}
+                      now={now}
+                      onOpen={() => {
+                        setSelectedId(p.id);
+                        setTab("detail");
+                      }}
+                      onRemove={() => {
+                        removePipeline(p.id);
+                        if (selectedId === p.id) setSelectedId(null);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </AnimatedBlock>
+      ) : tab === "done" ? (
+        <AnimatedBlock delay={250}>
+          <div className="double-bezel">
+            <div className="double-bezel-inner p-5 sm:p-6">
+              {donePipelines.length === 0 && historyVideosDone.length === 0 ? (
+                <p className="text-sm text-ink-muted text-center py-8">Chưa có video nào hoàn tất.</p>
+              ) : (
+                <div className="space-y-2">
+                  {donePipelines.map((p) => (
+                    <PipelineRow
+                      key={p.id}
+                      p={p}
+                      now={now}
+                      onOpen={() => {
+                        setSelectedId(p.id);
+                        setTab("detail");
+                      }}
+                      onRemove={() => {
+                        removePipeline(p.id);
+                        if (selectedId === p.id) setSelectedId(null);
+                      }}
+                    />
+                  ))}
+                  {historyVideosDone.map((v) => (
+                    <HistoryRow
+                      key={v.video_id}
+                      v={v}
+                      onOpen={() => {
+                        const id = importDone({
+                          videoId: v.video_id,
+                          title: v.filename || v.video_id,
+                          hasDubbed: v.has_dubbed ?? false,
+                        });
+                        setSelectedId(id);
+                        setTab("detail");
+                      }}
+                      onDelete={async () => {
+                        try {
+                          await deleteVideo(v.video_id);
+                        } catch {
+                          // ignore
+                        }
+                        setHistoryVideos((prev) => prev.filter((x) => x.video_id !== v.video_id));
+                      }}
+                    />
+                  ))}
                 </div>
               )}
             </div>
@@ -770,6 +824,155 @@ export default function AutoPipeline() {
   );
 }
 
+function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; onOpen: () => void; onRemove: () => void }) {
+  const meta = STATUS_META[p.status] ?? STATUS_META.queued;
+  const stepLabel = (() => {
+    if (p.status !== "running") return null;
+    const idx = STEP_STAGE[p.stage];
+    return idx != null ? `Bước ${idx + 1}/9 · ${STEPS[idx]?.label ?? p.stage}` : p.stage;
+  })();
+
+  return (
+    <div
+      onClick={onOpen}
+      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-black/[0.06] bg-black/[0.02] hover:bg-black/[0.04] transition-colors cursor-pointer"
+    >
+      <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-black/[0.08]">
+        {p.videoId ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={getFrameUrl(p.videoId)} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-ink-light">
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="5" width="14" height="14" rx="2" />
+              <path d="M16 9l6-3v12l-6-3" />
+            </svg>
+          </div>
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${meta.dot}`} />
+          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 ${meta.cls}`}>
+            {meta.label}
+          </span>
+          {p.status === "queued" && (
+            <span className="text-[10px] text-amber-700/80 flex items-center gap-1">
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              Đang chờ
+            </span>
+          )}
+          {p.status === "running" && (
+            <span className="text-[10px] text-blue-700/80 flex items-center gap-1">
+              <IconSpinner className="w-3 h-3" />
+              Đang chạy
+            </span>
+          )}
+          <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
+            {pipelineElapsed(p, now)}
+          </span>
+        </div>
+        <p className="text-[12px] font-medium text-ink truncate">
+          {p.title || p.url || `Job ${p.id}`}
+        </p>
+        <div className="flex items-center gap-2 mt-1.5">
+          <div className="flex-1 h-1 rounded-full bg-black/[0.06] overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                p.status === "error" ? "bg-red-500" : p.status === "done" ? "bg-emerald-500" : "bg-blue-500"
+              }`}
+              style={{ width: `${p.status === "done" ? 100 : Math.max(p.status === "error" ? 0 : p.progress, 2)}%` }}
+            />
+          </div>
+          {(p.status === "running" || p.status === "done") && (
+            <span className="text-[10px] font-mono text-ink-light tabular-nums">
+              {p.status === "done" ? 100 : p.progress}%
+            </span>
+          )}
+        </div>
+        {stepLabel && (
+          <p className="text-[11px] text-blue-600/80 mt-1 truncate">
+            {stepLabel} · {p.progress}%
+          </p>
+        )}
+      </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        title="Xoá"
+        className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
+      >
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+function HistoryRow({ v, onOpen, onDelete }: { v: VideoMeta; onOpen: () => void; onDelete: () => void }) {
+  return (
+    <div
+      onClick={onOpen}
+      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-black/[0.06] bg-black/[0.02] hover:bg-black/[0.04] transition-colors cursor-pointer"
+    >
+      <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-black/[0.08]">
+        {v.has_video ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={getFrameUrl(v.video_id)} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-ink-light">
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="5" width="14" height="14" rx="2" />
+              <path d="M16 9l6-3v12l-6-3" />
+            </svg>
+          </div>
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="w-2 h-2 rounded-full flex-shrink-0 bg-emerald-500" />
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 bg-emerald-500/10 text-emerald-700 ring-emerald-500/20">
+            Xong
+          </span>
+          <span className="text-[10px] font-mono text-ink-light tabular-nums">
+            {v.entries} phụ đề
+          </span>
+        </div>
+        <p className="text-[12px] font-medium text-ink truncate">
+          {v.filename || v.video_id}
+        </p>
+        <div className="flex items-center gap-2 mt-1.5">
+          <div className="flex-1 h-1 rounded-full bg-emerald-500/80" />
+          <span className="text-[10px] font-mono text-ink-light tabular-nums">100%</span>
+        </div>
+      </div>
+      <span className="text-[10px] font-mono text-ink-light tabular-nums flex-shrink-0">
+        {new Date(v.created_at).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })}
+      </span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        title="Xoá toàn bộ video"
+        className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
+      >
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pipeline; now: number; onRemove: () => void; onStartNext?: () => void }) {
   const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
@@ -793,7 +996,24 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
       <div className="double-bezel-inner p-5 sm:p-6">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink truncate">{p.title || "Đang phân tích..."}</p>
+            <div className="flex items-center gap-2 flex-wrap mb-0.5">
+              <p className="text-sm font-semibold text-ink truncate">{p.title || "Đang phân tích..."}</p>
+              {p.status === "queued" && (
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 ring-1 ring-amber-500/25 text-amber-700 flex items-center gap-1">
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  Đang chờ trong hàng đợi
+                </span>
+              )}
+              {p.status === "running" && (
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 ring-1 ring-blue-500/25 text-blue-700 flex items-center gap-1">
+                  <IconSpinner className="w-3 h-3" />
+                  Đang xử lý
+                </span>
+              )}
+            </div>
             <p className="text-[11px] text-ink-light font-mono truncate">{p.url}</p>
           </div>
           <div className="flex items-center gap-2">
