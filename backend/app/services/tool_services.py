@@ -119,7 +119,7 @@ PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: BlackBoxStyle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,16,0,2,50,50,80,1
+Style: BlackBoxStyle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,16,0,2,50,50,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -215,7 +215,7 @@ def _render_subtitle(text: str, vw: int, vh: int, font_path):
     box_w = tw + pad_x * 2
     box_h = th + pad_y * 2
     bx = (vw - box_w) // 2
-    by = vh - box_h - 120
+    by = vh - box_h - 80
 
     draw.rectangle([bx, by, bx + box_w, by + box_h], fill=(0, 0, 0, 255))
     draw.text((bx + pad_x - bbox[0], by + pad_y - bbox[1]), text, font=font, fill=(255, 255, 255, 255))
@@ -332,10 +332,17 @@ def run_hardcode_sync(
 
     # Use dubbed (instrumental + TTS Việt) audio if it exists, else original audio
     video_id = Path(video_path_str).parent.name
+    full_audio_path = settings.temp_dir / "tts" / video_id / "full_audio.m4a"
     dubbed_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
-    use_dubbed = dubbed_path.exists()
+    if full_audio_path.exists():
+        audio_src = full_audio_path
+    elif dubbed_path.exists():
+        audio_src = dubbed_path
+    else:
+        audio_src = None
+    use_dubbed = audio_src is not None
     if use_dubbed:
-        logger.info("hardcode job %s: using dubbed audio (%s)", job_id, dubbed_path.name)
+        logger.info("hardcode job %s: using dubbed audio (%s)", job_id, audio_src.name)
 
     if not _has_subtitles_filter():
         # ffmpeg lacks libass — fall back to OpenCV + Pillow burn
@@ -350,7 +357,7 @@ def run_hardcode_sync(
         burn_subtitles_pillow(
             video_path_str, srt_path_str, out_path,
             progress_callback=progress_cb,
-            audio_source=str(dubbed_path) if use_dubbed else None,
+            audio_source=str(audio_src) if use_dubbed else None,
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
@@ -360,7 +367,7 @@ def run_hardcode_sync(
         cmd = [
             "ffmpeg",
             "-i", video_path_str,
-            "-i", str(dubbed_path),
+            "-i", str(audio_src),
             "-vf", f"subtitles={ass_filename}",
             "-map", "0:v:0",
             "-map", "1:a:0",

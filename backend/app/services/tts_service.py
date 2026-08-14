@@ -364,18 +364,16 @@ def _get_audio_duration(path: Path) -> float:
         return 0.0
 
 
-def _mix_tts_with_instrumental(
-    video_path: Path,
-    instrumental: Path,
+def combine_tts_mp3(
     audio_files: List[Path],
     entries,
     out_path: Path,
-    background_volume: float = 1.0,
 ) -> Path:
-    cmd = ["ffmpeg", "-y", "-i", str(video_path), "-i", str(instrumental)]
+    """Gộp các file mp3 TTS thành 1 file full voice mp3 (đặt theo timestamp SRT)."""
+    cmd = ["ffmpeg", "-y"]
 
     tts_inputs = []  # (input_idx, delay_ms, tempo_chain)
-    next_idx = 2
+    next_idx = 0
     for i, entry in enumerate(entries):
         if i >= len(audio_files):
             break
@@ -396,48 +394,76 @@ def _mix_tts_with_instrumental(
             chain.append(f"atempo={speed:.4f}")
             tempo = ",".join(chain) + ","
 
-        tts_inputs.append((next_idx, int(entry.start * 1000), tempo))
+        delay_ms = int(entry.start * 1000)
+        tempo_label = tempo.rstrip(",") if tempo else "-"
+        logger.info(
+            "  [%s] delay=%dms tempo=%s | %s",
+            entry.startLabel, delay_ms, tempo_label, entry.text,
+        )
+
+        tts_inputs.append((next_idx, delay_ms, tempo))
         next_idx += 1
 
     if not tts_inputs:
-        raise RuntimeError("Không có file TTS nào để mix")
+        raise RuntimeError("Không có file TTS nào để gộp")
 
     parts = [
         f"[{idx}:a]{tempo}adelay={d}|{d}[t{k}]"
         for k, (idx, d, tempo) in enumerate(tts_inputs)
     ]
     mix_inputs = "".join(f"[t{k}]" for k in range(len(tts_inputs)))
-    parts.append(f"{mix_inputs}amix=inputs={len(tts_inputs)}:duration=first:dropout_transition=0[tts]")
-
-    if background_volume < 1.0:
-        parts.append(f"[1:a]volume={background_volume}[bg]")
-        parts.append("[bg][tts]amix=inputs=2:duration=first:normalize=0[out]")
-    else:
-        parts.append("[1:a][tts]amix=inputs=2:duration=first:normalize=0[out]")
+    parts.append(f"{mix_inputs}amix=inputs={len(tts_inputs)}:duration=longest:dropout_transition=0:normalize=0[out]")
 
     cmd += [
         "-filter_complex", ";".join(parts),
-        "-map", "0:v:0",
         "-map", "[out]",
-        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
-        "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
+        "-c:a", "libmp3lame", "-b:a", "192k",
         str(out_path),
     ]
 
-    logger.info("Running FFmpeg dub mix: %s", " ".join(cmd[:6]))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    logger.info("Running FFmpeg combine mp3 → %s", out_path.name)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg dub mix failed: {result.stderr[-500:]}")
+        raise RuntimeError(f"FFmpeg combine mp3 failed: {result.stderr[-500:]}")
     return out_path
 
 
-def dub_video_with_tts(
+def _mix_background_with_voice(
+    background_path: Path,
+    voice_path: Path,
+    background_volume: float,
+    out_path: Path,
+) -> Path:
+    """Mix background (instrumental/gốc) + full voice mp3 → single audio m4a."""
+    if background_volume < 1.0:
+        fc = (
+            f"[0:a]volume={background_volume}[bg];"
+            "[bg][1:a]amix=inputs=2:duration=longest:normalize=0[out]"
+        )
+    else:
+        fc = "[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[out]"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(background_path),
+        "-i", str(voice_path),
+        "-filter_complex", fc,
+        "-map", "[out]",
+        "-c:a", "aac", "-b:a", "192k",
+        str(out_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg background mix failed: {result.stderr[-500:]}")
+    return out_path
+
+
+def build_full_audio(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
     progress_callback=None,
 ) -> Path:
-    """Separate vocals → synthesize Vietnamese TTS → mix into dubbed video."""
+    """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a."""
     video_path = _video_path(video_id)
     out_dir = settings.temp_dir / "tts" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -461,17 +487,45 @@ def dub_video_with_tts(
 
     audio_files = synthesize_srt(
         video_id,
-        progress_callback=lambda i, total: cb(40 + int((i / total) * 40)) if total else None,
+        progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
         voice_name=voice_name,
     )
-    cb(80)
+    cb(75)
 
-    out_path = out_dir / "dubbed_video.mp4"
-    _mix_tts_with_instrumental(
-        video_path, instrumental, audio_files, entries, out_path,
-        background_volume=background_volume,
-    )
+    full_voice = out_dir / "full_voice.mp3"
+    combine_tts_mp3(audio_files, entries, full_voice)
+    cb(85)
+
+    full_audio = out_dir / "full_audio.m4a"
+    _mix_background_with_voice(instrumental, full_voice, background_volume, full_audio)
     cb(100)
+    return full_audio
+
+
+def dub_video_with_tts(
+    video_id: str,
+    voice_name: str = "vi-VN-Standard-B",
+    progress_callback=None,
+) -> Path:
+    """Separate vocals → synthesize Vietnamese TTS → mix into dubbed video."""
+    video_path = _video_path(video_id)
+    full_audio = build_full_audio(video_id, voice_name, progress_callback)
+
+    out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-i", str(full_audio),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+            "-c:a", "copy",
+            "-shortest",
+            str(out_path),
+        ],
+        check=True, capture_output=True, timeout=600,
+    )
     return out_path
 
 
