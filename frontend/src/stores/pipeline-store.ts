@@ -12,6 +12,9 @@ export const STEPS = [
   { label: "Dịch Gemini", detail: "Dịch phụ đề sang tiếng Việt" },
   { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền" },
   { label: "Nhúng SRT vào video", detail: "FFmpeg gộp SRT mới vào MP4" },
+  { label: "Tạo meta", detail: "Gemini tạo tiêu đề/mô tả/tags từ ngữ cảnh" },
+  { label: "Cập nhật thumbnail", detail: "fal.ai chỉnh lại thumbnail 16:9 + tiêu đề" },
+  { label: "Upload YouTube", detail: "Đăng video lên YouTube kèm meta" },
 ];
 
 export type Stage =
@@ -21,10 +24,13 @@ export type Stage =
   | "region"
   | "processing"
   | "context"
+  | "meta"
   | "translating"
   | "saving"
   | "dub"
   | "muxing"
+  | "thumbnail"
+  | "youtube"
   | "done"
   | "error";
 
@@ -38,6 +44,9 @@ export const STEP_STAGE: Record<string, number> = {
   saving: 5,
   dub: 6,
   muxing: 7,
+  meta: 8,
+  thumbnail: 9,
+  youtube: 10,
 };
 
 export const DEFAULT_REGION: Region = {
@@ -58,6 +67,7 @@ export interface Pipeline {
   url: string;
   title: string;
   thumbnail: string | null;
+  updatedThumbnailUrl: string | null;
   status: "queued" | "running" | "done" | "error";
   stage: Stage;
   progress: number;
@@ -78,13 +88,15 @@ export interface Pipeline {
   ocrLang: string;
   srcLang: string;
   contextOn: boolean;
+  meta: Record<string, unknown> | null;
   region: Region | null;
   regionMode: "manual" | "auto";
+  autoUploadYoutube: boolean;
 }
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto") => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", autoUploadYoutube?: boolean) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
@@ -102,12 +114,14 @@ function newPipeline(
   id: string,
   url: string,
   regionMode: "manual" | "auto" = "auto",
+  autoUploadYoutube = false,
 ): Pipeline {
   return {
     id,
     url,
     title: "",
     thumbnail: null,
+    updatedThumbnailUrl: null,
     status: "queued",
     stage: "idle",
     progress: 0,
@@ -128,8 +142,10 @@ function newPipeline(
     ocrLang: "",
     srcLang: "",
     contextOn: false,
+    meta: null,
     region: null,
     regionMode,
+    autoUploadYoutube,
   };
 }
 
@@ -149,10 +165,10 @@ function schedulePersist() {
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "auto") => {
+  addPipeline: (url, regionMode = "auto", autoUploadYoutube = false) => {
     const id = Math.random().toString(36).slice(2, 10);
     set((s) => ({
-      pipelines: [...s.pipelines, newPipeline(id, url, regionMode)],
+      pipelines: [...s.pipelines, newPipeline(id, url, regionMode, autoUploadYoutube)],
     }));
     enqueue(id);
     schedulePersist();
@@ -303,6 +319,23 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
   return { status: "error", error: "Quá thời gian chờ" };
 }
 
+async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
+  for (let i = 0; i < 2400; i++) {
+    await sleep(1500);
+    try {
+      const r = await fetch(`/api/youtube/upload/${jobId}`);
+      if (!r.ok) continue;
+      const d = await r.json();
+      onTick({ progress: d.progress ?? 0 });
+      if (d.status === "done") return d;
+      if (d.status === "error") return { status: "error", error: d.error };
+    } catch {
+      // ignore transient
+    }
+  }
+  return { status: "error", error: "Quá thời gian chờ upload" };
+}
+
 // ── Queue ──────────────────────────────────────────────────────────────────
 
 let queue: { id: string; startStep: number }[] = [];
@@ -437,6 +470,7 @@ async function runPipeline(id: string, startStep = 0) {
   let ocrLang = cur.ocrLang || "ch";
   const ocrType = detectOcrType();
   let region = cur.region;
+  let thumbUrl = cur.thumbnail;
 
   const stageForStart =
     [
@@ -448,6 +482,9 @@ async function runPipeline(id: string, startStep = 0) {
       "translating",
       "dub",
       "muxing",
+      "meta",
+      "thumbnail",
+      "youtube",
     ][startStep] ?? "resolving";
 
   patch(id, {
@@ -512,6 +549,7 @@ async function runPipeline(id: string, startStep = 0) {
         });
         const td = await tr.json();
         if (td.thumbnail) {
+          thumbUrl = td.thumbnail;
           patch(id, { thumbnail: td.thumbnail });
           appendLog(id, `Thumbnail: ${td.thumbnail}`);
         } else {
@@ -568,6 +606,17 @@ async function runPipeline(id: string, startStep = 0) {
         });
       } catch {
         // ignore
+      }
+      if (thumbUrl) {
+        try {
+          await fetch(`/api/context/${videoId}/thumbnail`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ url: thumbUrl }),
+          });
+        } catch {
+          // ignore
+        }
       }
     }
 
@@ -728,6 +777,91 @@ async function runPipeline(id: string, startStep = 0) {
       if (hs.status !== "done")
         throw new Error(hs.error || "Nhúng SRT thất bại");
       markStepEnd(id, 7);
+    }
+
+    // 8. Meta (bước cuối — sau khi có video cuối)
+    if (startStep <= 8) {
+      patch(id, { stage: "meta" });
+      markStepStart(id, 8);
+      appendLog(id, "Tạo meta (tiêu đề/mô tả/tags) từ ngữ cảnh...");
+      try {
+        const mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
+        const md = await mr.json();
+        if (mr.ok && md.meta) {
+          patch(id, { meta: md.meta });
+          appendLog(id, `Meta: ${md.meta.title || "(không có tiêu đề)"}`);
+        } else {
+          appendLog(id, `Không tạo được meta: ${md.detail || "lỗi"}`);
+        }
+      } catch {
+        appendLog(id, "Bỏ qua tạo meta (lỗi).");
+      }
+      markStepEnd(id, 8);
+    }
+
+    // 9. Cập nhật thumbnail (fal.ai image-to-image)
+    if (startStep <= 9) {
+      patch(id, { stage: "thumbnail" });
+      markStepStart(id, 9);
+
+      let hasFalKey = false;
+      try {
+        const cfg = await fetch("/api/config").then((r) => r.json());
+        hasFalKey = !!cfg.has_fal_key;
+      } catch {
+        // ignore
+      }
+
+      if (!hasFalKey) {
+        appendLog(id, "Bỏ qua cập nhật thumbnail (chưa có FAL key).");
+        markStepSkipped(id, 9);
+      } else {
+        appendLog(id, "Cập nhật thumbnail (fal.ai)...");
+        try {
+          const fr = await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
+          const fd = await fr.json();
+          if (fr.ok && fd.thumbnail_url) {
+            patch(id, { updatedThumbnailUrl: fd.thumbnail_url });
+            appendLog(id, `Thumbnail mới: ${fd.thumbnail_url}`);
+          } else {
+            appendLog(id, `Không cập nhật được thumbnail: ${fd.detail || "lỗi"}`);
+          }
+        } catch {
+          appendLog(id, "Bỏ qua cập nhật thumbnail (lỗi).");
+        }
+        markStepEnd(id, 9);
+      }
+    }
+
+    // 10. Upload YouTube (chỉ khi bật auto upload)
+    if (startStep <= 10) {
+      if (!cur.autoUploadYoutube) {
+        appendLog(id, "Bỏ qua upload YouTube (tự động up tắt).");
+        markStepSkipped(id, 10);
+      } else {
+        patch(id, { stage: "youtube" });
+        markStepStart(id, 10);
+        appendLog(id, "Upload YouTube (kèm meta)...");
+        try {
+          const ur = await fetch(`/api/youtube/upload/${videoId}`, {
+            method: "POST",
+          });
+          const ud = await ur.json();
+          if (ur.ok && ud.job_id) {
+            const us = await pollYoutubeUpload(ud.job_id, tick(10));
+            if (us.status === "done") {
+              appendLog(id, "Upload YouTube hoàn tất!");
+            } else {
+              appendLog(id, `Upload YouTube thất bại: ${us.error || "lỗi"}`);
+            }
+          } else {
+            appendLog(id, `Bỏ qua upload YouTube: ${ud.detail || "chưa cấu hình"}`);
+          }
+        } catch {
+          appendLog(id, "Bỏ qua upload YouTube (lỗi).");
+        }
+        markStepEnd(id, 10);
+      }
     }
 
     patch(id, {

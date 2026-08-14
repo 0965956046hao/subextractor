@@ -25,6 +25,7 @@ def _read_config() -> dict:
 class SaveConfigRequest(BaseModel):
     gemini_api_key: str = ""
     google_tts_json: str = ""
+    fal_key: str = ""
     auto_context_enabled: bool | None = None
 
 
@@ -35,17 +36,21 @@ async def get_config():
     return {
         "has_gemini_key": bool(cfg.get("gemini_api_key")),
         "has_tts_credentials": bool(cfg.get("google_tts_credentials")),
+        "has_fal_key": bool(cfg.get("fal_key")),
         "auto_context_enabled": cfg.get("auto_context_enabled", True),
     }
 
 
 @router.post("/api/config")
 async def save_config(body: SaveConfigRequest):
-    """Save Gemini API key and/or Google TTS credentials."""
+    """Save Gemini API key, Google TTS credentials and/or fal.ai key."""
     cfg = _read_config()
 
     if body.gemini_api_key:
         cfg["gemini_api_key"] = body.gemini_api_key
+
+    if body.fal_key:
+        cfg["fal_key"] = body.fal_key
 
     if body.google_tts_json:
         # Validate it's a valid service account JSON

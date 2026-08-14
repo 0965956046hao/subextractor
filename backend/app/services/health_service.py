@@ -43,6 +43,14 @@ def _resolve_tts_credentials() -> str:
     return creds or ""
 
 
+def _resolve_fal_key() -> str:
+    return (
+        settings.fal_key
+        or os.environ.get("FAL_KEY", "")
+        or _read_user_config().get("fal_key", "")
+    )
+
+
 def check_gemini() -> dict:
     """Verify the configured Gemini API key actually works."""
     key = _resolve_gemini_key()
@@ -134,12 +142,32 @@ def check_tts() -> dict:
         }
 
 
+def check_fal() -> dict:
+    """Verify the fal.ai key is configured (presence check — no paid call)."""
+    key = _resolve_fal_key()
+    if not key:
+        return {
+            "service": "fal",
+            "configured": False,
+            "healthy": False,
+            "message": "Chưa nhập FAL key (Settings ⚙️) — bỏ qua cập nhật thumbnail",
+        }
+    return {
+        "service": "fal",
+        "configured": True,
+        "healthy": True,
+        "message": "FAL key đã cấu hình",
+    }
+
+
 def pipeline_health() -> dict:
     """Check all prerequisites for the AutoPipeline and report readiness."""
     gemini = check_gemini()
     tts = check_tts()
-    checks = [gemini, tts]
+    fal = check_fal()
+    checks = [gemini, tts, fal]
+    # fal là optional — không block pipeline khi thiếu
     return {
-        "healthy": all(c["healthy"] for c in checks),
+        "healthy": gemini["healthy"] and tts["healthy"],
         "checks": checks,
     }

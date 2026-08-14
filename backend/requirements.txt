@@ -12,4 +12,6 @@ pyobjc-framework-Cocoa>=10.0,<12.0
 pyobjc-framework-Quartz>=10.0,<12.0
 google-genai>=1.0.0
 google-cloud-texttospeech>=2.16.0
+fal-client>=0.6.0
 demucs
+fal-client 

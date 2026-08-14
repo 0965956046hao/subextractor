@@ -65,7 +65,7 @@ export type BrowserHandle = { browser: Browser; persistent: boolean };
 
 export const HEADLESS =
   process.env.DOUYIN_HEADLESS === undefined
-    ? false
+    ? true
     : process.env.DOUYIN_HEADLESS !== "false";
 
 /**

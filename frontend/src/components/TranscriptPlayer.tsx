@@ -120,6 +120,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsGeminiKey, setSettingsGeminiKey] = useState("");
   const [settingsTtsJson, setSettingsTtsJson] = useState("");
+  const [settingsFalKey, setSettingsFalKey] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("");
   const [hasApiKeys, setHasApiKeys] = useState(false);
   const [selectedSrt, setSelectedSrt] = useState<{ id: string; name: string } | null>(null);
@@ -306,6 +307,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       const res = await fetch("/api/config");
       const d = await res.json();
       setSettingsGeminiKey(d.has_gemini_key ? "••••••••" : "");
+      setSettingsFalKey(d.has_fal_key ? "••••••••" : "");
     } catch {
       // ignore
     }
@@ -323,6 +325,10 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               ? settingsGeminiKey
               : "",
           google_tts_json: settingsTtsJson || "",
+          fal_key:
+            settingsFalKey && settingsFalKey !== "••••••••"
+              ? settingsFalKey
+              : "",
         }),
       });
       const d = await res.json();
@@ -816,6 +822,24 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     Google Cloud → IAM → Service Accounts → Create Key → JSON
+                  </p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
+                    fal.ai Key
+                  </label>
+                  <input
+                    type="password"
+                    value={settingsFalKey}
+                    onChange={(e) => setSettingsFalKey(e.target.value)}
+                    placeholder="FAL key cho thumbnail..."
+                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  />
+                  <p className="text-[9px] text-ink-light mt-1">
+                    Lấy tại{" "}
+                    <a href="https://fal.ai/dashboard/keys" target="_blank" className="text-blue-500 underline">
+                      fal.ai/dashboard/keys
+                    </a>
                   </p>
                 </div>
               </div>

@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Google Cloud TTS
     google_tts_credentials: str = ""
 
+    # fal.ai (image-to-image thumbnail)
+    fal_key: str = ""
+
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
 

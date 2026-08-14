@@ -80,6 +80,28 @@ def load_share_text(video_id: str) -> str | None:
     return None
 
 
+def _thumbnail_path(video_id: str) -> Path:
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / "thumbnail.txt"
+
+
+def save_thumbnail(video_id: str, url: str) -> None:
+    """Persist the extracted thumbnail URL for later use (fal.ai step)."""
+    p = _thumbnail_path(video_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(url, encoding="utf-8")
+
+
+def load_thumbnail(video_id: str) -> str | None:
+    """Load the saved thumbnail URL, if any."""
+    p = _thumbnail_path(video_id)
+    if p.exists():
+        try:
+            return p.read_text(encoding="utf-8").strip()
+        except Exception:
+            return None
+    return None
+
+
 def generate_video_context(video_id: str) -> str | None:
     """Upload snapshot frames to Gemini File Store, then call Vision in one request.
 

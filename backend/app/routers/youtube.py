@@ -316,21 +316,17 @@ def _process_thumbnail(thumb_path: Path) -> Path:
     return out_path
 
 
-@router.post("/api/youtube/upload")
-async def upload_to_youtube(body: UploadRequest):
+def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privacy: str) -> dict:
     """Start YouTube upload in background, return job_id for polling."""
     if not CLIENT_SECRETS_PATH.exists():
         raise HTTPException(400, "client_secrets.json not found. Please configure YouTube API credentials first.")
     if not YOUTUBE_UPLOADER_BIN.exists():
         raise HTTPException(500, f"youtubeuploader binary not found at {YOUTUBE_UPLOADER_BIN}")
 
-    video_path = Path(body.video_path)
-    meta_path = Path(body.meta_path)
-
     if not video_path.exists():
-        raise HTTPException(404, f"Video not found: {body.video_path}")
+        raise HTTPException(404, f"Video not found: {video_path}")
     if not meta_path.exists():
-        raise HTTPException(404, f"Meta JSON not found: {body.meta_path}")
+        raise HTTPException(404, f"Meta JSON not found: {meta_path}")
 
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -348,12 +344,11 @@ async def upload_to_youtube(body: UploadRequest):
         str(YOUTUBE_UPLOADER_BIN),
         "-filename", str(video_path),
         "-metaJSON", str(meta_path),
-        "-privacy", body.privacy,
+        "-privacy", privacy,
     ]
-    if body.thumbnail_path:
-        thumb = Path(body.thumbnail_path)
+    if thumbnail_path:
+        thumb = Path(thumbnail_path)
         if thumb.exists():
-            # Validate/resize thumbnail to 1280x720 before upload
             try:
                 thumb = _process_thumbnail(thumb)
             except Exception as e:
@@ -369,7 +364,6 @@ async def upload_to_youtube(body: UploadRequest):
                 cmd, cwd=str(YOUTUBE_UPLOADER_DIR),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
             )
-            # Read raw bytes and split on both \r and \n (progress uses \r)
             buffer = b""
             while True:
                 chunk = proc.stdout.read(1) if proc.stdout else b""
@@ -381,7 +375,6 @@ async def upload_to_youtube(body: UploadRequest):
                     buffer = b""
                     if line:
                         job["output_lines"].append(line)
-                        # Parse progress: format "Progress: ... (45.2%) ETA ..."
                         m = re.search(r"\((\d+(?:\.\d+)?)%\)", line)
                         if m:
                             try:
@@ -407,6 +400,42 @@ async def upload_to_youtube(body: UploadRequest):
 
     threading.Thread(target=_run, daemon=True).start()
     return {"job_id": job_id, "status": "uploading"}
+
+
+@router.post("/api/youtube/upload")
+async def upload_to_youtube(body: UploadRequest):
+    """Start YouTube upload in background, return job_id for polling."""
+    return _start_upload(Path(body.video_path), Path(body.meta_path), body.thumbnail_path, body.privacy)
+
+
+@router.post("/api/youtube/upload/{video_id}")
+async def upload_video_by_id(video_id: str):
+    """Upload the hardcoded/dubbed video with the generated meta to YouTube."""
+    # Resolve video path
+    hd_dir = settings.temp_dir / "hardcoded" / video_id
+    video_path = None
+    if hd_dir.exists():
+        files = list(hd_dir.glob("*_hardcoded.mp4"))
+        if files:
+            video_path = files[0]
+    if video_path is None:
+        dubbed = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+        if dubbed.exists():
+            video_path = dubbed
+    if video_path is None:
+        raise HTTPException(404, "Video not found. Run hardcode/dub first.")
+
+    meta_path = settings.temp_dir / "meta" / video_id / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(404, "meta.json not found. Run meta step first.")
+
+    # Chỉ up thumbnail nếu có file thumbnail đã tạo
+    thumbnail_path = ""
+    thumb_file = settings.temp_dir / "thumb" / video_id / "thumbnail.png"
+    if thumb_file.exists():
+        thumbnail_path = str(thumb_file)
+
+    return _start_upload(video_path, meta_path, thumbnail_path, "private")
 
 
 @router.get("/api/youtube/upload/{job_id}")
