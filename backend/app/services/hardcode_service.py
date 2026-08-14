@@ -95,6 +95,11 @@ def srt_to_ass_blackbox(
     # ASS BorderStyle: 1=outline+shadow, 3=opaque box
     border_style = 3 if box_on else 1
     back_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
+    # margin_h is a 1920px reference (positive = right); shift the horizontal
+    # margins so the black box moves with the user's drag offset.
+    margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
+    margin_l = max(0, 50 + margin_h)
+    margin_r = max(0, 50 - margin_h)
 
     header = f"""[Script Info]
 Title: Subtitle Black Box
@@ -106,7 +111,7 @@ PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,50,50,{max(0, int(int(s.get('margin_v', 40)) * vh / 1080))},1
+Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,{margin_l},{margin_r},{max(0, int(int(s.get('margin_v', 40)) * vh / 1080))},1
 """
     # When using BorderStyle=3, apply box border colour as the outline colour so the
     # box edge is visible even if text outline is off.
@@ -265,6 +270,8 @@ def _render_subtitle(
     # margin_v is a 1080p reference, same as font_size, so the box stays at the
     # same proportional position when the video resolution changes.
     margin_v = max(0, int(int(s.get("margin_v", 40)) * vh / 1080))
+    # margin_h is a 1920px reference for horizontal offset (positive = right).
+    margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
 
     img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -290,7 +297,7 @@ def _render_subtitle(
     pad_x, pad_y = 24, 16
     box_w = tw + pad_x * 2 + outline_w * 2
     box_h = th + pad_y * 2 + outline_w * 2
-    bx = (vw - box_w) // 2
+    bx = (vw - box_w) // 2 + margin_h
     by = vh - box_h - margin_v - 40
 
     # draw rounded background box

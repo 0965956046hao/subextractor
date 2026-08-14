@@ -148,6 +148,71 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
     return {"videos": videos}
 
 
+@router.post("/api/video/{video_id}/cleanup")
+async def cleanup_video(video_id: str):
+    """Delete intermediate temp data for a finished video, keeping only the
+    final deliverables needed to re-view / re-download the result:
+    - hardcoded/{video_id}/        (final video + ASS)
+    - srt/{video_id}/              (final subtitles)
+    - tts/{video_id}/dubbed_video.mp4 (dubbed video)
+    - videos/{video_id}/meta.json  (original filename)
+    - projects/{video_id}/         (editor project state)
+    """
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    removed: list[str] = []
+
+    # videos/: keep only meta.json (needed for download filename)
+    video_dir = settings.temp_dir / "videos" / video_id
+    if video_dir.exists():
+        for f in video_dir.iterdir():
+            if f.name == "meta.json":
+                continue
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink(missing_ok=True)
+        removed.append("videos")
+
+    # frames/: first frame + ocr_snapshots — intermediate
+    frames_dir = settings.temp_dir / "frames" / video_id
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        removed.append("frames")
+
+    # context/: context files — intermediate
+    context_dir = settings.temp_dir / "context" / video_id
+    if context_dir.exists():
+        shutil.rmtree(context_dir, ignore_errors=True)
+        removed.append("context")
+
+    # translated/: redundant (step 6 already wrote translated text into srt/)
+    translated_dir = settings.temp_dir / "translated" / video_id
+    if translated_dir.exists():
+        shutil.rmtree(translated_dir, ignore_errors=True)
+        removed.append("translated")
+
+    # tts/: keep only dubbed_video.mp4
+    tts_dir = settings.temp_dir / "tts" / video_id
+    if tts_dir.exists():
+        for f in tts_dir.iterdir():
+            if f.name == "dubbed_video.mp4":
+                continue
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink(missing_ok=True)
+        removed.append("tts")
+
+    # muxed/: intermediate
+    muxed_dir = settings.temp_dir / "muxed" / video_id
+    if muxed_dir.exists():
+        shutil.rmtree(muxed_dir, ignore_errors=True)
+        removed.append("muxed")
+
+    return {"cleaned": video_id, "removed": removed}
+
+
 @router.delete("/api/video/{video_id}")
 async def delete_video(video_id: str):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
@@ -214,10 +279,15 @@ async def clear_temp(jobs: dict = Depends(get_jobs)):
 
 def _get_video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
-    if not video_dir.exists():
-        raise HTTPException(404, "Video not found")
-    for f in video_dir.iterdir():
-        if f.stem.startswith("video"):
+    if video_dir.exists():
+        for f in video_dir.iterdir():
+            if f.stem.startswith("video"):
+                return f
+    # Fallback: after cleanup the original video is deleted — serve the final
+    # hardcoded video so the result stays reviewable (library / detail pages).
+    hd_dir = settings.temp_dir / "hardcoded" / video_id
+    if hd_dir.exists():
+        for f in hd_dir.glob("*_hardcoded.mp4"):
             return f
     raise HTTPException(404, "Video file not found")
 

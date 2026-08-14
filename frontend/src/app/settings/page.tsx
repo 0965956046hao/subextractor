@@ -24,6 +24,7 @@ const DEFAULTS: SubtitleStyle = {
   box_border_color: "#000000",
   box_border_width: 0,
   margin_v: 40,
+  margin_h: 0,
 };
 
 const STYLE_LABELS: Record<string, string> = {

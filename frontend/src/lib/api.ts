@@ -260,6 +260,7 @@ export interface SubtitleStyle {
   box_border_color: string;
   box_border_width: number;
   margin_v: number;
+  margin_h: number;
 }
 
 export interface AppConfig {

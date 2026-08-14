@@ -37,6 +37,7 @@ DEFAULT_SUBTITLE_STYLE = {
     "box_border_color": "#000000",
     "box_border_width": 0,
     "margin_v": 40,
+    "margin_h": 0,
 }
 
 

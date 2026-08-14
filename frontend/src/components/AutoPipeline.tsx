@@ -227,8 +227,18 @@ export default function AutoPipeline() {
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
-  const optionsDisabled = activeCount > 0;
+  const optionsDisabled = false;
   const hasFinished = pipelines.some((p) => p.status === "done" || p.status === "error");
+
+  // "Thêm video tiếp theo" appears OUTSIDE the processing card, only once the
+  // active pipeline has finished the interactive region + subtitle steps
+  // (done or skipped) — so the user can prep the next video while heavy steps
+  // (OCR → hardcode) run in the queue.
+  const canAddNext =
+    selected != null &&
+    (selected.status === "running" || selected.status === "queued") &&
+    (selected.stepSkipped[2] || selected.stepEnds[2] != null) &&
+    (selected.stepSkipped[3] || selected.stepEnds[3] != null);
 
   const handleClearTemp = async () => {
     setConfirmingClear(false);
@@ -255,6 +265,19 @@ export default function AutoPipeline() {
             </span>
             <span className="tracking-tight">Back to library</span>
           </Link>
+          {canAddNext && (
+            <button
+              onClick={focusNewVideo}
+              className="btn-island-primary group !px-5 !py-2 text-[13px]"
+            >
+              <span className="tracking-tight">Thêm video tiếp theo</span>
+              <span className="btn-island-icon !w-7 !h-7">
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+                </svg>
+              </span>
+            </button>
+          )}
           {hasFinished && (
             <button
               onClick={clearFinished}

@@ -163,7 +163,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true) => {
     const id = Math.random().toString(36).slice(2, 10);
     set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit)] }));
-    enqueue(id);
+    runPrep(id);
     return id;
   },
   updatePipeline: (id, patch) => {
@@ -180,7 +180,11 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     }));
   },
   rerunPipeline: (id, step) => {
-    enqueue(id, step);
+    if (step <= 3) {
+      runPrep(id, step);
+    } else {
+      enqueue(id, step);
+    }
   },
   confirmRegion: (id, region) => {
     const s = get().pipelines.find((p) => p.id === id);
@@ -363,6 +367,16 @@ function enqueue(id: string, startStep = 0) {
   processQueue();
 }
 
+// After a video finishes, tell the backend to delete intermediate temp data,
+// keeping only the final deliverables (hardcoded video, SRT, dubbed video,
+// meta.json, project state) so the result stays reviewable.
+function cleanupTempForVideo(videoId: string | null) {
+  if (!videoId) return;
+  fetch(`/api/video/${videoId}/cleanup`, { method: "POST" }).catch(() => {
+    // best-effort; failure is non-fatal
+  });
+}
+
 async function processQueue() {
   if (processing) return;
   if (queue.length === 0) return;
@@ -441,14 +455,15 @@ function markStepSkipped(id: string, i: number) {
   recalcOverall(id);
 }
 
-async function runPipeline(id: string, startStep = 0) {
+// ── Prep runner (interactive: resolve → merge → region → subtitle style) ──
+// Runs immediately when a video is added, so the user can select region and
+// subtitle position/size while other videos are still being processed in the
+// queue. Only the heavy steps (OCR → hardcode) are enqueued sequentially.
+async function runPrep(id: string, startStep = 0) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   const rawUrl = cur.url;
 
-  // Build a per-step tick handler: records step progress and merges backend
-  // log entries into the pipeline log list. Overall progress is the average
-  // across all 7 steps (each step = 100/7 ≈ 14.3% of the total).
   const tick = (i: number) => (t: JobTick) => {
     setStepProgress(id, i, t.progress);
     recalcOverall(id);
@@ -463,7 +478,7 @@ async function runPipeline(id: string, startStep = 0) {
   const ocrType = detectOcrType();
   let region = cur.region;
 
-  const stageForStart = ["resolving", "merging", "region", "subtitle_preview", "processing", "context", "translating", "dub", "muxing"][startStep] ?? "resolving";
+  const stageForStart = ["resolving", "merging", "region", "subtitle_preview"][startStep] ?? "resolving";
 
   patch(id, {
     status: "running",
@@ -586,7 +601,6 @@ async function runPipeline(id: string, startStep = 0) {
     }
 
     // 3. Subtitle style preview: only when NOT auto-fit (manual adjust).
-    //    Skipped when auto_fit is on (backend computes size automatically).
     if (startStep <= 3) {
       if (cur.autoFit) {
         markStepSkipped(id, 3);
@@ -607,6 +621,53 @@ async function runPipeline(id: string, startStep = 0) {
         markStepEnd(id, 3);
       }
     }
+
+    // Prep done → enqueue the heavy processing into the sequential queue.
+    enqueue(id, 4);
+  } catch (e) {
+    patch(id, {
+      status: "error",
+      stage: "error",
+      error: e instanceof Error ? e.message : "Lỗi không xác định",
+      finishedAt: Date.now(),
+    });
+  }
+}
+
+// ── Heavy runner (OCR → context → translate → dub → hardcode) ──────────────
+// Executed one video at a time via the sequential queue.
+async function runPipeline(id: string, startStep = 4) {
+  const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!cur) return;
+  const videoId = cur.videoId;
+  let sourceLang = cur.srcLang || "zh";
+  let ocrLang = cur.ocrLang || "ch";
+  const ocrType = detectOcrType();
+  let region = cur.region;
+
+  const tick = (i: number) => (t: JobTick) => {
+    setStepProgress(id, i, t.progress);
+    recalcOverall(id);
+    if (t.logs) appendBackendLogs(id, t.logs);
+  };
+
+  const stageForStart = ["processing", "context", "translating", "dub", "muxing"][startStep - 4] ?? "processing";
+
+  patch(id, {
+    status: "running",
+    stage: stageForStart as Stage,
+    progress: 0,
+    startedAt: cur.startedAt ?? Date.now(),
+    finishedAt: null,
+    error: "",
+    stepProgress: cur.stepProgress.map((v, i) => (i >= startStep ? null : v)),
+    stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
+    stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
+    stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
+  });
+
+  try {
+    if (abortedPipelines.has(id)) return;
 
     // 4. OCR
     if (startStep <= 4) {
@@ -752,6 +813,7 @@ async function runPipeline(id: string, startStep = 0) {
       finishedAt: Date.now(),
     });
     appendLog(id, "Hoàn tất!");
+    cleanupTempForVideo(videoId);
   } catch (e) {
     patch(id, {
       status: "error",
