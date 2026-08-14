@@ -15,6 +15,7 @@ from app.config import settings
 from app.services.srt_utils import parse_srt
 from app.services.media_utils import _get_duration, _get_video_resolution
 from app.services.job_utils import JobCancelled, notify_ws_sync
+from app.routers.config_router import get_subtitle_style
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,54 @@ def _ass_time(sec: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def srt_to_ass_blackbox(srt_content: str, vw: int = 1920, vh: int = 1080) -> str:
-    """Convert SRT → ASS with an opaque black-box style (BlackBoxStyle)."""
+def _hex_to_ass_color(hex_color: str) -> str:
+    """#RRGGBB → ASS &HAABBGGRR (alpha 00 = opaque)."""
+    h = hex_color.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        h = "FFFFFF"
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        r, g, b = 255, 255, 255
+    return f"&H00{b:02X}{g:02X}{r:02X}"
+
+
+def _hex_to_rgba(hex_color: str, opacity: int = 255) -> tuple:
+    h = hex_color.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        h = "FFFFFF"
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        r, g, b = 255, 255, 255
+    return (r, g, b, max(0, min(255, opacity)))
+
+
+def srt_to_ass_blackbox(
+    srt_content: str,
+    vw: int = 1920,
+    vh: int = 1080,
+    style: dict | None = None,
+) -> str:
+    """Convert SRT → ASS using the configured subtitle style."""
+    s = style or get_subtitle_style()
+    font = s.get("font_family", "Arial")
+    size = max(10, int(s.get("font_size", 48)))
+    primary = _hex_to_ass_color(s.get("text_color", "#FFFFFF"))
+    outline_col = _hex_to_ass_color(s.get("outline_color", "#000000"))
+    bold = 1 if s.get("bold") else 0
+    italic = 1 if s.get("italic") else 0
+    outline_w = max(0, int(s.get("outline_width", 0)))
+    box_on = bool(s.get("box_enabled", True))
+    back_col = _hex_to_ass_color(s.get("box_color", "#000000"))
+    # ASS BorderStyle: 1=outline+shadow, 3=opaque box
+    border_style = 3 if box_on else 1
+    back_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
+
     header = f"""[Script Info]
 Title: Subtitle Black Box
 ScriptType: v4.00+
@@ -39,16 +86,15 @@ PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: BlackBoxStyle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,16,0,2,50,50,40,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,50,50,{max(0, int(s.get('margin_v', 40)))},1
 """
+    # When using BorderStyle=3, apply box border colour as the outline colour so the
+    # box edge is visible even if text outline is off.
     lines = [header.rstrip("\n")]
     for e in parse_srt(srt_content):
         text = e.text.replace("{", "\\{").replace("}", "\\}")
         lines.append(
-            f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},BlackBoxStyle,,0,0,0,,{text}"
+            f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},SubStyle,,0,0,0,,{text}"
         )
     return "\n".join(lines) + "\n"
 
@@ -65,31 +111,80 @@ def _has_subtitles_filter() -> bool:
         return False
 
 
-def _find_font() -> str | None:
-    candidates = [
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Supplemental/Verdana.ttf",
-        "/Library/Fonts/Arial.ttf",
-    ]
-    for c in candidates:
-        if Path(c).exists():
-            return c
+_FONT_DIRS = [
+    "/System/Library/Fonts/Supplemental",
+    "/System/Library/Fonts",
+    "/Library/Fonts",
+]
+
+
+def _find_font(family: str = "Arial", bold: bool = False, italic: bool = False) -> str | None:
+    """Resolve a font family to a .ttf/.ttc path on macOS (best-effort)."""
+    fam = (family or "Arial").strip()
+    variants = []
+    if bold and italic:
+        variants = ["Bold Italic", "Bold", "Italic", ""]
+    elif bold:
+        variants = ["Bold", ""]
+    elif italic:
+        variants = ["Italic", ""]
+    else:
+        variants = [""]
+
+    names = [f"{fam} {v}".strip() for v in variants]
+    for d in _FONT_DIRS:
+        dpath = Path(d)
+        if not dpath.is_dir():
+            continue
+        for f in sorted(dpath.iterdir()):
+            if f.suffix.lower() not in (".ttf", ".ttc"):
+                continue
+            base = f.stem.replace(" ", "")
+            for n in names:
+                if base == n.replace(" ", ""):
+                    return str(f)
+    # fallbacks
+    for d in _FONT_DIRS:
+        dpath = Path(d)
+        if not dpath.is_dir():
+            continue
+        for f in sorted(dpath.iterdir()):
+            base = f.stem.lower().replace(" ", "")
+            if f.suffix.lower() in (".ttf", ".ttc") and base in ("arial", "helvetica"):
+                return str(f)
     return None
 
 
-def _render_subtitle(text: str, vw: int, vh: int, font_path):
+def _render_subtitle(text: str, vw: int, vh: int, font_path: str | None, style: dict | None = None):
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
+
+    s = style or get_subtitle_style()
+    font_size = max(10, int(s.get("font_size", 48)))
+    # scale font size relative to 1080p reference so it looks consistent
+    font_size = max(10, int(font_size * vh / 1080))
+    font_path = font_path or _find_font(s.get("font_family", "Arial"), s.get("bold"), s.get("italic"))
+    try:
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+    except Exception:
+        font = ImageFont.load_default()
+
+    text_color = _hex_to_rgba(s.get("text_color", "#FFFFFF"))
+    outline_color = _hex_to_rgba(s.get("outline_color", "#000000"))
+    outline_w = max(0, int(s.get("outline_width", 0)))
+    box_on = bool(s.get("box_enabled", True))
+    box_color = _hex_to_rgba(s.get("box_color", "#000000"), int(s.get("box_opacity", 210)))
+    box_radius = max(0, int(s.get("box_radius", 12)))
+    box_border_color = _hex_to_rgba(s.get("box_border_color", "#000000"))
+    box_border_w = max(0, int(s.get("box_border_width", 0)))
+    margin_v = max(0, int(s.get("margin_v", 40)))
 
     img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    max_w = max(200, vw - 120)
-    font_size = 48
-    font = None
-    while font_size > 20:
+    max_w = max(200, vw - 160)
+    # shrink text if too wide for the video
+    while font_size > 16:
         try:
             font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
         except Exception:
@@ -97,20 +192,46 @@ def _render_subtitle(text: str, vw: int, vh: int, font_path):
         bbox = draw.textbbox((0, 0), text, font=font)
         if bbox[2] - bbox[0] <= max_w:
             break
-        font_size -= 4
+        font_size -= 2
 
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
+    top = bbox[1]
 
     pad_x, pad_y = 24, 16
-    box_w = tw + pad_x * 2
-    box_h = th + pad_y * 2
+    box_w = tw + pad_x * 2 + outline_w * 2
+    box_h = th + pad_y * 2 + outline_w * 2
     bx = (vw - box_w) // 2
-    by = vh - box_h - 80
+    by = vh - box_h - margin_v - 40
 
-    draw.rectangle([bx, by, bx + box_w, by + box_h], fill=(0, 0, 0, 255))
-    draw.text((bx + pad_x - bbox[0], by + pad_y - bbox[1]), text, font=font, fill=(255, 255, 255, 255))
+    # draw rounded background box
+    if box_on:
+        if box_radius > 0:
+            draw.rounded_rectangle(
+                [bx, by, bx + box_w, by + box_h],
+                radius=box_radius,
+                fill=box_color,
+                outline=box_border_color if box_border_w > 0 else None,
+                width=box_border_w,
+            )
+        else:
+            draw.rectangle(
+                [bx, by, bx + box_w, by + box_h],
+                fill=box_color,
+                outline=box_border_color if box_border_w > 0 else None,
+                width=box_border_w,
+            )
+
+    # draw text with optional outline stroke
+    draw.text(
+        (bx + pad_x + outline_w, by + pad_y + outline_w - top),
+        text,
+        font=font,
+        fill=text_color,
+        stroke_width=outline_w,
+        stroke_fill=outline_color,
+    )
     return np.array(img)
 
 
@@ -130,8 +251,9 @@ def burn_subtitles_pillow(
     out_path: str,
     progress_callback=None,
     audio_source: str | None = None,
+    style: dict | None = None,
 ):
-    """Burn black-box subtitles using OpenCV + Pillow (no libass required)."""
+    """Burn subtitles using OpenCV + Pillow (no libass required)."""
     import cv2
 
     content = Path(srt_path_str).read_text(encoding="utf-8")
@@ -139,7 +261,11 @@ def burn_subtitles_pillow(
     if not entries:
         raise RuntimeError("No subtitle entries")
 
-    font_path = _find_font()
+    font_path = _find_font(
+        (style or get_subtitle_style()).get("font_family", "Arial"),
+        (style or get_subtitle_style()).get("bold"),
+        (style or get_subtitle_style()).get("italic"),
+    )
 
     cap = cv2.VideoCapture(video_path_str)
     if not cap.isOpened():
@@ -167,7 +293,7 @@ def burn_subtitles_pillow(
         if active:
             text = " ".join(e.text for e in active)
             if text not in cache:
-                cache[text] = _render_subtitle(text, vw, vh, font_path)
+                cache[text] = _render_subtitle(text, vw, vh, font_path, style)
             frame = _overlay_subtitle(frame, cache[text])
         writer.write(frame)
         idx += 1
@@ -228,8 +354,9 @@ def run_hardcode_sync(
     total_dur = _get_duration(video_path_str)
     vw, vh = _get_video_resolution(video_path_str)
 
+    style = get_subtitle_style()
     srt_content = Path(srt_path_str).read_text(encoding="utf-8")
-    ass_content = srt_to_ass_blackbox(srt_content, vw, vh)
+    ass_content = srt_to_ass_blackbox(srt_content, vw, vh, style)
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
 
@@ -266,6 +393,7 @@ def run_hardcode_sync(
             video_path_str, srt_path_str, out_path,
             progress_callback=progress_cb,
             audio_source=str(audio_src) if use_dubbed else None,
+            style=style,
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})

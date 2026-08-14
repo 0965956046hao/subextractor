@@ -138,6 +138,7 @@ frontend/
 │   │   ├── page.tsx            # Home: LibraryPage (video library grid)
 │   │   ├── globals.css         # Tailwind + custom classes (double-bezel, btn-island, glass-panel, eyebrow, tag)
 │   │   ├── extract/page.tsx    # 3-step workflow: UploadPage → RegionSelector → ResultPage
+│   │   ├── settings/page.tsx   # Cấu hình: Gemini key, Google TTS, style phụ đề (font/màu/viền/nền)
 │   │   └── video/[id]/page.tsx # Video detail: metadata, JobProgress (polling), TranscriptPlayer
 │   ├── components/
 │   │   ├── UploadPage.tsx         # Drag-drop upload + progress bar
@@ -195,6 +196,9 @@ One `ThreadPoolExecutor(max_workers=1)` in `worker.py`. Jobs queue via `asyncio.
 
 ### Config (`backend/app/config.py`)
 All env vars prefixed with `STE_`. Module-level `settings.temp_dir.mkdir(…)` runs at **import time** — creates `temp/`, `temp/videos/`, `temp/frames/`, `temp/srt/`, `temp/tts_preview/`. Do NOT add more import-time side effects.
+
+### User config (`backend/app/routers/config_router.py`)
+`GET/POST /api/config` reads/writes `temp/user_config.json`: `gemini_api_key`, `google_tts_credentials`, `auto_context_enabled`, and `subtitle_style` (font, size, colors, outline, bold/italic, box bg, radius, margin). `get_subtitle_style()` merges defaults (`DEFAULT_SUBTITLE_STYLE`) + stored values, coercing types — used by `hardcode_service` (both ASS and Pillow burn paths). Frontend settings UI lives at `/settings` (gear button in AutoPipeline header).
 
 ### CapCut TTS gen-voice service (`capcut-tts-api/`)
 Sibling FastAPI project (port 8100, env prefix `CTTS_`) wrapping the CapCut TTS SDK (`capcut_tts_api.CapCutClient`). Endpoints: `POST /api/tts` (segments job), `GET /api/tts/{job_id}`, `GET /api/tts/{job_id}/audio/{filename}`, `GET /api/voices?lang=`. Run via `./dev.sh` (auto-starts) or `cd capcut-tts-api && ../backend/.venv/bin/python -m service.main`. Backend talks to it through `app/services/capcut_tts_client.py` (httpx).

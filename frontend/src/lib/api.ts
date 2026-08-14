@@ -244,3 +244,45 @@ export async function clearTempData(): Promise<{ cleared: boolean; subdirs_wiped
   const res = await api.post("/temp/clear");
   return res.data;
 }
+
+export interface SubtitleStyle {
+  font_family: string;
+  font_size: number;
+  text_color: string;
+  outline_color: string;
+  outline_width: number;
+  bold: boolean;
+  italic: boolean;
+  box_enabled: boolean;
+  box_color: string;
+  box_opacity: number;
+  box_radius: number;
+  box_border_color: string;
+  box_border_width: number;
+  margin_v: number;
+}
+
+export interface AppConfig {
+  has_gemini_key: boolean;
+  gemini_api_key: string;
+  has_tts_credentials: boolean;
+  google_tts_credentials: string;
+  tts_credentials_info: string;
+  auto_context_enabled: boolean;
+  subtitle_style: SubtitleStyle;
+}
+
+export async function getAppConfig(): Promise<AppConfig> {
+  const res = await api.get<AppConfig>("/config");
+  return res.data;
+}
+
+export async function saveAppConfig(body: {
+  gemini_api_key?: string;
+  google_tts_json?: string;
+  auto_context_enabled?: boolean;
+  subtitle_style?: Partial<SubtitleStyle>;
+}): Promise<{ status: string; error?: string; saved?: string[] }> {
+  const res = await api.post("/config", body);
+  return res.data;
+}

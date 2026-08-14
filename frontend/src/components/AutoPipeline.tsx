@@ -89,6 +89,7 @@ export default function AutoPipeline() {
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState(false);
   const [tab, setTab] = useState<"detail" | "list">("detail");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -143,6 +144,7 @@ export default function AutoPipeline() {
   const switchDubEngine = async (engine: "google" | "capcut") => {
     setDubEngine(engine);
     setPreviewUrl(null);
+    setPreviewError(false);
     if (engine === "capcut" && capcutVoices.length === 0) {
       setVoicesLoading(true);
       try {
@@ -161,11 +163,13 @@ export default function AutoPipeline() {
     if (!dubVoice || previewing) return;
     setPreviewing(true);
     setPreviewUrl(null);
+    setPreviewError(false);
     try {
       const blob = await capCutPreview(dubVoice);
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
       setPreviewUrl(null);
+      setPreviewError(true);
     } finally {
       setPreviewing(false);
     }
@@ -250,6 +254,16 @@ export default function AutoPipeline() {
           >
             Dọn sạch dữ liệu tạm
           </button>
+          <Link
+            href="/settings"
+            title="Cài đặt (API key, TTS, style phụ đề)"
+            className="w-9 h-9 rounded-full bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.95] flex items-center justify-center cursor-pointer"
+          >
+            <svg className="w-4.5 h-4.5 w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </Link>
         </div>
       </AnimatedBlock>
 
@@ -398,56 +412,59 @@ export default function AutoPipeline() {
                     CapCut
                   </button>
                 </div>
+                {dubEngine === "capcut" && !voicesLoading && capcutVoices.length > 0 && (
+                  <>
+                    <select
+                      value={dubVoice}
+                      disabled={optionsDisabled}
+                      onChange={(e) => {
+                        setDubVoice(e.target.value);
+                        setPreviewUrl(null);
+                        setPreviewError(false);
+                      }}
+                      className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {capcutVoices.map((v) => (
+                        <option key={v.voice_type} value={v.voice_type}>
+                          {v.display_name} ({v.voice_type})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handlePreviewVoice}
+                      disabled={previewing || optionsDisabled}
+                      className="px-4 py-2 rounded-full text-[11px] font-medium bg-blue-500/10 ring-1 ring-blue-500/20 text-blue-700 hover:bg-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {previewing ? "Đang tạo audio..." : "Nghe thử"}
+                    </button>
+                    {previewUrl && (
+                      <audio key={previewUrl} src={previewUrl} controls autoPlay className="h-8" />
+                    )}
+                    {previewError && (
+                      <span className="text-[11px] text-red-600 flex items-center gap-1.5">
+                        Giọng không khả dụng
+                      </span>
+                    )}
+                  </>
+                )}
+                {dubEngine === "capcut" && voicesLoading && (
+                  <span className="text-[11px] text-ink-light flex items-center gap-1.5">
+                    <IconSpinner className="w-3 h-3" /> Đang tải giọng CapCut...
+                  </span>
+                )}
+                {dubEngine === "capcut" && !voicesLoading && capcutVoices.length === 0 && (
+                  <span className="text-[11px] text-amber-700 flex items-center gap-2">
+                    Không tải được danh sách giọng CapCut (service :8100).
+                    <button
+                      onClick={refreshVoices}
+                      disabled={optionsDisabled}
+                      className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Thử lại
+                    </button>
+                  </span>
+                )}
               </div>
-
-              {dubEngine === "capcut" && (
-                <div className="mt-3 flex items-center gap-2 flex-wrap">
-                  {voicesLoading ? (
-                    <span className="text-[11px] text-ink-light flex items-center gap-1.5">
-                      <IconSpinner className="w-3 h-3" /> Đang tải giọng CapCut...
-                    </span>
-                  ) : capcutVoices.length === 0 ? (
-                    <span className="text-[11px] text-amber-700 flex items-center gap-2">
-                      Không tải được danh sách giọng CapCut (service :8100).
-                      <button
-                        onClick={refreshVoices}
-                        disabled={optionsDisabled}
-                        className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Thử lại
-                      </button>
-                    </span>
-                  ) : (
-                    <>
-                      <select
-                        value={dubVoice}
-                        disabled={optionsDisabled}
-                        onChange={(e) => {
-                          setDubVoice(e.target.value);
-                          setPreviewUrl(null);
-                        }}
-                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {capcutVoices.map((v) => (
-                          <option key={v.voice_type} value={v.voice_type}>
-                            {v.display_name} ({v.voice_type})
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={handlePreviewVoice}
-                        disabled={previewing || optionsDisabled}
-                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-blue-500/10 ring-1 ring-blue-500/20 text-blue-700 hover:bg-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        {previewing ? "Đang tạo audio..." : "Nghe thử"}
-                      </button>
-                      {previewUrl && (
-                        <audio key={previewUrl} src={previewUrl} controls autoPlay className="h-8" />
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
               <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
                 {dubEngine === "google"
                   ? "Dùng Google Cloud TTS (cần Service Account trong Settings ⚙️)."
@@ -482,10 +499,7 @@ export default function AutoPipeline() {
                     Giữ lại (giảm âm lượng)
                   </button>
                 </div>
-              </div>
-
-              {!muteOriginal && (
-                <div className="mt-3 flex items-center gap-3 flex-wrap">
+                {!muteOriginal && (
                   <label className="flex items-center gap-2.5">
                     <span className="text-[11px] text-ink-muted">Giảm giọng gốc:</span>
                     <input
@@ -502,12 +516,14 @@ export default function AutoPipeline() {
                       -{originalGainDb} dB
                     </span>
                   </label>
-                  <p className="w-full text-[11px] text-ink-light leading-relaxed">
-                    {originalGainDb === 0
-                      ? "Giữ nguyên âm lượng giọng gốc (0 dB)."
-                      : `Giọng nói và nhạc nền gốc sẽ giảm ${originalGainDb} dB để giọng đọc Việt nổi bật hơn.`}
-                  </p>
-                </div>
+                )}
+              </div>
+              {!muteOriginal && (
+                <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                  {originalGainDb === 0
+                    ? "Giữ nguyên âm lượng giọng gốc (0 dB)."
+                    : `Giọng nói và nhạc nền gốc sẽ giảm ${originalGainDb} dB để giọng đọc Việt nổi bật hơn.`}
+                </p>
               )}
             </div>
           </div>

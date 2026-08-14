@@ -22,26 +22,84 @@ def _read_config() -> dict:
     return {}
 
 
+DEFAULT_SUBTITLE_STYLE = {
+    "font_family": "Arial",
+    "font_size": 48,
+    "text_color": "#FFFFFF",
+    "outline_color": "#000000",
+    "outline_width": 0,
+    "bold": False,
+    "italic": False,
+    "box_enabled": True,
+    "box_color": "#000000",
+    "box_opacity": 210,
+    "box_radius": 12,
+    "box_border_color": "#000000",
+    "box_border_width": 0,
+    "margin_v": 40,
+}
+
+
+def get_subtitle_style() -> dict:
+    cfg = _read_config()
+    stored = cfg.get("subtitle_style") or {}
+    merged = {**DEFAULT_SUBTITLE_STYLE, **stored}
+    # coerce types so a malformed stored value can't crash the renderer
+    for k, v in DEFAULT_SUBTITLE_STYLE.items():
+        if k in ("bold", "italic", "box_enabled"):
+            merged[k] = bool(merged.get(k, v))
+        elif isinstance(v, (int, float)):
+            try:
+                merged[k] = int(merged.get(k, v))
+            except (TypeError, ValueError):
+                merged[k] = v
+        elif isinstance(v, str):
+            merged[k] = str(merged.get(k, v))
+    return merged
+
+
 class SaveConfigRequest(BaseModel):
     gemini_api_key: str = ""
     google_tts_json: str = ""
     auto_context_enabled: bool | None = None
+    subtitle_style: dict | None = None
 
 
 @router.get("/api/config")
 async def get_config():
-    """Get current user config (without sensitive full values)."""
+    """Get current user config."""
     cfg = _read_config()
+
+    gemini_key = cfg.get("gemini_api_key", "") or ""
+    has_gemini = bool(gemini_key)
+
+    tts_raw = cfg.get("google_tts_credentials", "") or ""
+    has_tts = bool(tts_raw)
+    tts_json = ""
+    tts_info = ""
+    if has_tts:
+        try:
+            parsed = json.loads(tts_raw) if isinstance(tts_raw, str) else tts_raw
+            if isinstance(parsed, dict):
+                tts_json = json.dumps(parsed, ensure_ascii=False, indent=2)
+                tts_info = parsed.get("client_email", "") or ""
+        except Exception:
+            tts_json = tts_raw if isinstance(tts_raw, str) else ""
+
     return {
-        "has_gemini_key": bool(cfg.get("gemini_api_key")),
-        "has_tts_credentials": bool(cfg.get("google_tts_credentials")),
+        "has_gemini_key": has_gemini,
+        "gemini_api_key": gemini_key,
+        "has_tts_credentials": has_tts,
+        "google_tts_credentials": tts_json,
+        "tts_credentials_info": tts_info,
         "auto_context_enabled": cfg.get("auto_context_enabled", True),
+        "subtitle_style": get_subtitle_style(),
     }
 
 
 @router.post("/api/config")
 async def save_config(body: SaveConfigRequest):
-    """Save Gemini API key and/or Google TTS credentials."""
+    """Save Gemini API key, Google TTS credentials and/or subtitle style."""
     cfg = _read_config()
 
     if body.gemini_api_key:
@@ -59,6 +117,11 @@ async def save_config(body: SaveConfigRequest):
 
     if body.auto_context_enabled is not None:
         cfg["auto_context_enabled"] = body.auto_context_enabled
+
+    if body.subtitle_style is not None:
+        merged = get_subtitle_style()
+        merged.update(body.subtitle_style)
+        cfg["subtitle_style"] = merged
 
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
