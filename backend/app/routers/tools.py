@@ -107,10 +107,14 @@ async def download_muxed(video_id: str):
 
 @router.post("/api/preview/subtitle/{video_id}")
 async def preview_subtitle(video_id: str, request: Request):
-    """Render the first frame with a subtitle overlay using a given style, for
-    the manual "tự chỉnh vị trí" preview step.
+    """Render a frame (at `time` seconds) with a subtitle overlay using a given
+    style, for the manual "tự chỉnh vị trí" preview step.
 
-    Body: { region: {x1,y1,x2,y2}, style: {font_size, margin_v, ...}, text? }
+    Body: { region: {x1,y1,x2,y2}, style: {font_size, margin_v, ...}, text?, time? }
+    If `time` is omitted, the first frame is used. If the video has an SRT, the
+    subtitle text at that timestamp is used (falling back to `text`).
+    If `format: "overlay"`, returns a transparent PNG overlay (RGBA) sized to the
+    video so the caller can layer it on top of a playing <video>. Otherwise a JPEG.
     Returns a JPEG of the frame with the subtitle burned at the given style.
     """
     import cv2
@@ -124,11 +128,26 @@ async def preview_subtitle(video_id: str, request: Request):
 
     region = body.get("region")
     style_override = body.get("style") or {}
+    time_sec = float(body.get("time") or 0)
+    overlay_only = body.get("format") == "overlay"
     sample_text = body.get("text") or "Phụ đề tiếng Việt"
+
+    # Prefer the real SRT line visible at this timestamp so the user can scrub.
+    try:
+        srt_path = _srt_path(video_id)
+        if srt_path.exists():
+            for e in parse_srt(srt_path.read_text(encoding="utf-8")):
+                if e.start <= time_sec < e.end:
+                    sample_text = e.text
+                    break
+    except Exception:
+        pass
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise HTTPException(500, "Không đọc được video")
+    if time_sec > 0:
+        cap.set(cv2.CAP_PROP_POS_MSEC, time_sec * 1000)
     ok, frame = cap.read()
     vh, vw = frame.shape[:2]
     cap.release()
@@ -157,6 +176,18 @@ async def preview_subtitle(video_id: str, request: Request):
         style.get("italic"),
     )
     overlay = _render_subtitle(sample_text, vw, vh, font_path, style, fixed_size=True)
+
+    if overlay_only:
+        import numpy as np
+
+        # _render_subtitle returns PIL RGBA (RGB order); imencode expects BGR(A).
+        rgba = np.ascontiguousarray(overlay)
+        bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
+        ok_png, buf = cv2.imencode(".png", bgra)
+        if not ok_png:
+            raise HTTPException(500, "Không encode được PNG")
+        return Response(content=buf.tobytes(), media_type="image/png")
+
     frame = _overlay_subtitle(frame, overlay)
 
     ok_jpg, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])

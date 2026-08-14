@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
 import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, type PipelineHealth, type CapCutVoice } from "@/lib/api";
@@ -105,6 +105,12 @@ export default function AutoPipeline() {
   const [health, setHealth] = useState<PipelineHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const urlInputRef = useRef<HTMLInputElement | null>(null);
+
+  const focusNewVideo = useCallback(() => {
+    urlInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    urlInputRef.current?.focus();
+  }, []);
 
   const checkHealth = async () => {
     setHealthLoading(true);
@@ -336,6 +342,7 @@ export default function AutoPipeline() {
             ) : null}
             <div className="flex items-center gap-2">
               <input
+                ref={urlInputRef}
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
@@ -683,7 +690,12 @@ export default function AutoPipeline() {
         </AnimatedBlock>
       ) : selected ? (
         <AnimatedBlock delay={250}>
-          <DetailView pipeline={selected} now={now} onRemove={() => removePipeline(selected.id)} />
+          <DetailView
+            pipeline={selected}
+            now={now}
+            onRemove={() => removePipeline(selected.id)}
+            onStartNext={focusNewVideo}
+          />
         </AnimatedBlock>
       ) : (
         <AnimatedBlock delay={250}>
@@ -735,7 +747,7 @@ export default function AutoPipeline() {
   );
 }
 
-function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: number; onRemove: () => void }) {
+function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pipeline; now: number; onRemove: () => void; onStartNext?: () => void }) {
   const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
@@ -986,6 +998,25 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
               allow="autoplay; fullscreen"
               allowFullScreen
             />
+
+            {onStartNext && (
+              <div className="mt-5 pt-4 border-t border-black/[0.05] flex items-center justify-between gap-4 flex-wrap">
+                <p className="text-[12px] text-ink-muted leading-relaxed">
+                  Video này đã xử lý xong. Dán link tiếp theo để chạy job mới ngay trong trang này.
+                </p>
+                <button
+                  onClick={onStartNext}
+                  className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0"
+                >
+                  <span className="tracking-tight">Xử lý video tiếp theo</span>
+                  <span className="btn-island-icon">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

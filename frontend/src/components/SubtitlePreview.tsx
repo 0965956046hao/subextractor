@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Region, SubtitleStyle } from "@/lib/api";
+import { getVideoUrl } from "@/lib/api";
 
 interface Props {
   videoId: string;
@@ -16,13 +17,18 @@ function clamp(v: number, min: number, max: number) {
 export default function SubtitlePreview({ videoId, region, onConfirmed }: Props) {
   const [fontSize, setFontSize] = useState(48);
   const [marginV, setMarginV] = useState(40);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [timeLabel, setTimeLabel] = useState("00:00");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTimeRef = useRef(0);
 
-  const fetchPreview = useCallback(
-    async (fs: number, mv: number) => {
+  const fetchOverlay = useCallback(
+    async (fs: number, mv: number, time: number, force?: boolean) => {
+      if (!force && Math.abs(time - lastTimeRef.current) < 0.3) return;
+      lastTimeRef.current = time;
       setLoading(true);
       setError(false);
       try {
@@ -33,11 +39,13 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             region,
             style: { font_size: fs, margin_v: mv },
             text: "Phụ đề tiếng Việt",
+            time,
+            format: "overlay",
           }),
         });
         if (!res.ok) throw new Error("preview failed");
         const blob = await res.blob();
-        setPreviewUrl((prev) => {
+        setOverlayUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return URL.createObjectURL(blob);
         });
@@ -50,27 +58,43 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     [videoId, region]
   );
 
-  // Initial preview using the saved style, then re-render on slider changes (debounced).
+  // Initial overlay at t=0, then re-render on slider changes (debounced).
   useEffect(() => {
-    fetchPreview(fontSize, marginV);
+    fetchOverlay(fontSize, marginV, 0, true);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const refresh = useCallback(
+    (fs: number, mv: number) => {
+      const t = videoRef.current?.currentTime ?? 0;
+      setTimeLabel(fmtTime(t));
+      fetchOverlay(fs, mv, t);
+    },
+    [fetchOverlay]
+  );
+
   const handleFontSize = (v: number) => {
     const next = clamp(v, 16, 160);
     setFontSize(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchPreview(next, marginV), 250);
+    debounceRef.current = setTimeout(() => refresh(next, marginV), 250);
   };
 
   const handleMarginV = (v: number) => {
     const next = clamp(v, 0, 400);
     setMarginV(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchPreview(fontSize, next), 250);
+    debounceRef.current = setTimeout(() => refresh(fontSize, next), 250);
+  };
+
+  const handleTimeUpdate = () => {
+    const t = videoRef.current?.currentTime ?? 0;
+    setTimeLabel(fmtTime(t));
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchOverlay(fontSize, marginV, t), 200);
   };
 
   const handleConfirm = () => {
@@ -81,8 +105,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     <div className="space-y-4">
       <div className="glass-panel rounded-2xl p-4 sm:p-5 flex items-start justify-between gap-4">
         <p className="text-sm text-ink-muted leading-relaxed">
-          Xem trước phụ đề trên frame đầu tiên. Kéo thanh trượt để chỉnh cỡ chữ và vị
-          trí (cách đáy video), nhấn <b>Xác nhận</b> để dùng cấu hình này khi nhúng phụ đề.
+          Play video và tua đến bất kỳ thời điểm nào để kiểm tra vị trí &amp; cỡ chữ phụ đề.
+          Kéo thanh trượt để chỉnh cỡ chữ và khoảng cách từ đáy, nhấn <b>Xác nhận</b> để dùng
+          cấu hình này khi nhúng phụ đề.
         </p>
         <div className="flex gap-2 flex-shrink-0">
           <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">↵</kbd>
@@ -93,20 +118,29 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
       <div className="double-bezel">
         <div className="double-bezel-inner overflow-hidden">
           <div className="relative bg-black select-none aspect-video w-full flex items-center justify-center">
-            {previewUrl ? (
+            <video
+              ref={videoRef}
+              src={getVideoUrl(videoId)}
+              controls
+              playsInline
+              preload="auto"
+              onTimeUpdate={handleTimeUpdate}
+              onSeeked={() => fetchOverlay(fontSize, marginV, videoRef.current?.currentTime ?? 0)}
+              className="absolute inset-0 w-full h-full object-contain"
+            />
+            {overlayUrl && (
               <img
-                src={previewUrl}
-                alt="Subtitle preview"
-                className="w-full h-full object-contain"
+                src={overlayUrl}
+                alt="Subtitle overlay"
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
                 draggable={false}
               />
-            ) : (
-              <div className="text-[12px] text-ink-light">
-                {loading ? "Đang tạo bản xem trước..." : "Chưa có preview"}
-              </div>
             )}
+            <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/50 text-white text-[11px] font-mono tabular-nums pointer-events-none">
+              {timeLabel}
+            </div>
             {loading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               </div>
             )}
@@ -162,7 +196,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         <div className="flex items-center justify-end gap-2 pt-1">
           <button
             onClick={handleConfirm}
-            disabled={!previewUrl}
+            disabled={!overlayUrl}
             className="btn-island-primary group text-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <span className="tracking-tight">Xác nhận phụ đề</span>
@@ -176,4 +210,13 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
       </div>
     </div>
   );
+}
+
+function fmtTime(sec: number): string {
+  if (!isFinite(sec) || sec < 0) return "00:00";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }

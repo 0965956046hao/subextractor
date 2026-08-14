@@ -84,7 +84,7 @@ def srt_to_ass_blackbox(
     """Convert SRT → ASS using the configured subtitle style."""
     s = style or get_subtitle_style()
     font = s.get("font_family", "Arial")
-    size = max(10, int(s.get("font_size", 48)))
+    size = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
     primary = _hex_to_ass_color(s.get("text_color", "#FFFFFF"))
     outline_col = _hex_to_ass_color(s.get("outline_color", "#000000"))
     bold = 1 if s.get("bold") else 0
@@ -106,7 +106,7 @@ PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,50,50,{max(0, int(s.get('margin_v', 40)))},1
+Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,50,50,{max(0, int(int(s.get('margin_v', 40)) * vh / 1080))},1
 """
     # When using BorderStyle=3, apply box border colour as the outline colour so the
     # box edge is visible even if text outline is off.
@@ -171,9 +171,9 @@ def auto_fit_style(
             break
         font_px -= 2
 
-    # _render_subtitle scales font_size by vh/1080, so store the 1080p reference.
+    # _render_subtitle scales font_size + margin_v by vh/1080, so store 1080p refs.
     s["font_size"] = max(18, int(font_px * 1080 / vh))
-    s["margin_v"] = max(0, int((1 - y2) * vh - 40))
+    s["margin_v"] = max(0, int((1 - y2) * 1080 - 40))
     return s
 
 
@@ -262,7 +262,9 @@ def _render_subtitle(
     box_radius = max(0, int(s.get("box_radius", 12)))
     box_border_color = _hex_to_rgba(s.get("box_border_color", "#000000"))
     box_border_w = max(0, int(s.get("box_border_width", 0)))
-    margin_v = max(0, int(s.get("margin_v", 40)))
+    # margin_v is a 1080p reference, same as font_size, so the box stays at the
+    # same proportional position when the video resolution changes.
+    margin_v = max(0, int(int(s.get("margin_v", 40)) * vh / 1080))
 
     img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -493,7 +495,8 @@ def run_hardcode_sync(
             progress_callback=progress_cb,
             audio_source=str(audio_src) if use_dubbed else None,
             style=style,
-            fixed_size=bool(job.get("auto_fit")),
+            # auto-fit or manual style must render at the exact size chosen.
+            fixed_size=bool(job.get("auto_fit")) or bool(job.get("style")),
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
