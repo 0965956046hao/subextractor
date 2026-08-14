@@ -279,8 +279,18 @@ capcut-tts-api-main/
 │   ├── models.py                # Strongly-typed dataclasses (DeviceConfig, Utterance, etc.)
 │   ├── signer.py                # RSA PKCS#1 v1.5, AWS SigV4, MD5 stubs & request signing
 │   ├── uploader.py              # Chunked VOD media uploader
-│   ├── client.py                # High-level CapCutClient SDK
+│   ├── client.py                # High-level CapCutClient SDK (+ audio download)
 │   └── cli.py                   # Argument parser & CLI logic
+├── service/                     # FastAPI gen-voice service (mirrors pipeline architecture)
+│   ├── main.py                  # FastAPI app, lifespan, CORS, health
+│   ├── config.py                # pydantic-settings (env prefix CTTS_)
+│   ├── models.py                # Pydantic v2 schemas
+│   ├── dependencies.py          # FastAPI DI providers
+│   ├── worker.py                # Job queue + WS notify + per-entry voice generation
+│   └── routers/
+│       ├── tts.py               # POST /api/tts, status, cancel, WS /api/tts/ws/{id}
+│       ├── voices.py            # GET /api/voices
+│       └── audio.py             # GET /api/tts/{id}/audio/{file}, download ZIP
 ├── examples/                    # Runnable code examples
 │   ├── 01_tts_basic.py
 │   ├── 02_stt_transcribe.py
@@ -288,8 +298,74 @@ capcut-tts-api-main/
 │   └── 04_custom_device.py
 ├── device.json.example          # Sample device profile JSON file
 ├── Voice.json                   # Voice library catalog
+├── run_service.sh               # Start the gen-voice service
 └── pyproject.toml               # PEP 517 build configuration
 ```
+
+---
+
+## Gen-Voice HTTP Service
+
+The SDK ships with a FastAPI service that turns any text/SRT segment into
+CapCut-voice MP3 files, exposing the same architecture as the pipeline
+(job queue + WebSocket progress + per-entry audio files).
+
+### Start
+
+```bash
+cd capcut-tts-api
+./run_service.sh                      # auto-installs [service] extra if missing
+# or
+python3 -m pip install -e ".[service]"
+python3 -m service.main               # uvicorn on CTTS_port (default 8100)
+```
+
+Optional env vars (`CTTS_` prefix):
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `CTTS_port` | `8100` | HTTP port |
+| `CTTS_host` | `0.0.0.0` | Bind address |
+| `CTTS_device_json` | — | Path to a `device.json` to override device identity |
+| `CTTS_temp_dir` | `temp/` | Where job audio is stored |
+| `CTTS_default_voice` | `BV074_streaming` | Voice used when none specified |
+| `CTTS_job_timeout` | `1800` | Per-job timeout (seconds) |
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/health` | Health + voice count |
+| GET | `/api/voices?lang=vi-VN` | List CapCut voices from `Voice.json` |
+| POST | `/api/tts` | Submit job `{segments:[{text,start?,end?}], voice, rate}` → `{job_id}` |
+| GET | `/api/tts/{job_id}` | Poll job status (progress, logs, `audio_files`) |
+| POST | `/api/tts/{job_id}/cancel` | Cancel a queued/running job |
+| WS | `/api/tts/ws/{job_id}` | Realtime progress (`progress`/`log`/`done`/`error`/`cancelled`) |
+| GET | `/api/tts/{job_id}/audio/{filename}` | Serve a generated MP3 |
+| GET | `/api/tts/{job_id}/download` | All audio as a ZIP |
+
+### Quickstart (HTTP)
+
+```bash
+JOB=$(curl -s -X POST http://localhost:8100/api/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"segments":[{"text":"Xin chào bạn!"},{"text":"Chúc bạn một ngày tốt lành."}],"voice":"BV421_vivn_streaming"}')
+JID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+curl -s http://localhost:8100/api/tts/$JID        # poll until status=done
+curl -s -o seg1.mp3 http://localhost:8100/api/tts/$JID/audio/segment_0001.mp3
+```
+
+Each segment is generated as its own CapCut TTS task and saved as
+`{filename_prefix}_NNNN.mp3` (or `NNNN.mp3` when prefix is empty) — the same
+per-entry MP3 convention the SubTitleExtractor pipeline uses when combining
+audio by SRT timestamps.
+
+### SDK additions
+
+- `CapCutClient.extract_audio_urls(response)` — recursively finds `speech_url`/`audio_url` (also parses stringified task payloads).
+- `CapCutClient.download_audio(url, out_path)` — save an audio URL to disk.
+- `CapCutClient.generate_speech_to_files(texts, out_dir, voice, rate, prefix)` — one task per text, polls to `succeed`/`success`, downloads each MP3, returns paths. Failed segments are skipped (not fatal).
+- TTS polling now accepts `succeed` (the status CapCut actually returns) in addition to `success`.
 
 ---
 

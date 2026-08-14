@@ -3,8 +3,10 @@ High-level Python API Client for CapCut Text-to-Speech (TTS) and Speech-to-Text 
 """
 
 import json
+import re
 import time
 import uuid
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
@@ -27,6 +29,8 @@ from capcut_tts_api.signer import (
 )
 from capcut_tts_api.uploader import VODUploader
 
+logger = logging.getLogger(__name__)
+
 
 def _checked_json_response(resp: Any, label: str) -> Dict[str, Any]:
     try:
@@ -43,6 +47,9 @@ def _checked_json_response(resp: Any, label: str) -> Dict[str, Any]:
             response_data=data,
         )
     return data
+
+
+_SUCCESS_STATUSES = ("success", "succeed")
 
 
 class CapCutClient:
@@ -371,7 +378,7 @@ class CapCutClient:
             query_tasks = (query_res.get("data") or {}).get("tasks") or []
             if query_tasks:
                 status = query_tasks[0].get("status")
-                if status == "success":
+                if status in _SUCCESS_STATUSES:
                     return query_res
                 elif status == "failed":
                     raise CapCutTaskError(f"TTS Task failed: {query_res}")
@@ -485,6 +492,167 @@ class CapCutClient:
             return SubtitleResult.from_payload(payload_dict)
         except Exception as exc:
             raise CapCutError(f"Failed to parse subtitle payload: {exc}") from exc
+
+    # -------------------------------------------------------------------------
+    # Audio URL Extraction & Download
+    # -------------------------------------------------------------------------
+
+    _AUDIO_URL_KEYS = ("speech_url", "audio_url", "audio", "url", "download_url", "mp3_url")
+    _AUDIO_EXT_RE = re.compile(r"\.(mp3|m4a|wav|aac|ogg|flac)(\?|$)", re.IGNORECASE)
+
+    def _extract_audio_urls_from_obj(self, obj: Any, found: List[str]) -> None:
+        """Recursively collect HTTPS URLs that point to audio.
+
+        Prefers well-known keys (``speech_url``/``audio_url``/``url``) and
+        falls back to any URL ending in an audio extension.
+        """
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if (
+                    isinstance(value, str)
+                    and value.startswith(("http://", "https://"))
+                    and key.lower() in self._AUDIO_URL_KEYS
+                ):
+                    if value not in found:
+                        found.append(value)
+                else:
+                    self._extract_audio_urls_from_obj(value, found)
+        elif isinstance(obj, list):
+            for item in obj:
+                self._extract_audio_urls_from_obj(item, found)
+        elif isinstance(obj, str):
+            if obj.startswith(("http://", "https://")) and self._AUDIO_EXT_RE.search(obj):
+                if obj not in found:
+                    found.append(obj)
+
+    def extract_audio_urls(self, query_response: Dict[str, Any]) -> List[str]:
+        """
+        Recursively extract audio file URLs from a successful TTS query response.
+
+        CapCut returns the audio link deep inside the task ``payload`` (which is
+        itself a JSON string) under keys like ``speech_url``. This walks the whole
+        response, unparsing stringified payloads, and collects every audio URL.
+        """
+        found: List[str] = []
+
+        def _walk(obj: Any) -> None:
+            if isinstance(obj, str):
+                candidate = obj
+            else:
+                candidate = None
+                self._extract_audio_urls_from_obj(obj, found)
+            if candidate is not None and candidate.lstrip().startswith("{"):
+                try:
+                    self._extract_audio_urls_from_obj(json.loads(candidate), found)
+                except Exception:
+                    pass
+
+        _walk(query_response)
+        # also explicitly parse task payload fields
+        tasks = (query_response.get("data") or {}).get("tasks") or []
+        for task in tasks:
+            raw = task.get("payload")
+            if isinstance(raw, str) and raw.lstrip().startswith("{"):
+                try:
+                    self._extract_audio_urls_from_obj(json.loads(raw), found)
+                except Exception:
+                    pass
+        return found
+
+    def download_audio(self, url: str, out_path: Union[str, Path]) -> Path:
+        """
+        Download an audio file from a URL to a local path.
+
+        :return: The path the audio was written to.
+        """
+        if self.session is None:
+            raise CapCutError("The 'requests' package is required. Run 'pip install requests'.")
+        target = Path(out_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        resp = self.session.get(url, timeout=120)
+        resp.raise_for_status()
+        target.write_bytes(resp.content)
+        return target
+
+    def generate_speech_to_files(
+        self,
+        texts: Union[str, List[str]],
+        out_dir: Union[str, Path],
+        voice: Optional[str] = "BV074_streaming",
+        resource_id: Optional[str] = None,
+        rate: str = "1.0",
+        prefix: str = "segment",
+        ext: str = "mp3",
+        wait: bool = True,
+        poll_interval: float = 1.0,
+        timeout: float = 120.0,
+        progress_callback=None,
+    ) -> List[Path]:
+        """
+        Generate one audio file per text segment and download them into out_dir.
+
+        Each text becomes its own CapCut TTS task (same pattern as CapCut app's
+        per-line voice blocks), so one failure does not kill the whole batch and
+        files are written as ``{out_dir}/{index:04d}.{ext}`` (prefix optional).
+
+        :param progress_callback: optional ``callable(done, total)`` invoked after
+            each segment is written.
+        :return: List of paths actually written (failures are skipped).
+        """
+        if isinstance(texts, str):
+            text_list = [texts]
+        else:
+            text_list = list(texts)
+
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        voice_type, final_resource_id = self.resolve_voice(voice=voice, resource_id=resource_id)
+
+        written: List[Path] = []
+        total = len(text_list)
+        for i, text in enumerate(text_list):
+            if not text or not text.strip():
+                if progress_callback:
+                    progress_callback(i + 1, total)
+                continue
+            target = out / (f"{prefix}_{i + 1:04d}.{ext}" if prefix else f"{i + 1:04d}.{ext}")
+            try:
+                create_res = self.create_tts_task(text, voice_type, final_resource_id, rate)
+                tasks = (create_res.get("data") or {}).get("tasks") or []
+                if not tasks:
+                    raise CapCutTaskError(f"No task returned: {create_res}")
+                task_id = tasks[0]["id"]
+                token = tasks[0]["token"]
+
+                start_time = time.time()
+                query_res = None
+                while time.time() - start_time < timeout:
+                    query_res = self.query_tts_task(task_id, token)
+                    query_tasks = (query_res.get("data") or {}).get("tasks") or []
+                    if query_tasks:
+                        status = query_tasks[0].get("status")
+                        if status in _SUCCESS_STATUSES:
+                            break
+                        elif status == "failed":
+                            raise CapCutTaskError(f"TTS task failed: {query_res}")
+                    time.sleep(poll_interval)
+                else:
+                    raise CapCutTaskError(f"TTS task timed out after {timeout}s")
+
+                urls = self.extract_audio_urls(query_res or {})
+                if not urls:
+                    raise CapCutTaskError(
+                        f"No audio URL found in response for segment {i + 1}: {str(query_res)[:500]}"
+                    )
+                self.download_audio(urls[0], target)
+                written.append(target)
+            except Exception as exc:
+                logger.warning("Segment %d failed: %s", i + 1, exc)
+            if progress_callback:
+                progress_callback(i + 1, total)
+
+        return written
 
     def list_voices(
         self, lang: Optional[str] = None, catalog_path: Optional[Union[str, Path]] = None
