@@ -4,6 +4,7 @@ import shutil
 import ssl
 import subprocess
 import threading
+import time
 import uuid
 import urllib.request
 from pathlib import Path
@@ -116,26 +117,30 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
         for p in (video_path, audio_path):
             p.unlink(missing_ok=True)
 
-    def _set(stage: str, progress: int):
+    def _set(stage: str, progress: int, log: str | None = None):
         job["stage"] = stage
         job["progress"] = progress
+        if log:
+            job.setdefault("logs", []).append({
+                "message": log, "ts": time.time(), "level": "info",
+            })
 
     try:
         _set("Đang tải video...", 0)
         logger.info("Downloading video track: %s", video_url[:120])
         _download(
             video_url, video_path,
-            on_progress=lambda p: _set("Đang tải video...", int(p * 0.5)),
+            on_progress=lambda p: _set("Đang tải video...", int(p * 0.5), "Đang tải video..."),
         )
 
-        _set("Đang tải audio...", 50)
+        _set("Đang tải audio...", 50, "Đang tải audio...")
         logger.info("Downloading audio track: %s", audio_url[:120])
         _download(
             audio_url, audio_path,
             on_progress=lambda p: _set("Đang tải audio...", 50 + int(p * 0.4)),
         )
 
-        _set("Đang merge video + audio...", 90)
+        _set("Đang merge video + audio...", 90, "Đang merge video + audio (FFmpeg)...")
 
         cmd = [
             "ffmpeg",
@@ -162,6 +167,9 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
         job["status"] = "done"
         job["stage"] = "Hoàn tất"
         job["progress"] = 100
+        job.setdefault("logs", []).append({
+            "message": "Merge hoàn tất.", "ts": time.time(), "level": "success",
+        })
         job["url"] = f"/api/download/merged/{merge_id}"
         job["filename"] = f"{merge_id}.mp4"
     except Exception as e:
@@ -169,6 +177,9 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
         out_path.unlink(missing_ok=True)
         job["status"] = "error"
         job["error"] = str(e)
+        job.setdefault("logs", []).append({
+            "message": f"Merge thất bại: {e}", "ts": time.time(), "level": "error",
+        })
         logger.exception("merge %s failed", merge_id)
 
 
@@ -189,6 +200,7 @@ def merge_video_audio(body: MergeRequest):
         "url": None,
         "filename": None,
         "error": None,
+        "logs": [{"message": "Bắt đầu tải video + audio rồi merge...", "ts": time.time(), "level": "info"}],
     }
 
     threading.Thread(
@@ -213,6 +225,7 @@ async def get_merge_status(job_id: str):
         "url": job["url"],
         "filename": job["filename"],
         "error": job["error"],
+        "logs": job.get("logs", []),
     }
 
 

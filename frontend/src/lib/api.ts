@@ -199,3 +199,25 @@ export async function ttsSubtitles(videoId: string): Promise<JobStatus> {
 export function getDubbedDownloadUrl(videoId: string): string {
   return `/api/download/dubbed/${videoId}`;
 }
+
+export interface HealthCheckResult {
+  service: string;
+  configured: boolean;
+  healthy: boolean;
+  message: string;
+}
+
+export interface PipelineHealth {
+  healthy: boolean;
+  checks: HealthCheckResult[];
+}
+
+export async function getPipelineHealth(): Promise<PipelineHealth> {
+  const res = await api.get<PipelineHealth>("/health/checks");
+  return res.data;
+}
+
+export async function clearTempData(): Promise<{ cleared: boolean; subdirs_wiped: number }> {
+  const res = await api.post("/temp/clear");
+  return res.data;
+}

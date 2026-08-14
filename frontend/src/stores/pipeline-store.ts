@@ -1,11 +1,13 @@
 "use client";
 
 import { create } from "zustand";
+import type { Region } from "@/lib/api";
 
 export const STEPS = [
   { label: "Phân tích link", detail: "Mở link Douyin lấy URL video" },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
-  { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong video" },
+  { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
+  { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
   { label: "Dịch Gemini", detail: "Dịch phụ đề sang tiếng Việt" },
   { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền" },
@@ -16,6 +18,7 @@ export type Stage =
   | "idle"
   | "resolving"
   | "merging"
+  | "region"
   | "processing"
   | "context"
   | "translating"
@@ -28,13 +31,22 @@ export type Stage =
 export const STEP_STAGE: Record<string, number> = {
   resolving: 0,
   merging: 1,
-  processing: 2,
-  context: 3,
-  translating: 4,
-  saving: 4,
-  dub: 5,
-  muxing: 6,
+  region: 2,
+  processing: 3,
+  context: 4,
+  translating: 5,
+  saving: 5,
+  dub: 6,
+  muxing: 7,
 };
+
+export const DEFAULT_REGION: Region = { x1: 0.114, y1: 0.748, x2: 0.863, y2: 0.972 };
+
+export interface LogEntry {
+  message: string;
+  ts: number;
+  level: string;
+}
 
 export interface Pipeline {
   id: string;
@@ -43,7 +55,8 @@ export interface Pipeline {
   status: "queued" | "running" | "done" | "error";
   stage: Stage;
   progress: number;
-  logs: string[];
+  stepProgress: (number | null)[];
+  logs: LogEntry[];
   error: string;
   resultUrl: string;
   dubbedUrl: string | null;
@@ -59,22 +72,26 @@ export interface Pipeline {
   ocrLang: string;
   srcLang: string;
   contextOn: boolean;
+  region: Region | null;
+  regionMode: "manual" | "auto";
 }
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto") => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
   rerunPipeline: (id: string, step: number) => void;
+  confirmRegion: (id: string, region: Region) => void;
+  cancelPipeline: (id: string) => void;
 }
 
 function emptySteps<T>(v: T): T[] {
   return STEPS.map(() => v);
 }
 
-function newPipeline(id: string, url: string): Pipeline {
+function newPipeline(id: string, url: string, regionMode: "manual" | "auto" = "auto"): Pipeline {
   return {
     id,
     url,
@@ -82,6 +99,7 @@ function newPipeline(id: string, url: string): Pipeline {
     status: "queued",
     stage: "idle",
     progress: 0,
+    stepProgress: emptySteps(null),
     logs: [],
     error: "",
     resultUrl: "",
@@ -98,14 +116,16 @@ function newPipeline(id: string, url: string): Pipeline {
     ocrLang: "",
     srcLang: "",
     contextOn: false,
+    region: null,
+    regionMode,
   };
 }
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url) => {
+  addPipeline: (url, regionMode = "auto") => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode)] }));
     enqueue(id);
     return id;
   },
@@ -124,6 +144,35 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   },
   rerunPipeline: (id, step) => {
     enqueue(id, step);
+  },
+  confirmRegion: (id, region) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s) return;
+    set((st) => ({
+      pipelines: st.pipelines.map((p) =>
+        p.id === id ? { ...p, region, stage: "processing" } : p
+      ),
+    }));
+    const resolve = regionWaiters.get(id);
+    if (resolve) {
+      regionWaiters.delete(id);
+      resolve.resolve(region);
+    }
+  },
+  cancelPipeline: async (id) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s) return;
+    const videoId = s.videoId;
+    abortedPipelines.add(id);
+    set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
+    rejectRegion(id);
+    if (videoId) {
+      try {
+        await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
+      } catch {
+        // ignore
+      }
+    }
   },
 }));
 
@@ -179,14 +228,19 @@ export function fmtElapsed(ms: number): string {
   return `${s}s`;
 }
 
-async function pollJob(jobId: string, onProgress: (p: number) => void) {
+export interface JobTick {
+  progress: number;
+  logs?: LogEntry[];
+}
+
+async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
   for (let i = 0; i < 1200; i++) {
     await sleep(1500);
     try {
       const r = await fetch(`/api/status/${jobId}`);
       if (!r.ok) continue;
       const d = await r.json();
-      onProgress(d.progress ?? 0);
+      onTick({ progress: d.progress ?? 0, logs: d.logs });
       if (d.status === "done") return d;
       if (d.status === "error") return { status: "error", error: d.error };
       if (d.status === "cancelled") return { status: "error", error: "Đã hủy" };
@@ -197,14 +251,14 @@ async function pollJob(jobId: string, onProgress: (p: number) => void) {
   return { status: "error", error: "Quá thời gian chờ" };
 }
 
-async function pollMerge(jobId: string, onProgress: (p: number) => void) {
+async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
   for (let i = 0; i < 1200; i++) {
     await sleep(800);
     try {
       const r = await fetch(`/api/video-merge/${jobId}`);
       if (!r.ok) continue;
       const d = await r.json();
-      onProgress(d.progress ?? 0);
+      onTick({ progress: d.progress ?? 0, logs: d.logs });
       if (d.status === "done") return d;
       if (d.status === "error") return { status: "error", error: d.error };
     } catch {
@@ -218,6 +272,22 @@ async function pollMerge(jobId: string, onProgress: (p: number) => void) {
 
 let queue: { id: string; startStep: number }[] = [];
 let processing = false;
+const abortedPipelines = new Set<string>();
+const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
+
+function waitForRegion(id: string): Promise<Region> {
+  return new Promise<Region>((resolve, reject) => {
+    regionWaiters.set(id, { resolve, reject });
+  });
+}
+
+function rejectRegion(id: string) {
+  const w = regionWaiters.get(id);
+  if (w) {
+    regionWaiters.delete(id);
+    w.reject();
+  }
+}
 
 function enqueue(id: string, startStep = 0) {
   queue.push({ id, startStep });
@@ -240,9 +310,35 @@ function patch(id: string, p: Partial<Pipeline>) {
   usePipelineStore.getState().updatePipeline(id, p);
 }
 
-function appendLog(id: string, msg: string) {
+function appendLog(id: string, msg: string, level = "info") {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
-  if (cur) patch(id, { logs: [...cur.logs, msg] });
+  if (!cur) return;
+  const entry: LogEntry = { message: msg, ts: Date.now() / 1000, level };
+  patch(id, { logs: [...cur.logs, entry] });
+}
+
+function appendBackendLogs(id: string, entries: LogEntry[]) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!cur) return;
+  const seen = new Set(cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`));
+  const fresh = entries.filter((e) => !seen.has(`${Math.round(e.ts)}::${e.message}`));
+  if (fresh.length === 0) return;
+  patch(id, { logs: [...cur.logs, ...fresh] });
+}
+
+function setStepProgress(id: string, i: number, p: number) {
+  const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!cur) return;
+  patch(id, { stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)) });
+}
+
+function recalcOverall(id: string) {
+  const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!cur) return;
+  const total = cur.stepProgress.reduce((acc: number, v) => acc + (v ?? 0), 0);
+  const overall = Math.round(total / STEPS.length);
+  patch(id, { progress: overall });
 }
 
 function markStepStart(id: string, i: number) {
@@ -252,19 +348,28 @@ function markStepStart(id: string, i: number) {
     stepStarts: cur.stepStarts.map((v, idx) => (idx === i ? Date.now() : v)),
     stepEnds: cur.stepEnds.map((v, idx) => (idx === i ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, idx) => (idx === i ? false : v)),
+    stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? 0 : v)),
   });
 }
 
 function markStepEnd(id: string, i: number) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  patch(id, { stepEnds: cur.stepEnds.map((v, idx) => (idx === i ? Date.now() : v)) });
+  patch(id, {
+    stepEnds: cur.stepEnds.map((v, idx) => (idx === i ? Date.now() : v)),
+    stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? 100 : v)),
+  });
+  recalcOverall(id);
 }
 
 function markStepSkipped(id: string, i: number) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  patch(id, { stepSkipped: cur.stepSkipped.map((v, idx) => (idx === i ? true : v)) });
+  patch(id, {
+    stepSkipped: cur.stepSkipped.map((v, idx) => (idx === i ? true : v)),
+    stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? 100 : v)),
+  });
+  recalcOverall(id);
 }
 
 async function runPipeline(id: string, startStep = 0) {
@@ -272,14 +377,24 @@ async function runPipeline(id: string, startStep = 0) {
   if (!cur) return;
   const rawUrl = cur.url;
 
+  // Build a per-step tick handler: records step progress and merges backend
+  // log entries into the pipeline log list. Overall progress is the average
+  // across all 7 steps (each step = 100/7 ≈ 14.3% of the total).
+  const tick = (i: number) => (t: JobTick) => {
+    setStepProgress(id, i, t.progress);
+    recalcOverall(id);
+    if (t.logs) appendBackendLogs(id, t.logs);
+  };
+
   let videoUrl = cur.videoUrl;
   let audioUrl = cur.audioUrl;
   let videoId = cur.videoId;
   let sourceLang = cur.srcLang || "zh";
   let ocrLang = cur.ocrLang || "ch";
   const ocrType = detectOcrType();
+  let region = cur.region;
 
-  const stageForStart = ["resolving", "merging", "processing", "context", "translating", "dub", "muxing"][startStep] ?? "resolving";
+  const stageForStart = ["resolving", "merging", "region", "processing", "context", "translating", "dub", "muxing"][startStep] ?? "resolving";
 
   patch(id, {
     status: "running",
@@ -291,12 +406,15 @@ async function runPipeline(id: string, startStep = 0) {
     logs: [],
     resultUrl: "",
     dubbedUrl: null,
+    stepProgress: cur.stepProgress.map((v, i) => (i >= startStep ? null : v)),
     stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
+    region: startStep === 2 ? null : cur.region,
   });
 
   try {
+    if (abortedPipelines.has(id)) return;
     // 0. Resolve link
     if (startStep <= 0) {
       const cleaned = extractUrl(rawUrl);
@@ -340,7 +458,7 @@ async function runPipeline(id: string, startStep = 0) {
         });
         const md = await mr.json();
         if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
-        const ms = await pollMerge(md.job_id, (p) => patch(id, { progress: p }));
+        const ms = await pollMerge(md.job_id, tick(1));
         if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
         mergeId = (ms.filename || "").replace(/\.mp4$/, "");
         appendLog(id, "Merge xong.");
@@ -379,40 +497,63 @@ async function runPipeline(id: string, startStep = 0) {
       throw new Error("Chưa có video — chạy lại từ bước Phân tích link.");
     }
 
-    // 2. OCR
+    // 2. Region: manual (wait for user) or auto (default coords)
     if (startStep <= 2) {
+      if (cur.regionMode === "auto") {
+        region = DEFAULT_REGION;
+        patch(id, { region });
+        appendLog(id, "Vùng quét mặc định (tự động) — bỏ qua bước chọn vùng.");
+        markStepSkipped(id, 2);
+      } else {
+        patch(id, { stage: "region" });
+        markStepStart(id, 2);
+        appendLog(id, "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...");
+        region = cur.region ?? (await waitForRegion(id));
+        patch(id, { region });
+        appendLog(id, `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`);
+        markStepEnd(id, 2);
+      }
+    }
+
+    // 3. OCR
+    if (startStep <= 3) {
+      if (!region) {
+        region = DEFAULT_REGION;
+        patch(id, { region });
+        markStepSkipped(id, 2);
+      }
       patch(id, { stage: "processing" });
-      markStepStart(id, 2);
+      markStepStart(id, 3);
       appendLog(id, "Chạy OCR trích phụ đề...");
       const pr = await fetch("/api/process", {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({
           video_id: videoId,
-          region: { x1: 0.114, y1: 0.748, x2: 0.863, y2: 0.972 },
+          region,
           lang: ocrLang,
           ocr_type: ocrType,
         }),
       });
       const pd = await pr.json();
       if (!pr.ok) throw new Error(pd.detail || "Không thể bắt đầu OCR");
-      const ps = await pollJob(pd.job_id, (p) => patch(id, { progress: p }));
+      const ps = await pollJob(pd.job_id, tick(3));
       if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
       appendLog(id, "OCR xong, đã có phụ đề.");
-      markStepEnd(id, 2);
+      markStepEnd(id, 3);
     }
 
-    // 3. Context
-    if (startStep <= 3) {
+    // 4. Context
+    if (startStep <= 4) {
       patch(id, { stage: "context" });
-      markStepStart(id, 3);
+      markStepStart(id, 4);
       appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
       try {
         const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
         const cd = await cr.json();
         if (cr.ok && cd.job_id) {
           patch(id, { contextOn: true });
-          const cs = await pollJob(cd.job_id, (p) => patch(id, { progress: p }));
+          const cs = await pollJob(cd.job_id, tick(4));
           appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
         } else {
           appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
@@ -420,13 +561,13 @@ async function runPipeline(id: string, startStep = 0) {
       } catch {
         appendLog(id, "Bỏ qua ngữ cảnh.");
       }
-      markStepEnd(id, 3);
+      markStepEnd(id, 4);
     }
 
-    // 4. Translate + save
-    if (startStep <= 4) {
+    // 5. Translate + save
+    if (startStep <= 5) {
       patch(id, { stage: "translating" });
-      markStepStart(id, 4);
+      markStepStart(id, 5);
       appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
       const tr = await fetch(`/api/translate/${videoId}`, {
         method: "POST",
@@ -435,7 +576,7 @@ async function runPipeline(id: string, startStep = 0) {
       });
       const td = await tr.json();
       if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-      const ts = await pollJob(td.job_id, (p) => patch(id, { progress: p }));
+      const ts = await pollJob(td.job_id, tick(5));
       if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
       appendLog(id, "Dịch xong.");
 
@@ -448,13 +589,13 @@ async function runPipeline(id: string, startStep = 0) {
         headers: JSON_HEADERS,
         body: JSON.stringify({ content: srtText }),
       });
-      markStepEnd(id, 4);
+      markStepEnd(id, 5);
     }
 
-    // 5. Dub
-    if (startStep <= 5) {
+    // 6. Dub
+    if (startStep <= 6) {
       patch(id, { stage: "dub" });
-      markStepStart(id, 5);
+      markStepStart(id, 6);
       appendLog(id, "Tách giọng & lồng tiếng Việt (Demucs + TTS)...");
       try {
         const dr = await fetch(`/api/dub/${videoId}`, {
@@ -464,7 +605,7 @@ async function runPipeline(id: string, startStep = 0) {
         });
         const dd = await dr.json();
         if (dr.ok && dd.job_id) {
-          const ds = await pollJob(dd.job_id, (p) => patch(id, { progress: p }));
+          const ds = await pollJob(dd.job_id, tick(6));
           if (ds.status === "done") {
             patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
             appendLog(id, "Lồng tiếng Việt xong.");
@@ -477,20 +618,20 @@ async function runPipeline(id: string, startStep = 0) {
       } catch {
         appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
       }
-      markStepEnd(id, 5);
+      markStepEnd(id, 6);
     }
 
-    // 6. Hardcode
-    if (startStep <= 6) {
+    // 7. Hardcode
+    if (startStep <= 7) {
       patch(id, { stage: "muxing" });
-      markStepStart(id, 6);
+      markStepStart(id, 7);
       appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
       const hr = await fetch(`/api/hardcode/${videoId}`, { method: "POST" });
       const hd = await hr.json();
       if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
-      const hs = await pollJob(hd.job_id, (p) => patch(id, { progress: p }));
+      const hs = await pollJob(hd.job_id, tick(7));
       if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
-      markStepEnd(id, 6);
+      markStepEnd(id, 7);
     }
 
     patch(id, {

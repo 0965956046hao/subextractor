@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from app.config import settings
+from app.services.retry_utils import gemini_retry
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ def generate_video_context(video_id: str) -> str | None:
         logger.info("Found %d files in File Store for %s, reusing", len(existing_names), video_id)
         for name in existing_names:
             try:
-                gf = client.files.get(name=name)
+                gf = gemini_retry(client.files.get)(name=name)
                 uploaded_files.append(gf)
             except Exception:
                 logger.debug("File %s gone from store", name)
@@ -133,7 +134,7 @@ def generate_video_context(video_id: str) -> str | None:
         # Upload fresh — concurrently (up to 8 at a time)
         def _upload_one(f):
             try:
-                gf = client.files.upload(file=str(f))
+                gf = gemini_retry(client.files.upload)(file=str(f))
                 logger.info("Uploaded: %s (%s)", gf.name, f.name)
                 return gf
             except Exception as e:
@@ -162,7 +163,7 @@ def generate_video_context(video_id: str) -> str | None:
         )
 
     try:
-        response = client.models.generate_content(
+        response = gemini_retry(client.models.generate_content)(
             model=settings.gemini_model,
             contents=[
                 *uploaded_files,

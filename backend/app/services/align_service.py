@@ -3,6 +3,7 @@
 import logging
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from app.models import SrtEntry
@@ -11,6 +12,13 @@ from app.services.media_utils import _srt_path, _video_path
 from app.services.job_utils import JobCancelled, notify_ws_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _job_log(job: dict, ws_clients: dict, loop, job_id: str, message: str, level: str = "info"):
+    job.setdefault("logs", []).append({"message": message, "ts": time.time(), "level": level})
+    notify_ws_sync(loop, ws_clients, job_id, {
+        "type": "log", "message": message, "ts": time.time(), "level": level,
+    })
 
 
 def run_align_sync(
@@ -24,6 +32,7 @@ def run_align_sync(
     video_path = _video_path(video_id)
 
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "align"})
+    _job_log(job, ws_clients, loop, job_id, "Bắt đầu chỉnh khớp phụ đề với audio (Whisper)...")
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as af:
         audio_path = af.name
@@ -31,6 +40,7 @@ def run_align_sync(
     try:
         job["phase"] = "extract_audio"
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 5, "phase": "extract_audio"})
+        _job_log(job, ws_clients, loop, job_id, "Tách audio từ video...")
 
         extract_cmd = [
             "ffmpeg", "-i", str(video_path),
@@ -41,6 +51,7 @@ def run_align_sync(
 
         job["phase"] = "whisper"
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "whisper"})
+        _job_log(job, ws_clients, loop, job_id, "Đang chỉnh khớp từng dòng phụ đề (Whisper)...")
 
         srt_content = srt_path.read_text(encoding="utf-8")
         entries = parse_srt(srt_content)
@@ -54,6 +65,7 @@ def run_align_sync(
         srt_path.write_text(new_srt, encoding="utf-8")
 
         job["progress"] = 100
+        _job_log(job, ws_clients, loop, job_id, f"Chỉnh khớp xong ({len(aligned)} dòng).", level="success")
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "done", "video_id": video_id, "lines": len(aligned),
         })

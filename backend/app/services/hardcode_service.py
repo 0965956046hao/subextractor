@@ -8,6 +8,7 @@ Supports two engines:
 import logging
 import shlex
 import subprocess
+import time
 from pathlib import Path
 
 from app.config import settings
@@ -207,6 +208,14 @@ def run_hardcode_sync(
     job_id: str,
 ):
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "hardcode"})
+    job.setdefault("logs", []).append({
+        "message": "Nhúng phụ đề vào video (FFmpeg)...",
+        "ts": time.time(), "level": "info",
+    })
+    notify_ws_sync(loop, ws_clients, job_id, {
+        "type": "log", "message": "Nhúng phụ đề vào video (FFmpeg)...",
+        "ts": time.time(), "level": "info",
+    })
 
     total_dur = _get_duration(video_path_str)
     vw, vh = _get_video_resolution(video_path_str)

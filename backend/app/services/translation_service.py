@@ -8,7 +8,8 @@ from app.config import settings
 from app.services.media_utils import _srt_path, _video_path
 from app.services.srt_utils import parse_srt, entries_to_srt
 from app.services.context_service import load_video_context
-from app.services.job_utils import notify_ws_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.retry_utils import gemini_retry
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,11 @@ Rules:
 4. Keep SRT format: index, timestamps, translated Vietnamese text
 5. Keep lines similar length for subtitle timing
 6. Merge consecutive duplicate lines: if two or more lines in a row have IDENTICAL text, combine them into one line with the earliest start time and latest end time
-7. Output ONLY the translated SRT — no explanations, no markdown, no code fences
+7. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
+8. Never use "mày" / "tao" (informal disrespectful pronouns). Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context
+9. You may ONLY merge adjacent lines whose content is identical (see rule 6). NEVER merge lines with different content. ALWAYS keep the original timeline (start/end times) unchanged — do not alter timestamps except when merging identical adjacent lines
+10. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
+11. Output ONLY the translated SRT — no explanations, no markdown, no code fences
 
 SRT to translate from Chinese to Vietnamese:
 
@@ -48,8 +53,12 @@ Rules:
 2. Use natural sentence structure, not word-for-word translation
 3. Keep the original SRT format: index, timestamps, and translated text
 4. Keep each translated line roughly the same length
-5. DO NOT add any explanation or notes
-6. Output ONLY the translated SRT content in valid SRT format
+5. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
+6. Never use "mày" / "tao" (informal disrespectful pronouns). Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context
+7. Merge adjacent lines whose content is identical into one line with the earliest start time and latest end time. NEVER merge lines with different content. ALWAYS keep the original timeline (start/end times) unchanged
+8. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
+9. DO NOT add any explanation or notes
+10. Output ONLY the translated SRT content in valid SRT format
 
 Here is the SRT to translate:
 
@@ -94,7 +103,7 @@ def _clean_gemini_response(text: str) -> str:
     return "\n".join(lines[start:]).strip()
 
 
-def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False) -> str:
+def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, log_fn=None) -> str:
     """Translate SRT file using Gemini and save as translated_vi.srt."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
@@ -110,6 +119,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         raise ValueError("No subtitle entries found")
 
     logger.info("Translating %d SRT entries with Gemini (%s → %s)", len(entries), source_lang, target_lang)
+    if log_fn:
+        log_fn(f"Đọc được {len(entries)} dòng phụ đề, bắt đầu dịch {source_lang} → {target_lang}...")
 
     model = _get_gemini_client()
 
@@ -131,15 +142,18 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     # Send in batches of 50 entries to stay within context limits
     batch_size = 50
     translated_entries = []
+    total_batches = (len(entries) + batch_size - 1) // batch_size
 
-    for batch_start in range(0, len(entries), batch_size):
+    for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
         prompt = base_prompt + batch_srt
         logger.info("Sending batch %d-%d to Gemini", batch_start + 1, min(batch_start + batch_size, len(entries)))
+        if log_fn:
+            log_fn(f"Dịch batch {bi + 1}/{total_batches} ({len(batch)} dòng: {batch_start + 1}–{min(batch_start + batch_size, len(entries))})...")
 
         try:
-            response = model.models.generate_content(
+            response = gemini_retry(model.models.generate_content)(
                 model=settings.gemini_model,
                 contents=prompt,
                 config={
@@ -164,12 +178,16 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                            response_text[:300])
             # fallback: keep original
             translated_entries.extend(batch)
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: Gemini trả về trống, giữ nguyên bản gốc.", level="warning")
             continue
 
         # Detect if Gemini echoed back the input (no translation)
         if len(translated_batch) == len(batch) and translated_batch[0].text.strip() == batch[0].text.strip():
             logger.warning("Gemini echoed input without translating batch %d-%d, retrying with per-line prompt",
                            batch_start + 1, min(batch_start + batch_size, len(entries)))
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: Gemini lặp lại bản gốc, thử lại với yêu cầu dịch rõ hơn...")
             # Retry with explicit per-line instruction
             retry_prompt = (
                 base_prompt
@@ -179,7 +197,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 + batch_srt
             )
             try:
-                response2 = model.models.generate_content(
+                response2 = gemini_retry(model.models.generate_content)(
                     model=settings.gemini_model,
                     contents=retry_prompt,
                     config={
@@ -196,9 +214,17 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             logger.warning("Gemini retry also failed for batch %d-%d, keeping original",
                            batch_start + 1, min(batch_start + batch_size, len(entries)))
             translated_entries.extend(batch)
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: thử lại vẫn lỗi, giữ nguyên bản gốc.", level="warning")
             continue
 
         translated_entries.extend(translated_batch)
+        if log_fn:
+            log_fn(f"  Batch {bi + 1}: dịch xong {len(translated_batch)} dòng:")
+            for te in translated_batch:
+                log_fn(f"    {te.index}. {te.text}")
+        else:
+            logger.info("Batch %d translated %d lines", bi + 1, len(translated_batch))
 
     # Save translated SRT
     out_dir = settings.temp_dir / "translated" / video_id
@@ -208,6 +234,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     out_path.write_text(out_content, encoding="utf-8")
 
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)
+    if log_fn:
+        log_fn(f"Đã dịch xong {len(translated_entries)}/{len(entries)} dòng, lưu file SRT tiếng Việt.", level="success")
     return out_content
 
 
@@ -218,23 +246,22 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
     job["phase"] = "translating"
 
     try:
-        notify_ws_sync(loop, ws_clients, job_id, {
-            "type": "log",
-            "message": "Bắt đầu dịch với Gemini...",
-            "ts": __import__("time").time(),
-            "level": "info",
-        })
+        job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu dịch với Gemini...")
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "progress",
             "progress": 10,
             "phase": "translating",
         })
 
+        def _log(msg: str, level: str = "info"):
+            job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
+
         result = translate_srt(
             video_id,
             source_lang=job.get("source_lang", "zh"),
             target_lang=job.get("target_lang", "vi"),
             use_custom_srt=job.get("use_custom_srt", False),
+            log_fn=_log,
         )
 
         job["progress"] = 100

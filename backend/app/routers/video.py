@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,8 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.dependencies import get_jobs
 from app.services.video_processor import resolve_video_path
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -160,6 +163,53 @@ async def delete_video(video_id: str):
     if not removed_any:
         raise HTTPException(404, "Video not found")
     return {"deleted": video_id}
+
+
+@router.post("/api/video/{video_id}/abort")
+async def abort_video(video_id: str, jobs: dict = Depends(get_jobs)):
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    cancelled = 0
+    for job_id, job in jobs.items():
+        if job.get("video_id") == video_id and job.get("status") != "done":
+            job["cancelled"] = True
+            job["status"] = "cancelled"
+            cancelled += 1
+            logger.info("job %s: aborted via video %s", job_id, video_id)
+    srt_dir = settings.temp_dir / "srt" / video_id
+    video_dir = settings.temp_dir / "videos" / video_id
+    frames_dir = settings.temp_dir / "frames" / video_id
+    deleted = False
+    for d in (srt_dir, video_dir, frames_dir):
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            deleted = True
+    return {"aborted": video_id, "jobs_cancelled": cancelled, "deleted": deleted}
+
+
+# Sub-directories of temp/ that hold generated data (NOT config files like
+# user_config.json / tts_service_account.json, which must be preserved).
+TEMP_DATA_SUBDIRS = (
+    "videos", "frames", "srt", "muxed", "hardcoded", "tts",
+    "translated", "merged", "context", "projects",
+)
+
+
+@router.post("/api/temp/clear")
+async def clear_temp(jobs: dict = Depends(get_jobs)):
+    for job in jobs.values():
+        if job.get("status") not in ("done", "cancelled"):
+            job["cancelled"] = True
+            job["status"] = "cancelled"
+    removed = 0
+    for name in TEMP_DATA_SUBDIRS:
+        d = settings.temp_dir / name
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            d.mkdir(parents=True, exist_ok=True)
+            removed += 1
+    logger.info("temp cleared: %d subdirs wiped", removed)
+    return {"cleared": True, "subdirs_wiped": removed}
 
 
 def _get_video_path(video_id: str) -> Path:

@@ -51,7 +51,7 @@ async def save_config(body: SaveConfigRequest):
         # Validate it's a valid service account JSON
         try:
             parsed = json.loads(body.google_tts_json)
-            if parsed.get("type") != "service_account":
+            if isinstance(parsed, dict) and parsed.get("type") != "service_account":
                 return {"error": "JSON không phải Service Account key. Cần 'type': 'service_account'."}
         except json.JSONDecodeError:
             return {"error": "JSON không hợp lệ."}

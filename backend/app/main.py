@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.services.ocr_engine import OCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
-from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge
+from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health
 from app.worker import worker_loop
 
 logging.basicConfig(
@@ -88,6 +88,7 @@ app.include_router(tools.router)
 app.include_router(config_router.router)
 app.include_router(youtube.router)
 app.include_router(video_merge.router)
+app.include_router(health.router)
 
 
 @app.get("/api/health")

@@ -8,7 +8,7 @@ from typing import List
 from app.config import settings
 from app.services.srt_utils import parse_srt
 from app.services.media_utils import _srt_path, _video_path, _get_audio_duration
-from app.services.job_utils import notify_ws_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.tts_service import synthesize_srt
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,7 @@ def build_full_audio(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
     progress_callback=None,
+    log_fn=None,
 ) -> Path:
     """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a."""
     video_path = _video_path(video_id)
@@ -163,28 +164,43 @@ def build_full_audio(
             progress_callback(pct)
 
     cb(5)
+    if log_fn:
+        log_fn("Tách giọng khỏi nhạc nền (Demucs)...")
     try:
         instrumental = separate_instrumental(video_path, out_dir)
         background_volume = 1.0
+        if log_fn:
+            log_fn("Đã tách giọng xong, giữ lại nhạc nền.")
     except Exception as e:
         logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
         instrumental = extract_audio(video_path, out_dir)
         background_volume = 0.3
+        if log_fn:
+            log_fn(f"Demucs lỗi ({e}) — dùng audio gốc làm nền (âm lượng 30%).", level="warning")
     cb(40)
 
     audio_files = synthesize_srt(
         video_id,
         progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
         voice_name=voice_name,
+        log_fn=log_fn,
     )
     cb(75)
 
     full_voice = out_dir / "full_voice.mp3"
+    if log_fn:
+        log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
     combine_tts_mp3(audio_files, entries, full_voice)
+    if log_fn:
+        log_fn("Đã gộp giọng nói hoàn chỉnh (full_voice.mp3).")
     cb(85)
 
     full_audio = out_dir / "full_audio.m4a"
+    if log_fn:
+        log_fn("Trộn nhạc nền + giọng nói → full_audio.m4a...")
     _mix_background_with_voice(instrumental, full_voice, background_volume, full_audio)
+    if log_fn:
+        log_fn("Đã trộn xong audio lồng tiếng.")
     cb(100)
     return full_audio
 
@@ -193,12 +209,15 @@ def dub_video_with_tts(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
     progress_callback=None,
+    log_fn=None,
 ) -> Path:
     """Separate vocals → synthesize Vietnamese TTS → mix into dubbed video."""
     video_path = _video_path(video_id)
-    full_audio = build_full_audio(video_id, voice_name, progress_callback)
+    full_audio = build_full_audio(video_id, voice_name, progress_callback, log_fn)
 
     out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+    if log_fn:
+        log_fn("Mux audio lồng tiếng vào video (FFmpeg)...")
     subprocess.run(
         [
             "ffmpeg", "-y",
@@ -213,13 +232,13 @@ def dub_video_with_tts(
         ],
         check=True, capture_output=True, timeout=600,
     )
+    if log_fn:
+        log_fn("Đã tạo video lồng tiếng xong.")
     return out_path
 
 
 def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
     """Run dubbing (vocal separation + TTS + mix) in background."""
-    import time
-
     job = jobs[job_id]
     job["status"] = "processing"
     job["phase"] = "dub"
@@ -237,25 +256,22 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
                     "type": "progress", "progress": pct, "phase": "dub",
                 })
 
-        notify_ws_sync(loop, ws_clients, job_id, {
-            "type": "log",
-            "message": "Tách giọng khỏi nhạc nền (Demucs)...",
-            "ts": time.time(), "level": "info",
-        })
+        job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu lồng tiếng Việt (tách giọng + TTS + trộn)...")
+
+        def _log(msg: str, level: str = "info"):
+            job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
+
         out = dub_video_with_tts(
             video_id,
             voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
             progress_callback=progress,
+            log_fn=_log,
         )
 
         job["status"] = "done"
         job["progress"] = 100
         job["output_path"] = str(out)
-        notify_ws_sync(loop, ws_clients, job_id, {
-            "type": "log",
-            "message": "Lồng tiếng Việt hoàn tất!",
-            "ts": time.time(), "level": "success",
-        })
+        job_log_sync(loop, jobs, ws_clients, job_id, "Lồng tiếng Việt hoàn tất!", level="success")
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "done", "progress": 100, "video_id": video_id,
         })

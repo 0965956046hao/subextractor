@@ -10,7 +10,7 @@ from typing import List
 from app.config import settings
 from app.services.srt_utils import parse_srt
 from app.services.media_utils import _srt_path
-from app.services.job_utils import notify_ws_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,8 @@ def _get_tts_client():
             try:
                 cfg = json.loads(cf.read_text(encoding="utf-8"))
                 creds_json = cfg.get("google_tts_credentials", "")
+                if isinstance(creds_json, dict):
+                    creds_json = json.dumps(creds_json, ensure_ascii=False)
                 if creds_json:
                     # Write to temp file and point to it
                     creds_file = settings.temp_dir / "tts_service_account.json"
@@ -81,7 +83,7 @@ def synthesize_entry(client, entry, out_dir: Path, index: int, voice_name: str =
     return out_path
 
 
-def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "vi-VN-Standard-A") -> List[Path]:
+def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "vi-VN-Standard-A", log_fn=None) -> List[Path]:
     """Convert all SRT entries to individual MP3 files."""
     voice_key = voice_name.replace("-", "_")
     out_dir = settings.temp_dir / "tts" / video_id / voice_key
@@ -110,7 +112,11 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
     total = len(entries)
 
     logger.info("Synthesizing %d entries (voice=%s)", total, voice_name)
+    if log_fn:
+        log_fn(f"TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name}...")
 
+    synth_ok = 0
+    synth_fail = 0
     for i, entry in enumerate(entries):
         if progress_callback:
             progress_callback(i, total)
@@ -119,8 +125,10 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
             path = synthesize_entry(client, entry, out_dir, i + 1, voice_name=voice_name)
             if path:
                 audio_files.append(path)
+                synth_ok += 1
         except Exception as e:
             logger.warning("TTS failed for entry %d: %s", i + 1, e)
+            synth_fail += 1
             # Create silent placeholder
             silent_path = out_dir / f"{i + 1:04d}.mp3"
             _create_silence(silent_path, max(entry.end - entry.start, 0.5))
@@ -130,6 +138,11 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         progress_callback(total, total)
 
     logger.info("TTS complete: %d audio files in %s", len(audio_files), out_dir)
+    if log_fn:
+        ok_note = f"TTS xong: {synth_ok} file giọng nói."
+        if synth_fail:
+            ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
+        log_fn(ok_note, level="success" if synth_fail == 0 else "warning")
     return audio_files
 
 
@@ -154,18 +167,12 @@ def _create_silence(out_path: Path, duration_sec: float):
 
 def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
     """Run TTS in background, reporting progress via WebSocket."""
-    import time
     job = jobs[job_id]
     job["status"] = "processing"
     job["phase"] = "tts"
 
     try:
-        notify_ws_sync(loop, ws_clients, job_id, {
-            "type": "log",
-            "message": "Bắt đầu tổng hợp giọng nói TTS...",
-            "ts": time.time(),
-            "level": "info",
-        })
+        job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu tổng hợp giọng nói TTS...")
 
         last_pct = 0
 
@@ -195,12 +202,7 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
                 rel = str(af.relative_to(settings.temp_dir / "tts" / video_id))
                 audio_urls.append(f"/api/tts-audio/{video_id}/{rel}")
 
-        notify_ws_sync(loop, ws_clients, job_id, {
-            "type": "log",
-            "message": f"Đã tạo {len(audio_files)} file audio.",
-            "ts": time.time(),
-            "level": "info",
-        })
+        job_log_sync(loop, jobs, ws_clients, job_id, f"Đã tạo {len(audio_files)} file audio.")
         job["progress"] = 100
         job["phase"] = "done"
         job["status"] = "done"
