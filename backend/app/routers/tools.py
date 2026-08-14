@@ -11,7 +11,8 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.models import UpdateSrtRequest
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue
-from app.services.tool_services import _srt_path, _video_path, parse_srt
+from app.services.media_utils import _srt_path, _video_path
+from app.services.srt_utils import parse_srt
 from app.services.context_service import load_video_context, generate_video_context
 
 logger = logging.getLogger(__name__)
@@ -392,7 +393,7 @@ async def load_srt_file(video_id: str, file_id: str):
         raise HTTPException(404, f"SRT file not found: {file_id}")
 
     content = path.read_text(encoding="utf-8")
-    from app.services.tool_services import parse_srt
+    from app.services.srt_utils import parse_srt
     entries = parse_srt(content)
     return {"entries": [e.model_dump() for e in entries]}
 
