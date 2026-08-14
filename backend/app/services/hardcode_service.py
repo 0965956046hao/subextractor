@@ -177,7 +177,8 @@ def burn_subtitles_pillow(
     cap.release()
     writer.release()
 
-    # Mux audio back onto the burned video (dubbed audio if available)
+    # Mux audio back onto the burned video (dubbed audio if available).
+    # Re-encode to H.264 (mp4v is MPEG-4 Part 2, unplayable in browsers).
     audio_src = audio_source or video_path_str
     subprocess.run(
         [
@@ -186,7 +187,14 @@ def burn_subtitles_pillow(
             "-i", tmp_path,
             "-map", "0:a:0",
             "-map", "1:v:0",
-            "-c", "copy",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-shortest",
             out_path,
         ],
         check=True, capture_output=True, timeout=600,

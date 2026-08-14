@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # Google Cloud TTS
     google_tts_credentials: str = ""
 
+    # CapCut TTS gen-voice service (capcut-tts-api, FastAPI :8100)
+    capcut_tts_url: str = "http://localhost:8100"
+    capcut_tts_default_voice: str = "BV421_vivn_streaming"
+    capcut_tts_default_rate: str = "1.0"
+    capcut_tts_timeout: int = 120
+
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
 
@@ -38,3 +44,4 @@ settings.temp_dir.mkdir(parents=True, exist_ok=True)
 (settings.temp_dir / "tts").mkdir(exist_ok=True)
 (settings.temp_dir / "translated").mkdir(exist_ok=True)
 (settings.temp_dir / "projects").mkdir(exist_ok=True)
+(settings.temp_dir / "tts_preview").mkdir(exist_ok=True)

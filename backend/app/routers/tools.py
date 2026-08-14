@@ -336,7 +336,17 @@ async def dub_subtitles(video_id: str, request: Request):
         body = await request.json()
     except Exception:
         pass
-    tts_voice = body.get("voice", "vi-VN-Standard-B")
+    tts_engine = body.get("engine", "google")
+    tts_voice = body.get("voice", "")
+    mute_original = bool(body.get("mute_original", True))
+    try:
+        original_gain_db = float(body.get("original_gain_db", 0.0))
+    except (TypeError, ValueError):
+        original_gain_db = 0.0
+    if tts_engine == "capcut" and not tts_voice:
+        tts_voice = settings.capcut_tts_default_voice
+    if not tts_voice:
+        tts_voice = "vi-VN-Standard-B"
 
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
@@ -353,11 +363,17 @@ async def dub_subtitles(video_id: str, request: Request):
         "error": None,
         "cancelled": False,
         "tts_voice": tts_voice,
+        "tts_engine": tts_engine,
+        "mute_original": mute_original,
+        "original_gain_db": original_gain_db,
     }
     ws_clients.setdefault(job_id, [])
-    logger.info("dub job %s: queued for %s", job_id, video_id)
+    logger.info(
+        "dub job %s: queued for %s (engine=%s, voice=%s, mute_original=%s, gain_db=%s)",
+        job_id, video_id, tts_engine, tts_voice, mute_original, original_gain_db,
+    )
     await queue.put(job_id)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "status": "queued", "phase": "dub", "progress": 0, "error": None, "logs": []}
 
 
 # ── GET /api/srt/{video_id}/available ──

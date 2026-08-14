@@ -74,11 +74,29 @@ export interface Pipeline {
   contextOn: boolean;
   region: Region | null;
   regionMode: "manual" | "auto";
+  dubEngine: "google" | "capcut";
+  dubVoice: string;
+  muteOriginal: boolean;
+  originalGainDb: number;
 }
+
+export interface DubOptions {
+  engine: "google" | "capcut";
+  voice: string;
+  muteOriginal: boolean;
+  originalGainDb: number;
+}
+
+const DEFAULT_DUB: DubOptions = {
+  engine: "capcut",
+  voice: "BV421_vivn_streaming",
+  muteOriginal: true,
+  originalGainDb: 0,
+};
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto") => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
@@ -91,7 +109,13 @@ function emptySteps<T>(v: T): T[] {
   return STEPS.map(() => v);
 }
 
-function newPipeline(id: string, url: string, regionMode: "manual" | "auto" = "auto"): Pipeline {
+function newPipeline(
+  id: string,
+  url: string,
+  regionMode: "manual" | "auto" = "manual",
+  dub: Partial<DubOptions> = {}
+): Pipeline {
+  const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
     id,
     url,
@@ -118,14 +142,18 @@ function newPipeline(id: string, url: string, regionMode: "manual" | "auto" = "a
     contextOn: false,
     region: null,
     regionMode,
+    dubEngine: d.engine,
+    dubVoice: d.voice,
+    muteOriginal: d.muteOriginal,
+    originalGainDb: d.originalGainDb,
   };
 }
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "auto") => {
+  addPipeline: (url, regionMode = "manual", dub = {}) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub)] }));
     enqueue(id);
     return id;
   },
@@ -596,12 +624,21 @@ async function runPipeline(id: string, startStep = 0) {
     if (startStep <= 6) {
       patch(id, { stage: "dub" });
       markStepStart(id, 6);
-      appendLog(id, "Tách giọng & lồng tiếng Việt (Demucs + TTS)...");
+      const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
+      const voice = cur.dubVoice || (engine === "capcut" ? "BV421_vivn_streaming" : "vi-VN-Standard-B");
+      appendLog(id, engine === "capcut"
+        ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
+        : "Tách giọng & lồng tiếng Việt (Google TTS)...");
       try {
         const dr = await fetch(`/api/dub/${videoId}`, {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ voice: "vi-VN-Standard-B" }),
+          body: JSON.stringify({
+            voice,
+            engine,
+            mute_original: cur.muteOriginal,
+            original_gain_db: cur.originalGainDb,
+          }),
         });
         const dd = await dr.json();
         if (dr.ok && dd.job_id) {

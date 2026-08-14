@@ -210,10 +210,33 @@ export interface HealthCheckResult {
 export interface PipelineHealth {
   healthy: boolean;
   checks: HealthCheckResult[];
+  dub_engines?: { google: boolean; capcut: boolean };
 }
 
 export async function getPipelineHealth(): Promise<PipelineHealth> {
   const res = await api.get<PipelineHealth>("/health/checks");
+  return res.data;
+}
+
+export interface CapCutVoice {
+  voice_type: string;
+  display_name: string;
+  resource_id: string;
+  lang: string;
+  lan: string;
+}
+
+export async function getCapCutVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
+  const res = await api.get<CapCutVoice[]>("/capcut/voices", { params: { lang } });
+  return res.data;
+}
+
+export async function capCutPreview(voice: string, text?: string): Promise<Blob> {
+  const res = await api.post<Blob>(
+    "/capcut/preview",
+    { voice, text },
+    { responseType: "blob" }
+  );
   return res.data;
 }
 

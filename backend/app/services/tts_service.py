@@ -146,6 +146,95 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
     return audio_files
 
 
+def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "BV421_vivn_streaming", rate: str = "1.0", log_fn=None) -> List[Path]:
+    """Convert all SRT entries to individual MP3 files via the CapCut service.
+
+    Mirrors `synthesize_srt` (Google TTS) output contract so the rest of the
+    dubbing pipeline (`combine_tts_mp3`, mix, mux) is unchanged:
+    - 1 MP3 per entry, placed in ``tts/{video_id}/{voice_key}/{index:04d}.mp3``
+    - failures → silent placeholder to keep entry alignment
+    """
+    from app.services.capcut_tts_client import generate_segments_to_dir
+
+    voice_key = voice_name.replace("-", "_")
+    out_dir = settings.temp_dir / "tts" / video_id / voice_key
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if use_custom_srt:
+        custom_path = out_dir / "custom_input.srt"
+        if not custom_path.exists():
+            custom_path = settings.temp_dir / "tts" / video_id / "custom_input.srt"
+        if not custom_path.exists():
+            raise ValueError("Custom SRT input not found")
+        content = custom_path.read_text(encoding="utf-8")
+    else:
+        srt_path = _srt_path(video_id)
+        content = srt_path.read_text(encoding="utf-8")
+
+    entries = parse_srt(content)
+
+    if not entries:
+        raise ValueError("No subtitle entries found")
+
+    texts = [e.text.strip() for e in entries]
+    total = len(entries)
+
+    logger.info("CapCut TTS: synthesizing %d entries (voice=%s)", total, voice_name)
+    if log_fn:
+        log_fn(f"CapCut TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name}...")
+
+    def cb(done: int, total: int):
+        if progress_callback:
+            progress_callback(done, total)
+
+    written = generate_segments_to_dir(
+        texts,
+        out_dir,
+        voice=voice_name,
+        rate=rate,
+        prefix="segment",
+        progress_callback=cb,
+    )
+    written_names = {p.name for p in written}
+
+    audio_files: List[Path] = []
+    synth_ok = 0
+    synth_fail = 0
+    for i, entry in enumerate(entries):
+        idx = i + 1
+        target = out_dir / f"{idx:04d}.mp3"
+        if not entry.text.strip():
+            audio_files.append(None)
+            continue
+        if target.exists():
+            audio_files.append(target)
+            synth_ok += 1
+            continue
+        # Try the service-named file (segment_0001.mp3) if present
+        seg = out_dir / f"segment_{idx:04d}.mp3"
+        if seg.name in written_names and seg.exists():
+            seg.rename(target)
+            audio_files.append(target)
+            synth_ok += 1
+            continue
+        logger.warning("CapCut TTS failed for entry %d: %s", idx, entry.text[:50])
+        synth_fail += 1
+        silent_path = out_dir / f"{idx:04d}.mp3"
+        _create_silence(silent_path, max(entry.end - entry.start, 0.5))
+        audio_files.append(silent_path)
+
+    if progress_callback:
+        progress_callback(total, total)
+
+    logger.info("CapCut TTS complete: %d audio files in %s", len(audio_files), out_dir)
+    if log_fn:
+        ok_note = f"CapCut TTS xong: {synth_ok} file giọng nói."
+        if synth_fail:
+            ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
+        log_fn(ok_note, level="success" if synth_fail == 0 else "warning")
+    return audio_files
+
+
 def _create_silence(out_path: Path, duration_sec: float):
     """Create a silent MP3 placeholder using FFmpeg."""
     try:

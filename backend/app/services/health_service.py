@@ -7,6 +7,7 @@ tiny model call, Google TTS actually constructs a client and lists voices.
 import json
 import logging
 import os
+from pathlib import Path
 
 from app.config import settings
 from app.services.retry_utils import gemini_retry
@@ -33,9 +34,15 @@ def _resolve_gemini_key() -> str:
 
 
 def _resolve_tts_credentials() -> str:
+    env_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if env_creds and os.path.isfile(env_creds):
+        try:
+            env_creds = Path(env_creds).read_text(encoding="utf-8")
+        except Exception:
+            env_creds = ""
     creds = (
         settings.google_tts_credentials
-        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        or env_creds
         or _read_user_config().get("google_tts_credentials", "")
     )
     if isinstance(creds, dict):
@@ -134,12 +141,36 @@ def check_tts() -> dict:
         }
 
 
+def check_capcut() -> dict:
+    """Verify the CapCut TTS gen-voice service is reachable."""
+    from app.services.capcut_tts_client import check_health
+
+    h = check_health()
+    if not h.get("healthy"):
+        return {
+            "service": "capcut",
+            "configured": False,
+            "healthy": False,
+            "message": "CapCut TTS service không chạy (cần khởi động port 8100)",
+        }
+    return {
+        "service": "capcut",
+        "configured": True,
+        "healthy": True,
+        "message": f"CapCut TTS service hoạt động ({h.get('voices_loaded', 0)} giọng)",
+    }
+
+
 def pipeline_health() -> dict:
     """Check all prerequisites for the AutoPipeline and report readiness."""
     gemini = check_gemini()
     tts = check_tts()
-    checks = [gemini, tts]
+    capcut = check_capcut()
+    checks = [gemini, tts, capcut]
+    # Pipeline cần Gemini (translate) + ít nhất 1 engine lồng tiếng sẵn sàng.
+    dub_ready = tts["healthy"] or capcut["healthy"]
     return {
-        "healthy": all(c["healthy"] for c in checks),
+        "healthy": gemini["healthy"] and dub_ready,
         "checks": checks,
+        "dub_engines": {"google": tts["healthy"], "capcut": capcut["healthy"]},
     }

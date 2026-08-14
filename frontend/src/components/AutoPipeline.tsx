@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, type PipelineHealth } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, type PipelineHealth, type CapCutVoice } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import {
   usePipelineStore,
@@ -80,7 +80,15 @@ export default function AutoPipeline() {
   const clearFinished = usePipelineStore((s) => s.clearFinished);
 
   const [url, setUrl] = useState("");
-  const [regionMode, setRegionMode] = useState<"manual" | "auto">("auto");
+  const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
+  const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
+  const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
+  const [muteOriginal, setMuteOriginal] = useState(true);
+  const [originalGainDb, setOriginalGainDb] = useState(6);
+  const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
+  const [voicesLoading, setVoicesLoading] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [tab, setTab] = useState<"detail" | "list">("detail");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -109,6 +117,73 @@ export default function AutoPipeline() {
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    if (dubEngine === "capcut") {
+      setVoicesLoading(true);
+      getCapCutVoices("vi-VN")
+        .then((vs) => {
+          if (mounted) {
+            setCapcutVoices(vs);
+            setDubVoice((v) => (vs.some((x) => x.voice_type === v) ? v : vs[0]?.voice_type ?? v));
+          }
+        })
+        .catch(() => {
+          if (mounted) setCapcutVoices([]);
+        })
+        .finally(() => {
+          if (mounted) setVoicesLoading(false);
+        });
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [dubEngine]);
+
+  const switchDubEngine = async (engine: "google" | "capcut") => {
+    setDubEngine(engine);
+    setPreviewUrl(null);
+    if (engine === "capcut" && capcutVoices.length === 0) {
+      setVoicesLoading(true);
+      try {
+        const vs = await getCapCutVoices("vi-VN");
+        setCapcutVoices(vs);
+        if (vs.length > 0) setDubVoice(vs[0].voice_type);
+      } catch {
+        setCapcutVoices([]);
+      } finally {
+        setVoicesLoading(false);
+      }
+    }
+  };
+
+  const handlePreviewVoice = async () => {
+    if (!dubVoice || previewing) return;
+    setPreviewing(true);
+    setPreviewUrl(null);
+    try {
+      const blob = await capCutPreview(dubVoice);
+      setPreviewUrl(URL.createObjectURL(blob));
+    } catch {
+      setPreviewUrl(null);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const refreshVoices = async () => {
+    setVoicesLoading(true);
+    try {
+      const vs = await getCapCutVoices("vi-VN");
+      setCapcutVoices(vs);
+      if (vs.length > 0) setDubVoice(vs[0].voice_type);
+    } catch {
+      setCapcutVoices([]);
+    } finally {
+      setVoicesLoading(false);
+    }
+  };
+
   const selected =
     pipelines.find((p) => p.id === selectedId) ??
     pipelines[pipelines.length - 1] ??
@@ -121,13 +196,19 @@ export default function AutoPipeline() {
       checkHealth();
       return;
     }
-    const id = addPipeline(v, regionMode);
+    const id = addPipeline(v, regionMode, {
+      engine: dubEngine,
+      voice: dubVoice,
+      muteOriginal,
+      originalGainDb,
+    });
     setUrl("");
     setSelectedId(id);
     setTab("detail");
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
+  const optionsDisabled = activeCount > 0;
   const hasFinished = pipelines.some((p) => p.status === "done" || p.status === "error");
 
   const handleClearTemp = async () => {
@@ -193,13 +274,13 @@ export default function AutoPipeline() {
             {healthLoading ? (
               <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
                 <IconSpinner className="w-4 h-4 text-blue-600" />
-                <span className="text-[12px] text-ink-muted">Đang kiểm tra Gemini API + Google TTS...</span>
+                <span className="text-[12px] text-ink-muted">Đang kiểm tra Gemini API + engine lồng tiếng...</span>
               </div>
             ) : health && !health.healthy ? (
               <div className="mb-4 rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20 px-4 py-3">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <p className="text-[12px] font-medium text-amber-800">
-                    ⚠️ Cần cấu hình trước khi xử lý: Gemini API key và Google TTS phải hoạt động.
+                    ⚠️ Cần cấu hình trước khi xử lý: Gemini API phải hoạt động và cần ít nhất 1 engine lồng tiếng (Google TTS hoặc CapCut service).
                   </p>
                   <button
                     onClick={checkHealth}
@@ -221,7 +302,7 @@ export default function AutoPipeline() {
             ) : health?.healthy ? (
               <div className="flex items-center gap-2 mb-4 rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 px-4 py-2.5">
                 <IconCheck className="w-4 h-4 text-emerald-600" />
-                <span className="text-[12px] text-emerald-800">Gemini API và Google TTS đã sẵn sàng.</span>
+                <span className="text-[12px] text-emerald-800">Gemini API đã sẵn sàng. Engine lồng tiếng: {health.dub_engines?.google ? "Google TTS" : ""}{health.dub_engines?.google && health.dub_engines?.capcut ? " + " : ""}{health.dub_engines?.capcut ? "CapCut" : ""}{!health.dub_engines?.google && !health.dub_engines?.capcut ? "chưa sẵn sàng" : " sẵn sàng"}.</span>
                 <button
                   onClick={checkHealth}
                   className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-emerald-600/15 text-emerald-800 ring-1 ring-emerald-500/20 hover:bg-emerald-600/25 transition-colors cursor-pointer"
@@ -242,7 +323,7 @@ export default function AutoPipeline() {
                     ? "Đang kiểm tra kết nối..."
                     : health?.healthy
                     ? "Dán toàn bộ nội dung chia sẻ (hoặc link https://v.douyin.com/...)"
-                    : "Vào Settings (⚙️) nhập Gemini API key và Google TTS Service Account"
+                    : "Vào Settings (⚙️) nhập Gemini API key (và Google TTS Service Account nếu chọn Google)"
                 }
                 className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
               />
@@ -258,24 +339,26 @@ export default function AutoPipeline() {
               <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
                 Vùng quét phụ đề:
               </span>
-              <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+              <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
                 <button
                   onClick={() => setRegionMode("auto")}
-                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all cursor-pointer active:scale-[0.97] ${
+                  disabled={optionsDisabled}
+                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                     regionMode === "auto"
                       ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
                       : "text-ink-light hover:text-ink"
-                  }`}
+                  } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
                 >
                   Tự động (vùng mặc định)
                 </button>
                 <button
                   onClick={() => setRegionMode("manual")}
-                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all cursor-pointer active:scale-[0.97] ${
+                  disabled={optionsDisabled}
+                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                     regionMode === "manual"
                       ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
                       : "text-ink-light hover:text-ink"
-                  }`}
+                  } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
                 >
                   Chọn vùng thủ công
                 </button>
@@ -285,6 +368,147 @@ export default function AutoPipeline() {
                   ? "Hệ thống tự dùng tọa độ mặc định, không cần kéo vùng trên video."
                   : "Pipeline sẽ dừng lại ở bước Chọn vùng quét để bạn kéo vùng lấy phụ đề."}
               </p>
+            </div>
+            <div className="mt-4 border-t border-black/[0.05] pt-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+                  Lồng tiếng:
+                </span>
+                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+                  <button
+                    onClick={() => switchDubEngine("google")}
+                    disabled={optionsDisabled}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      dubEngine === "google"
+                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        : "text-ink-light hover:text-ink"
+                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    Google TTS
+                  </button>
+                  <button
+                    onClick={() => switchDubEngine("capcut")}
+                    disabled={optionsDisabled}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      dubEngine === "capcut"
+                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        : "text-ink-light hover:text-ink"
+                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    CapCut
+                  </button>
+                </div>
+              </div>
+
+              {dubEngine === "capcut" && (
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  {voicesLoading ? (
+                    <span className="text-[11px] text-ink-light flex items-center gap-1.5">
+                      <IconSpinner className="w-3 h-3" /> Đang tải giọng CapCut...
+                    </span>
+                  ) : capcutVoices.length === 0 ? (
+                    <span className="text-[11px] text-amber-700 flex items-center gap-2">
+                      Không tải được danh sách giọng CapCut (service :8100).
+                      <button
+                        onClick={refreshVoices}
+                        disabled={optionsDisabled}
+                        className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Thử lại
+                      </button>
+                    </span>
+                  ) : (
+                    <>
+                      <select
+                        value={dubVoice}
+                        disabled={optionsDisabled}
+                        onChange={(e) => {
+                          setDubVoice(e.target.value);
+                          setPreviewUrl(null);
+                        }}
+                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {capcutVoices.map((v) => (
+                          <option key={v.voice_type} value={v.voice_type}>
+                            {v.display_name} ({v.voice_type})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={handlePreviewVoice}
+                        disabled={previewing || optionsDisabled}
+                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-blue-500/10 ring-1 ring-blue-500/20 text-blue-700 hover:bg-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {previewing ? "Đang tạo audio..." : "Nghe thử"}
+                      </button>
+                      {previewUrl && (
+                        <audio key={previewUrl} src={previewUrl} controls autoPlay className="h-8" />
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+              <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                {dubEngine === "google"
+                  ? "Dùng Google Cloud TTS (cần Service Account trong Settings ⚙️)."
+                  : "Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100)."}
+              </p>
+
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-light">
+                  Voice gốc:
+                </span>
+                <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] ${optionsDisabled ? "opacity-50" : ""}`}>
+                  <button
+                    onClick={() => setMuteOriginal(true)}
+                    disabled={optionsDisabled}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      muteOriginal
+                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        : "text-ink-light hover:text-ink"
+                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    Tắt (tách bằng Demucs)
+                  </button>
+                  <button
+                    onClick={() => setMuteOriginal(false)}
+                    disabled={optionsDisabled}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      !muteOriginal
+                        ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]"
+                        : "text-ink-light hover:text-ink"
+                    } ${optionsDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    Giữ lại (giảm âm lượng)
+                  </button>
+                </div>
+              </div>
+
+              {!muteOriginal && (
+                <div className="mt-3 flex items-center gap-3 flex-wrap">
+                  <label className="flex items-center gap-2.5">
+                    <span className="text-[11px] text-ink-muted">Giảm giọng gốc:</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={30}
+                      step={1}
+                      value={originalGainDb}
+                      disabled={optionsDisabled}
+                      onChange={(e) => setOriginalGainDb(Number(e.target.value))}
+                      className="w-40 accent-blue-600 disabled:opacity-40"
+                    />
+                    <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold w-10">
+                      -{originalGainDb} dB
+                    </span>
+                  </label>
+                  <p className="w-full text-[11px] text-ink-light leading-relaxed">
+                    {originalGainDb === 0
+                      ? "Giữ nguyên âm lượng giọng gốc (0 dB)."
+                      : `Giọng nói và nhạc nền gốc sẽ giảm ${originalGainDb} dB để giọng đọc Việt nổi bật hơn.`}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -453,7 +677,6 @@ export default function AutoPipeline() {
 
 function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: number; onRemove: () => void }) {
   const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
-  const [previewKind, setPreviewKind] = useState<"subtitle" | "dub">("subtitle");
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
@@ -467,10 +690,7 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
 
   const canRerun = p.status === "done" || p.status === "error";
 
-  const previewUrl =
-    previewKind === "dub" && p.dubbedUrl
-      ? p.dubbedUrl.replace("/api/download/", "/api/preview/")
-      : p.resultUrl.replace("/api/download/", "/api/preview/");
+  const previewUrl = p.resultUrl.replace("/api/download/", "/api/preview/");
 
   return (
     <div className="double-bezel">
@@ -669,7 +889,7 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
           <div className="mt-4">
             <div className="flex items-center gap-2 flex-wrap mb-3">
               <a href={p.resultUrl} download className="btn-island-primary group text-sm !px-5 !py-2.5">
-                <span className="tracking-tight">Tải video (phụ đề)</span>
+                <span className="tracking-tight">{p.dubbedUrl ? "Tải video (phụ đề + lồng tiếng)" : "Tải video (phụ đề)"}</span>
                 <span className="btn-island-icon">
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
@@ -687,27 +907,6 @@ function DetailView({ pipeline: p, now, onRemove }: { pipeline: Pipeline; now: n
                 </a>
               )}
             </div>
-
-            {p.dubbedUrl && (
-              <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] w-max mb-3">
-                <button
-                  onClick={() => setPreviewKind("subtitle")}
-                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all cursor-pointer ${
-                    previewKind === "subtitle" ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]" : "text-ink-light hover:text-ink"
-                  }`}
-                >
-                  Phụ đề
-                </button>
-                <button
-                  onClick={() => setPreviewKind("dub")}
-                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all cursor-pointer ${
-                    previewKind === "dub" ? "bg-white text-ink shadow-sm ring-1 ring-black/[0.06]" : "text-ink-light hover:text-ink"
-                  }`}
-                >
-                  Lồng tiếng
-                </button>
-              </div>
-            )}
 
             <iframe
               src={previewUrl}
