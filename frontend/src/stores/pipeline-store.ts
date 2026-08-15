@@ -1,12 +1,21 @@
 "use client";
 
 import { create } from "zustand";
-import type { Region } from "@/lib/api";
+import type { Region, SubtitleStyle } from "@/lib/api";
+
+function sanitizeFilename(name: string): string {
+  return (name || "")
+    .replace(/[\u0000-\u001f<>:"/\\|?*\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
 
 export const STEPS = [
   { label: "Phân tích link", detail: "Mở link Douyin lấy URL video" },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
   { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
+  { label: "Chỉnh kích thước & vị trí sub", detail: "Xem trước, chỉnh cỡ chữ và vị trí" },
   { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
   { label: "Dịch Gemini", detail: "Dịch phụ đề sang tiếng Việt" },
@@ -22,13 +31,14 @@ export type Stage =
   | "resolving"
   | "merging"
   | "region"
+  | "subtitle_preview"
   | "processing"
   | "context"
-  | "meta"
   | "translating"
   | "saving"
   | "dub"
   | "muxing"
+  | "meta"
   | "thumbnail"
   | "youtube"
   | "done"
@@ -38,23 +48,19 @@ export const STEP_STAGE: Record<string, number> = {
   resolving: 0,
   merging: 1,
   region: 2,
-  processing: 3,
-  context: 4,
-  translating: 5,
-  saving: 5,
-  dub: 6,
-  muxing: 7,
-  meta: 8,
-  thumbnail: 9,
-  youtube: 10,
+  subtitle_preview: 3,
+  processing: 4,
+  context: 5,
+  translating: 6,
+  saving: 6,
+  dub: 7,
+  muxing: 8,
+  meta: 9,
+  thumbnail: 10,
+  youtube: 11,
 };
 
-export const DEFAULT_REGION: Region = {
-  x1: 0.114,
-  y1: 0.748,
-  x2: 0.863,
-  y2: 0.972,
-};
+export const DEFAULT_REGION: Region = { x1: 0.114, y1: 0.748, x2: 0.863, y2: 0.972 };
 
 export interface LogEntry {
   message: string;
@@ -66,6 +72,7 @@ export interface Pipeline {
   id: string;
   url: string;
   title: string;
+  originalName: string;
   thumbnail: string | null;
   updatedThumbnailUrl: string | null;
   status: "queued" | "running" | "done" | "error";
@@ -91,17 +98,46 @@ export interface Pipeline {
   meta: Record<string, unknown> | null;
   region: Region | null;
   regionMode: "manual" | "auto";
+  subtitleStyle: Partial<SubtitleStyle> | null;
+  dubEngine: "google" | "capcut";
+  dubVoice: string;
+  muteOriginal: boolean;
+  originalGainDb: number;
+  autoFit: boolean;
+  watermark: boolean;
   autoUploadYoutube: boolean;
 }
 
+export interface DubOptions {
+  engine: "google" | "capcut";
+  voice: string;
+  muteOriginal: boolean;
+  originalGainDb: number;
+}
+
+export interface ImportedDone {
+  videoId: string;
+  title: string;
+  hasDubbed: boolean;
+}
+
+const DEFAULT_DUB: DubOptions = {
+  engine: "capcut",
+  voice: "BV421_vivn_streaming",
+  muteOriginal: true,
+  originalGainDb: 0,
+};
+
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", autoUploadYoutube?: boolean) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, autoUploadYoutube?: boolean) => string;
+  importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
   rerunPipeline: (id: string, step: number) => void;
   confirmRegion: (id: string, region: Region) => void;
+  confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
   hydrate: (pipelines: Pipeline[]) => void;
 }
@@ -113,13 +149,18 @@ function emptySteps<T>(v: T): T[] {
 function newPipeline(
   id: string,
   url: string,
-  regionMode: "manual" | "auto" = "auto",
+  regionMode: "manual" | "auto" = "manual",
+  dub: Partial<DubOptions> = {},
+  autoFit = true,
+  watermark = false,
   autoUploadYoutube = false,
 ): Pipeline {
+  const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
     id,
     url,
     title: "",
+    originalName: "",
     thumbnail: null,
     updatedThumbnailUrl: null,
     status: "queued",
@@ -145,6 +186,13 @@ function newPipeline(
     meta: null,
     region: null,
     regionMode,
+    subtitleStyle: null,
+    dubEngine: d.engine,
+    dubVoice: d.voice,
+    muteOriginal: d.muteOriginal,
+    originalGainDb: d.originalGainDb,
+    autoFit,
+    watermark,
     autoUploadYoutube,
   };
 }
@@ -165,13 +213,33 @@ function schedulePersist() {
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "auto", autoUploadYoutube = false) => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, autoUploadYoutube = false) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({
-      pipelines: [...s.pipelines, newPipeline(id, url, regionMode, autoUploadYoutube)],
-    }));
-    enqueue(id);
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, autoUploadYoutube)] }));
+    runPrep(id);
     schedulePersist();
+    return id;
+  },
+  importDone: (v) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const p: Pipeline = {
+      ...newPipeline(id, "", "manual", {}, true),
+      status: "done",
+      stage: "done",
+      progress: 100,
+      title: v.title,
+      originalName: v.title,
+      videoId: v.videoId,
+      resultUrl: `/api/download/hardcoded/${v.videoId}`,
+      dubbedUrl: v.hasDubbed ? `/api/download/dubbed/${v.videoId}` : null,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      stepProgress: STEPS.map(() => 100),
+      stepStarts: STEPS.map(() => Date.now() - 1000),
+      stepEnds: STEPS.map(() => Date.now()),
+      logs: [{ message: "Đã nhập lại video đã xử lý trước đó.", ts: Date.now() / 1000, level: "info" }],
+    };
+    set((s) => ({ pipelines: [...s.pipelines, p] }));
     return id;
   },
   updatePipeline: (id, patch) => {
@@ -186,27 +254,45 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   },
   clearFinished: () => {
     set((s) => ({
-      pipelines: s.pipelines.filter(
-        (p) => p.status !== "done" && p.status !== "error",
-      ),
+      pipelines: s.pipelines.filter((p) => p.status !== "done" && p.status !== "error"),
     }));
     schedulePersist();
   },
   rerunPipeline: (id, step) => {
-    enqueue(id, step);
+    if (step <= 3) {
+      runPrep(id, step);
+    } else {
+      enqueue(id, step);
+    }
   },
   confirmRegion: (id, region) => {
     const s = get().pipelines.find((p) => p.id === id);
     if (!s) return;
     set((st) => ({
       pipelines: st.pipelines.map((p) =>
-        p.id === id ? { ...p, region, stage: "processing" } : p,
+        p.id === id
+          ? { ...p, region, stage: p.autoFit ? "processing" : "subtitle_preview" }
+          : p
       ),
     }));
     const resolve = regionWaiters.get(id);
     if (resolve) {
       regionWaiters.delete(id);
       resolve.resolve(region);
+    }
+  },
+  confirmSubtitleStyle: (id, style) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s) return;
+    set((st) => ({
+      pipelines: st.pipelines.map((p) =>
+        p.id === id ? { ...p, subtitleStyle: style, stage: "processing" } : p
+      ),
+    }));
+    const resolve = subtitleStyleWaiters.get(id);
+    if (resolve) {
+      subtitleStyleWaiters.delete(id);
+      resolve.resolve(style);
     }
   },
   cancelPipeline: async (id) => {
@@ -216,6 +302,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     abortedPipelines.add(id);
     set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
     rejectRegion(id);
+    rejectSubtitleStyle(id);
     if (videoId) {
       try {
         await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -347,10 +434,8 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 let queue: { id: string; startStep: number }[] = [];
 let processing = false;
 const abortedPipelines = new Set<string>();
-const regionWaiters = new Map<
-  string,
-  { resolve: (r: Region) => void; reject: () => void }
->();
+const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
+const subtitleStyleWaiters = new Map<string, { resolve: (s: Partial<SubtitleStyle>) => void; reject: () => void }>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -366,9 +451,33 @@ function rejectRegion(id: string) {
   }
 }
 
+function waitForSubtitleStyle(id: string): Promise<Partial<SubtitleStyle>> {
+  return new Promise<Partial<SubtitleStyle>>((resolve, reject) => {
+    subtitleStyleWaiters.set(id, { resolve, reject });
+  });
+}
+
+function rejectSubtitleStyle(id: string) {
+  const w = subtitleStyleWaiters.get(id);
+  if (w) {
+    subtitleStyleWaiters.delete(id);
+    w.reject();
+  }
+}
+
 function enqueue(id: string, startStep = 0) {
   queue.push({ id, startStep });
   processQueue();
+}
+
+// After a video finishes, tell the backend to delete intermediate temp data,
+// keeping only the final deliverables (hardcoded video, SRT, dubbed video,
+// meta.json, project state) so the result stays reviewable.
+function cleanupTempForVideo(videoId: string | null) {
+  if (!videoId) return;
+  fetch(`/api/video/${videoId}/cleanup`, { method: "POST" }).catch(() => {
+    // best-effort; failure is non-fatal
+  });
 }
 
 async function processQueue() {
@@ -398,12 +507,8 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
   if (!Array.isArray(entries) || entries.length === 0) return;
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  const seen = new Set(
-    cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`),
-  );
-  const fresh = entries.filter(
-    (e) => !seen.has(`${Math.round(e.ts)}::${e.message}`),
-  );
+  const seen = new Set(cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`));
+  const fresh = entries.filter((e) => !seen.has(`${Math.round(e.ts)}::${e.message}`));
   if (fresh.length === 0) return;
   patch(id, { logs: [...cur.logs, ...fresh] });
 }
@@ -411,9 +516,7 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
 function setStepProgress(id: string, i: number, p: number) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  patch(id, {
-    stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)),
-  });
+  patch(id, { stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)) });
 }
 
 function recalcOverall(id: string) {
@@ -455,14 +558,15 @@ function markStepSkipped(id: string, i: number) {
   recalcOverall(id);
 }
 
-async function runPipeline(id: string, startStep = 0) {
+// ── Prep runner (interactive: resolve → merge → region → subtitle style) ──
+// Runs immediately when a video is added, so the user can select region and
+// subtitle position/size while other videos are still being processed in the
+// queue. Only the heavy steps (OCR → hardcode) are enqueued sequentially.
+async function runPrep(id: string, startStep = 0) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   const rawUrl = cur.url;
 
-  // Build a per-step tick handler: records step progress and merges backend
-  // log entries into the pipeline log list. Overall progress is the average
-  // across all 7 steps (each step = 100/7 ≈ 14.3% of the total).
   const tick = (i: number) => (t: JobTick) => {
     setStepProgress(id, i, t.progress);
     recalcOverall(id);
@@ -477,21 +581,9 @@ async function runPipeline(id: string, startStep = 0) {
   const ocrType = detectOcrType();
   let region = cur.region;
   let thumbUrl = cur.thumbnail;
+  let originalName = cur.originalName || "";
 
-  const stageForStart =
-    [
-      "resolving",
-      "merging",
-      "region",
-      "processing",
-      "context",
-      "translating",
-      "dub",
-      "muxing",
-      "meta",
-      "thumbnail",
-      "youtube",
-    ][startStep] ?? "resolving";
+  const stageForStart = ["resolving", "merging", "region", "subtitle_preview"][startStep] ?? "resolving";
 
   patch(id, {
     status: "running",
@@ -508,6 +600,7 @@ async function runPipeline(id: string, startStep = 0) {
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
     region: startStep === 2 ? null : cur.region,
+    subtitleStyle: startStep <= 3 ? null : cur.subtitleStyle,
   });
 
   try {
@@ -515,10 +608,7 @@ async function runPipeline(id: string, startStep = 0) {
     // 0. Resolve link
     if (startStep <= 0) {
       const cleaned = extractUrl(rawUrl);
-      if (!cleaned)
-        throw new Error(
-          "Không tìm thấy link (https://...) trong nội dung đã dán.",
-        );
+      if (!cleaned) throw new Error("Không tìm thấy link (https://...) trong nội dung đã dán.");
       markStepStart(id, 0);
       appendLog(id, "Đang phân tích link...");
       const r = await fetch("/api/video-download/resolve", {
@@ -532,18 +622,17 @@ async function runPipeline(id: string, startStep = 0) {
       audioUrl = rd.audio_url ?? null;
       sourceLang = detectSourceLang(cleaned);
       ocrLang = detectOcrLang(sourceLang);
+      originalName = sanitizeFilename(rd.title || "") || "video";
       patch(id, {
         videoUrl,
         audioUrl,
         title: rd.title || "",
+        originalName,
         srcLang: sourceLang,
         ocrLang,
         ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
       });
-      appendLog(
-        id,
-        `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`,
-      );
+      appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
       markStepEnd(id, 0);
 
       // Luồng puppeteer riêng lấy thumbnail (sau khi có URL video)
@@ -591,9 +680,10 @@ async function runPipeline(id: string, startStep = 0) {
       }
 
       appendLog(id, "Đăng ký video vào hệ thống...");
+      const impName = `${originalName || "video"}.mp4`;
       const impBody = mergeId
-        ? { merge_id: mergeId, filename: "douyin.mp4" }
-        : { url: videoUrl, filename: "douyin.mp4" };
+        ? { merge_id: mergeId, filename: impName }
+        : { url: videoUrl, filename: impName };
       const ir = await fetch("/api/import-video", {
         method: "POST",
         headers: JSON_HEADERS,
@@ -640,29 +730,92 @@ async function runPipeline(id: string, startStep = 0) {
       } else {
         patch(id, { stage: "region" });
         markStepStart(id, 2);
-        appendLog(
-          id,
-          "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...",
-        );
+        appendLog(id, "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...");
         region = cur.region ?? (await waitForRegion(id));
         patch(id, { region });
-        appendLog(
-          id,
-          `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`,
-        );
+        appendLog(id, `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`);
         markStepEnd(id, 2);
       }
     }
 
-    // 3. OCR
+    // 3. Subtitle style preview: only when NOT auto-fit (manual adjust).
     if (startStep <= 3) {
+      if (cur.autoFit) {
+        markStepSkipped(id, 3);
+        appendLog(id, "Tự động khớp vị trí — bỏ qua bước chỉnh tay.");
+      } else {
+        patch(id, { stage: "subtitle_preview" });
+        markStepStart(id, 3);
+        appendLog(id, "Chỉnh kích thước & vị trí phụ đề trên frame đầu tiên, nhấn Xác nhận để tiếp tục...");
+        let style = cur.subtitleStyle;
+        if (!style) {
+          style = await waitForSubtitleStyle(id);
+        }
+        patch(id, { subtitleStyle: style });
+        appendLog(
+          id,
+          `Cỡ chữ ${style.font_size ?? 48}px · cách đáy ${style.margin_v ?? 40}px`,
+        );
+        markStepEnd(id, 3);
+      }
+    }
+
+    // Prep done → enqueue the heavy processing into the sequential queue.
+    enqueue(id, 4);
+  } catch (e) {
+    patch(id, {
+      status: "error",
+      stage: "error",
+      error: e instanceof Error ? e.message : "Lỗi không xác định",
+      finishedAt: Date.now(),
+    });
+  }
+}
+
+// ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
+// Executed one video at a time via the sequential queue.
+async function runPipeline(id: string, startStep = 4) {
+  const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!cur) return;
+  const videoId = cur.videoId;
+  let sourceLang = cur.srcLang || "zh";
+  let ocrLang = cur.ocrLang || "ch";
+  const ocrType = detectOcrType();
+  let region = cur.region;
+
+  const tick = (i: number) => (t: JobTick) => {
+    setStepProgress(id, i, t.progress);
+    recalcOverall(id);
+    if (t.logs) appendBackendLogs(id, t.logs);
+  };
+
+  const stageForStart = ["processing", "context", "translating", "dub", "muxing", "meta", "thumbnail", "youtube"][startStep - 4] ?? "processing";
+
+  patch(id, {
+    status: "running",
+    stage: stageForStart as Stage,
+    progress: 0,
+    startedAt: cur.startedAt ?? Date.now(),
+    finishedAt: null,
+    error: "",
+    stepProgress: cur.stepProgress.map((v, i) => (i >= startStep ? null : v)),
+    stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
+    stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
+    stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
+  });
+
+  try {
+    if (abortedPipelines.has(id)) return;
+
+    // 4. OCR
+    if (startStep <= 4) {
       if (!region) {
         region = DEFAULT_REGION;
         patch(id, { region });
         markStepSkipped(id, 2);
       }
       patch(id, { stage: "processing" });
-      markStepStart(id, 3);
+      markStepStart(id, 4);
       appendLog(id, "Chạy OCR trích phụ đề...");
       const pr = await fetch("/api/process", {
         method: "POST",
@@ -676,45 +829,37 @@ async function runPipeline(id: string, startStep = 0) {
       });
       const pd = await pr.json();
       if (!pr.ok) throw new Error(pd.detail || "Không thể bắt đầu OCR");
-      const ps = await pollJob(pd.job_id, tick(3));
+      const ps = await pollJob(pd.job_id, tick(4));
       if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
       appendLog(id, "OCR xong, đã có phụ đề.");
-      markStepEnd(id, 3);
+      markStepEnd(id, 4);
     }
 
-    // 4. Context
-    if (startStep <= 4) {
+    // 5. Context
+    if (startStep <= 5) {
       patch(id, { stage: "context" });
-      markStepStart(id, 4);
+      markStepStart(id, 5);
       appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
       try {
-        const cr = await fetch(`/api/context/${videoId}/generate`, {
-          method: "POST",
-        });
+        const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
         const cd = await cr.json();
         if (cr.ok && cd.job_id) {
           patch(id, { contextOn: true });
-          const cs = await pollJob(cd.job_id, tick(4));
-          appendLog(
-            id,
-            cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.",
-          );
+          const cs = await pollJob(cd.job_id, tick(5));
+          appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
         } else {
-          appendLog(
-            id,
-            "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.",
-          );
+          appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
         }
       } catch {
         appendLog(id, "Bỏ qua ngữ cảnh.");
       }
-      markStepEnd(id, 4);
+      markStepEnd(id, 5);
     }
 
-    // 5. Translate + save
-    if (startStep <= 5) {
+    // 6. Translate + save
+    if (startStep <= 6) {
       patch(id, { stage: "translating" });
-      markStepStart(id, 5);
+      markStepStart(id, 6);
       appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
       const tr = await fetch(`/api/translate/${videoId}`, {
         method: "POST",
@@ -723,7 +868,7 @@ async function runPipeline(id: string, startStep = 0) {
       });
       const td = await tr.json();
       if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-      const ts = await pollJob(td.job_id, tick(5));
+      const ts = await pollJob(td.job_id, tick(6));
       if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
       appendLog(id, "Dịch xong.");
 
@@ -736,23 +881,40 @@ async function runPipeline(id: string, startStep = 0) {
         headers: JSON_HEADERS,
         body: JSON.stringify({ content: srtText }),
       });
-      markStepEnd(id, 5);
+      markStepEnd(id, 6);
     }
 
-    // 6. Dub
-    if (startStep <= 6) {
+    // 7. Dub
+    if (startStep <= 7) {
       patch(id, { stage: "dub" });
-      markStepStart(id, 6);
-      appendLog(id, "Tách giọng & lồng tiếng Việt (Demucs + TTS)...");
+      markStepStart(id, 7);
+      const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
+      // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
+      // Google TTS with 400 "Voice does not exist". Only send dubVoice when the
+      // engine is CapCut; Google always uses a Google voice.
+      const voice =
+        engine === "capcut"
+          ? cur.dubVoice || "BV421_vivn_streaming"
+          : cur.dubVoice && !cur.dubVoice.startsWith("BV") && !cur.dubVoice.startsWith("AV")
+            ? cur.dubVoice
+            : "vi-VN-Standard-B";
+      appendLog(id, engine === "capcut"
+        ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
+        : "Tách giọng & lồng tiếng Việt (Google TTS)...");
       try {
         const dr = await fetch(`/api/dub/${videoId}`, {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ voice: "vi-VN-Standard-B" }),
+          body: JSON.stringify({
+            voice,
+            engine,
+            mute_original: cur.muteOriginal,
+            original_gain_db: cur.originalGainDb,
+          }),
         });
         const dd = await dr.json();
         if (dr.ok && dd.job_id) {
-          const ds = await pollJob(dd.job_id, tick(6));
+          const ds = await pollJob(dd.job_id, tick(7));
           if (ds.status === "done") {
             patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
             appendLog(id, "Lồng tiếng Việt xong.");
@@ -760,35 +922,40 @@ async function runPipeline(id: string, startStep = 0) {
             appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
           }
         } else {
-          appendLog(
-            id,
-            `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`,
-          );
+          appendLog(id, `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`);
         }
       } catch {
         appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
       }
-      markStepEnd(id, 6);
-    }
-
-    // 7. Hardcode
-    if (startStep <= 7) {
-      patch(id, { stage: "muxing" });
-      markStepStart(id, 7);
-      appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
-      const hr = await fetch(`/api/hardcode/${videoId}`, { method: "POST" });
-      const hd = await hr.json();
-      if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
-      const hs = await pollJob(hd.job_id, tick(7));
-      if (hs.status !== "done")
-        throw new Error(hs.error || "Nhúng SRT thất bại");
       markStepEnd(id, 7);
     }
 
-    // 8. Meta (bước cuối — sau khi có video cuối)
+    // 8. Hardcode
     if (startStep <= 8) {
-      patch(id, { stage: "meta" });
+      patch(id, { stage: "muxing" });
       markStepStart(id, 8);
+      appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
+      const hr = await fetch(`/api/hardcode/${videoId}`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          auto_fit: cur.autoFit,
+          region: cur.region ?? DEFAULT_REGION,
+          style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
+          watermark: cur.watermark,
+        }),
+      });
+      const hd = await hr.json();
+      if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
+      const hs = await pollJob(hd.job_id, tick(8));
+      if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
+      markStepEnd(id, 8);
+    }
+
+    // 9. Meta (bước cuối — sau khi có video cuối)
+    if (startStep <= 9) {
+      patch(id, { stage: "meta" });
+      markStepStart(id, 9);
       appendLog(id, "Tạo meta (tiêu đề/mô tả/tags) từ ngữ cảnh...");
       try {
         const mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
@@ -802,13 +969,13 @@ async function runPipeline(id: string, startStep = 0) {
       } catch {
         appendLog(id, "Bỏ qua tạo meta (lỗi).");
       }
-      markStepEnd(id, 8);
+      markStepEnd(id, 9);
     }
 
-    // 9. Cập nhật thumbnail (fal.ai image-to-image)
-    if (startStep <= 9) {
+    // 10. Cập nhật thumbnail (fal.ai image-to-image)
+    if (startStep <= 10) {
       patch(id, { stage: "thumbnail" });
-      markStepStart(id, 9);
+      markStepStart(id, 10);
 
       let hasFalKey = false;
       try {
@@ -820,7 +987,7 @@ async function runPipeline(id: string, startStep = 0) {
 
       if (!hasFalKey) {
         appendLog(id, "Bỏ qua cập nhật thumbnail (chưa có FAL key).");
-        markStepSkipped(id, 9);
+        markStepSkipped(id, 10);
       } else {
         appendLog(id, "Cập nhật thumbnail (fal.ai)...");
         try {
@@ -858,18 +1025,18 @@ async function runPipeline(id: string, startStep = 0) {
         } catch (e) {
           appendLog(id, `Bỏ qua cập nhật thumbnail (lỗi): ${(e as Error)?.message || e}`);
         }
-        markStepEnd(id, 9);
+        markStepEnd(id, 10);
       }
     }
 
-    // 10. Upload YouTube (chỉ khi bật auto upload)
-    if (startStep <= 10) {
+    // 11. Upload YouTube (chỉ khi bật auto upload)
+    if (startStep <= 11) {
       if (!cur.autoUploadYoutube) {
         appendLog(id, "Bỏ qua upload YouTube (tự động up tắt).");
-        markStepSkipped(id, 10);
+        markStepSkipped(id, 11);
       } else {
         patch(id, { stage: "youtube" });
-        markStepStart(id, 10);
+        markStepStart(id, 11);
         appendLog(id, "Upload YouTube (kèm meta)...");
         try {
           const ur = await fetch(`/api/youtube/upload/${videoId}`, {
@@ -877,7 +1044,7 @@ async function runPipeline(id: string, startStep = 0) {
           });
           const ud = await ur.json();
           if (ur.ok && ud.job_id) {
-            const us = await pollYoutubeUpload(ud.job_id, tick(10));
+            const us = await pollYoutubeUpload(ud.job_id, tick(11));
             if (us.status === "done") {
               appendLog(id, "Upload YouTube hoàn tất!");
             } else {
@@ -889,7 +1056,7 @@ async function runPipeline(id: string, startStep = 0) {
         } catch {
           appendLog(id, "Bỏ qua upload YouTube (lỗi).");
         }
-        markStepEnd(id, 10);
+        markStepEnd(id, 11);
       }
     }
 
@@ -901,6 +1068,7 @@ async function runPipeline(id: string, startStep = 0) {
       finishedAt: Date.now(),
     });
     appendLog(id, "Hoàn tất!");
+    cleanupTempForVideo(videoId);
   } catch (e) {
     patch(id, {
       status: "error",

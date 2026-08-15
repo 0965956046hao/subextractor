@@ -7,7 +7,7 @@ from typing import Optional
 from app.config import settings
 from app.services.media_utils import _srt_path, _video_path
 from app.services.srt_utils import parse_srt, entries_to_srt
-from app.services.context_service import load_video_context
+from app.services.context_service import load_video_context, load_translation_context, append_translation_context
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.retry_utils import gemini_retry
 
@@ -63,6 +63,44 @@ Rules:
 Here is the SRT to translate:
 
 """
+
+# After each patch is translated, ask Gemini to summarize the patch so the NEXT
+# patch can keep names, honorifics, tone and terminology consistent.
+PATCH_CONTEXT_PROMPT = """You are a subtitle-translation consistency assistant.
+
+The following is a patch of subtitles that was JUST translated from {source_lang_name} to {target_lang_name}.
+Write a SHORT (max ~5 sentences) context note in {target_lang_name} capturing what an upcoming patch must know to stay consistent:
+- Character names, titles, honorifics and how they address each other
+- Repeated terminology or idioms and the translation chosen for them
+- The tone/register being used
+- Any plot facts established in this patch that matter later
+
+Do NOT include timestamps or SRT indexes. Output ONLY the context note, no preamble.
+
+Translated patch:
+
+"""
+
+
+def _build_patch_context_note(model, translated_batch, source_lang: str, target_lang: str) -> str:
+    """Ask Gemini to summarize a translated patch into a reusable context note."""
+    sn = LANG_NAMES.get(source_lang, source_lang)
+    tn = LANG_NAMES.get(target_lang, target_lang)
+    prompt = PATCH_CONTEXT_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
+    patch_srt = entries_to_srt(translated_batch)
+    try:
+        response = gemini_retry(model.models.generate_content)(
+            model=settings.gemini_model,
+            contents=prompt + patch_srt,
+            config={
+                "system_instruction": "You build concise translation-consistency notes.",
+                "temperature": 0.2,
+            },
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.warning("Patch context note failed: %s", e)
+        return ""
 
 
 def _get_gemini_client():
@@ -139,6 +177,11 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         base_prompt = context_prefix + base_prompt
         logger.info("Using video context for translation: %s", context[:100])
 
+    # Load accumulated translation context built from previously translated patches
+    patch_context = load_translation_context(video_id)
+    if patch_context:
+        logger.info("Using accumulated translation context (%d chars)", len(patch_context))
+
     # Send in batches of 50 entries to stay within context limits
     batch_size = 50
     translated_entries = []
@@ -147,7 +190,17 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
-        prompt = base_prompt + batch_srt
+
+        # Prepend accumulated patch context so names/honorifics/terminology stay consistent
+        if patch_context:
+            patch_prefix = (
+                "PREVIOUS PATCH CONTEXT (already-translated subtitles; keep character names, "
+                "honorifics, terminology and tone CONSISTENT with these):\n"
+                f"{patch_context}\n\n"
+            )
+            prompt = patch_prefix + base_prompt + batch_srt
+        else:
+            prompt = base_prompt + batch_srt
         logger.info("Sending batch %d-%d to Gemini", batch_start + 1, min(batch_start + batch_size, len(entries)))
         if log_fn:
             log_fn(f"Dịch batch {bi + 1}/{total_batches} ({len(batch)} dòng: {batch_start + 1}–{min(batch_start + batch_size, len(entries))})...")
@@ -225,6 +278,16 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 log_fn(f"    {te.index}. {te.text}")
         else:
             logger.info("Batch %d translated %d lines", bi + 1, len(translated_batch))
+
+        # Build a context note from this patch and append it so the NEXT patch
+        # keeps names, honorifics, terminology and tone consistent.
+        note = _build_patch_context_note(model, translated_batch, source_lang, target_lang)
+        if note:
+            patch_context = (patch_context + "\n\n" + note) if patch_context else note
+            append_translation_context(video_id, note)
+            logger.info("Updated translation context after batch %d (%d chars)", bi + 1, len(patch_context))
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: đã cập nhật ngữ cảnh ({len(note)} ký tự) cho các batch tiếp theo.")
 
     # Save translated SRT
     out_dir = settings.temp_dir / "translated" / video_id

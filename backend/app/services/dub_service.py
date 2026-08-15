@@ -1,4 +1,4 @@
-"""Vocal separation (Demucs) + Vietnamese dubbing (instrumental + Google TTS)."""
+"""Vocal separation (Demucs) + Vietnamese dubbing (instrumental + TTS)."""
 
 import logging
 import subprocess
@@ -9,7 +9,7 @@ from app.config import settings
 from app.services.srt_utils import parse_srt
 from app.services.media_utils import _srt_path, _video_path, _get_audio_duration
 from app.services.job_utils import notify_ws_sync, job_log_sync
-from app.services.tts_service import synthesize_srt
+from app.services.tts_service import synthesize_srt, synthesize_srt_capcut
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +145,26 @@ def _mix_background_with_voice(
     return out_path
 
 
+def _db_to_volume(db: float) -> float:
+    """Convert dB reduction to a linear volume multiplier (0 dB → 1.0)."""
+    return float(10 ** (-db / 20))
+
+
 def build_full_audio(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
+    tts_engine: str = "google",
+    mute_original: bool = True,
+    original_gain_db: float = 0.0,
     progress_callback=None,
     log_fn=None,
 ) -> Path:
-    """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a."""
+    """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a.
+
+    `tts_engine` = "google" (Google TTS) | "capcut" (CapCut gen-voice service).
+    `mute_original` = True: Demucs tách giọng, giữ instrumental (no_vocals).
+    `mute_original` = False: giữ nguyên audio gốc, giảm âm lượng `original_gain_db` dB.
+    """
     video_path = _video_path(video_id)
     out_dir = settings.temp_dir / "tts" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -164,27 +177,44 @@ def build_full_audio(
             progress_callback(pct)
 
     cb(5)
-    if log_fn:
-        log_fn("Tách giọng khỏi nhạc nền (Demucs)...")
-    try:
-        instrumental = separate_instrumental(video_path, out_dir)
-        background_volume = 1.0
+    if mute_original:
         if log_fn:
-            log_fn("Đã tách giọng xong, giữ lại nhạc nền.")
-    except Exception as e:
-        logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
+            log_fn("Tách giọng khỏi nhạc nền (Demucs)...")
+        try:
+            instrumental = separate_instrumental(video_path, out_dir)
+            background_volume = 1.0
+            if log_fn:
+                log_fn("Đã tách giọng xong, giữ lại nhạc nền.")
+        except Exception as e:
+            logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
+            instrumental = extract_audio(video_path, out_dir)
+            background_volume = 0.3
+            if log_fn:
+                log_fn(f"Demucs lỗi ({e}) — dùng audio gốc làm nền (âm lượng 30%).", level="warning")
+    else:
+        if log_fn:
+            log_fn(f"Giữ nguyên audio gốc, giảm giọng nền {original_gain_db:g} dB...")
         instrumental = extract_audio(video_path, out_dir)
-        background_volume = 0.3
+        background_volume = _db_to_volume(original_gain_db)
         if log_fn:
-            log_fn(f"Demucs lỗi ({e}) — dùng audio gốc làm nền (âm lượng 30%).", level="warning")
+            log_fn(f"Âm lượng nhạc nền gốc = {background_volume:.2f} ({original_gain_db:g} dB).")
     cb(40)
 
-    audio_files = synthesize_srt(
-        video_id,
-        progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-        voice_name=voice_name,
-        log_fn=log_fn,
-    )
+    if tts_engine == "capcut":
+        audio_files = synthesize_srt_capcut(
+            video_id,
+            progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
+            voice_name=voice_name,
+            rate=settings.capcut_tts_default_rate,
+            log_fn=log_fn,
+        )
+    else:
+        audio_files = synthesize_srt(
+            video_id,
+            progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
+            voice_name=voice_name,
+            log_fn=log_fn,
+        )
     cb(75)
 
     full_voice = out_dir / "full_voice.mp3"
@@ -208,12 +238,23 @@ def build_full_audio(
 def dub_video_with_tts(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
+    tts_engine: str = "google",
+    mute_original: bool = True,
+    original_gain_db: float = 0.0,
     progress_callback=None,
     log_fn=None,
 ) -> Path:
     """Separate vocals → synthesize Vietnamese TTS → mix into dubbed video."""
     video_path = _video_path(video_id)
-    full_audio = build_full_audio(video_id, voice_name, progress_callback, log_fn)
+    full_audio = build_full_audio(
+        video_id,
+        voice_name,
+        tts_engine,
+        mute_original=mute_original,
+        original_gain_db=original_gain_db,
+        progress_callback=progress_callback,
+        log_fn=log_fn,
+    )
 
     out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
     if log_fn:
@@ -264,6 +305,9 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         out = dub_video_with_tts(
             video_id,
             voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
+            tts_engine=job.get("tts_engine", "google"),
+            mute_original=job.get("mute_original", True),
+            original_gain_db=job.get("original_gain_db", 0.0),
             progress_callback=progress,
             log_fn=_log,
         )

@@ -99,19 +99,19 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             if row and row["status"] not in ("cancelled",):
                 continue
             seen.add(video_id)
-            vdir = settings.temp_dir / "videos" / video_id
-            has_video = (
-                any(f.stem.startswith("video") for f in vdir.iterdir())
-                if vdir.exists()
-                else False
-            )
+            try:
+                has_video = _get_video_path(video_id).exists()
+            except Exception:
+                has_video = False
             filename = _meta_filename(video_id) or video_id
             content = srt_path.read_text(encoding="utf-8")
             entries = sum(1 for block in content.split("\n\n") if "-->" in block)
+            has_dubbed = (settings.temp_dir / "tts" / video_id / "dubbed_video.mp4").exists()
             videos.append({
                 "video_id": video_id,
                 "filename": filename,
                 "has_video": has_video,
+                "has_dubbed": has_dubbed,
                 "entries": entries,
                 "created_at": datetime.fromtimestamp(
                     srt_path.stat().st_mtime, tz=timezone.utc
@@ -148,21 +148,103 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
     return {"videos": videos}
 
 
+@router.post("/api/video/{video_id}/cleanup")
+async def cleanup_video(video_id: str):
+    """Delete intermediate temp data for a finished video, keeping only the
+    final deliverables needed to re-view / re-download the result:
+    - hardcoded/{video_id}/        (final video + ASS)
+    - srt/{video_id}/              (final subtitles)
+    - tts/{video_id}/dubbed_video.mp4 (dubbed video)
+    - videos/{video_id}/meta.json  (original filename)
+    - projects/{video_id}/         (editor project state)
+    """
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    removed: list[str] = []
+
+    # videos/: keep only meta.json (needed for download filename)
+    video_dir = settings.temp_dir / "videos" / video_id
+    if video_dir.exists():
+        for f in video_dir.iterdir():
+            if f.name == "meta.json":
+                continue
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink(missing_ok=True)
+        removed.append("videos")
+
+    # frames/: first frame + ocr_snapshots — intermediate
+    frames_dir = settings.temp_dir / "frames" / video_id
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        removed.append("frames")
+
+    # context/: context files — intermediate
+    context_dir = settings.temp_dir / "context" / video_id
+    if context_dir.exists():
+        shutil.rmtree(context_dir, ignore_errors=True)
+        removed.append("context")
+
+    # translated/: redundant (step 6 already wrote translated text into srt/)
+    translated_dir = settings.temp_dir / "translated" / video_id
+    if translated_dir.exists():
+        shutil.rmtree(translated_dir, ignore_errors=True)
+        removed.append("translated")
+
+    # tts/: keep only dubbed_video.mp4
+    tts_dir = settings.temp_dir / "tts" / video_id
+    if tts_dir.exists():
+        for f in tts_dir.iterdir():
+            if f.name == "dubbed_video.mp4":
+                continue
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink(missing_ok=True)
+        removed.append("tts")
+
+    # muxed/: intermediate
+    muxed_dir = settings.temp_dir / "muxed" / video_id
+    if muxed_dir.exists():
+        shutil.rmtree(muxed_dir, ignore_errors=True)
+        removed.append("muxed")
+
+    return {"cleaned": video_id, "removed": removed}
+
+
 @router.delete("/api/video/{video_id}")
 async def delete_video(video_id: str):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
-    srt_dir = settings.temp_dir / "srt" / video_id
-    video_dir = settings.temp_dir / "videos" / video_id
-    frames_dir = settings.temp_dir / "frames" / video_id
-    removed_any = False
-    for d in (srt_dir, video_dir, frames_dir):
+    removed: list[str] = []
+    # Merged sources are flat files `temp/merged/{merge_id}.mp4` keyed by a
+    # merge_id different from video_id. Read meta.json BEFORE the videos dir
+    # is removed so we can also clean up the flat merged file(s).
+    merge_id = None
+    meta_file = settings.temp_dir / "videos" / video_id / "meta.json"
+    if meta_file.exists():
+        try:
+            import json as _json
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+            merge_id = meta.get("source_merge_id")
+        except Exception:
+            merge_id = None
+    for name in TEMP_DATA_SUBDIRS:
+        d = settings.temp_dir / name / video_id
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
-            removed_any = True
-    if not removed_any:
+            removed.append(name)
+    if merge_id:
+        merged_dir = settings.temp_dir / "merged"
+        for suffix in ("", "_video", "_audio"):
+            f = merged_dir / f"{merge_id}{suffix}.mp4"
+            if f.exists():
+                f.unlink(missing_ok=True)
+                removed.append("merged")
+    if not removed:
         raise HTTPException(404, "Video not found")
-    return {"deleted": video_id}
+    return {"deleted": video_id, "removed": removed}
 
 
 @router.post("/api/video/{video_id}/abort")
@@ -214,10 +296,15 @@ async def clear_temp(jobs: dict = Depends(get_jobs)):
 
 def _get_video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
-    if not video_dir.exists():
-        raise HTTPException(404, "Video not found")
-    for f in video_dir.iterdir():
-        if f.stem.startswith("video"):
+    if video_dir.exists():
+        for f in video_dir.iterdir():
+            if f.stem.startswith("video"):
+                return f
+    # Fallback: after cleanup the original video is deleted — serve the final
+    # hardcoded video so the result stays reviewable (library / detail pages).
+    hd_dir = settings.temp_dir / "hardcoded" / video_id
+    if hd_dir.exists():
+        for f in hd_dir.glob("*_hardcoded.mp4"):
             return f
     raise HTTPException(404, "Video file not found")
 

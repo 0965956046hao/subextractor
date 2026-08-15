@@ -1,0 +1,55 @@
+- generic [active] [ref=f1e1]:
+  - main [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]: SubTitle Extractor
+      - link "New Extractor" [ref=f1e10] [cursor=pointer]:
+        - /url: /extract
+      - link "Auto Pipeline" [ref=f1e14] [cursor=pointer]:
+        - /url: /auto
+      - link "YouTube Upload" [ref=f1e19] [cursor=pointer]:
+        - /url: /youtube
+      - link "Tải video" [ref=f1e25] [cursor=pointer]:
+        - /url: /download
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=f1e31] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f1e35]:
+      - generic [ref=f1e36]: Extracted Library
+      - heading "Your subtitles, ready to relive" [level=1] [ref=f1e39]: Your subtitles,ready to relive
+      - paragraph [ref=f1e41]: Every video you’ve extracted lives here — open one to watch, read the transcript, and download clean SRT text.
+      - link "Start a new extractor" [ref=f1e44] [cursor=pointer]:
+        - /url: /extract
+      - generic [ref=f1e50]:
+        - generic [ref=f1e51]: 2 videos
+        - generic [ref=f1e52]: 31 subtitle lines
+        - generic [ref=f1e53]: latest Aug 14, 2026
+    - generic [ref=f1e54]:
+      - generic [ref=f1e55]:
+        - generic [ref=f1e56]: 2 videos
+        - generic [ref=f1e57]:
+          - button "Xem dạng lưới" [ref=f1e58] [cursor=pointer]
+          - button "Xem dạng danh sách" [ref=f1e64] [cursor=pointer]
+      - generic [ref=f1e66]:
+        - link [ref=f1e67] [cursor=pointer]:
+          - /url: /video/video_teststyle
+          - generic [ref=f1e69]:
+            - generic [ref=f1e70]:
+              - img "video_teststyle" [ref=f1e71]
+              - button "Delete" [ref=f1e76]
+            - generic [ref=f1e79]:
+              - generic [ref=f1e80]:
+                - heading "video_teststyle" [level=3] [ref=f1e81]
+                - generic [ref=f1e82]: Command '['ffmpeg', '-y', '-i', '/Users/vophamnhuthao/Work/SubTiltleExtractor_beta/subextractor/backend/temp/videos/video_teststyle/video_teststyle.mp4', '-i', '/Users/vophamnhuthao/Work/SubTiltleExtractor_beta/subextractor/backend/temp/hardcoded/video_teststyle/video_teststyle_hardcoded.burn.mp4', '-map', '0:a:0', '-map', '1:v:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-shortest', '/Users/vophamnhuthao/Work/SubTiltleExtractor_beta/subextractor/backend/temp/hardcoded/video_teststyle/video_teststyle_hardcoded.mp4']' returned non-zero exit status 234.
+              - generic [ref=f1e86]: Latest extraction
+        - link "douyin.mp4 Delete douyin.mp4 31 lines Aug 14, 2026 · 04:07 PM" [ref=f1e89] [cursor=pointer]:
+          - /url: /video/3bb6ada6a914
+          - generic [ref=f1e91]:
+            - generic [ref=f1e92]:
+              - img "douyin.mp4" [ref=f1e93]
+              - button "Delete" [ref=f1e98]
+            - generic [ref=f1e102]:
+              - heading "douyin.mp4" [level=3] [ref=f1e103]
+              - generic [ref=f1e104]:
+                - generic [ref=f1e105]: 31 lines
+                - generic [ref=f1e109]: Aug 14, 2026 · 04:07 PM
+    - paragraph [ref=f1e111]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=f1e112]

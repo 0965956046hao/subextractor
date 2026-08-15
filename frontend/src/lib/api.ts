@@ -48,6 +48,7 @@ export interface VideoMeta {
   video_id: string;
   filename: string;
   has_video: boolean;
+  has_dubbed?: boolean;
   entries: number;
   created_at: string;
   status?: VideoStatus;
@@ -210,6 +211,7 @@ export interface HealthCheckResult {
 export interface PipelineHealth {
   healthy: boolean;
   checks: HealthCheckResult[];
+  dub_engines?: { google: boolean; capcut: boolean };
 }
 
 export async function getPipelineHealth(): Promise<PipelineHealth> {
@@ -217,7 +219,106 @@ export async function getPipelineHealth(): Promise<PipelineHealth> {
   return res.data;
 }
 
+export interface CapCutVoice {
+  voice_type: string;
+  display_name: string;
+  resource_id: string;
+  lang: string;
+  lan: string;
+}
+
+export async function getCapCutVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
+  const res = await api.get<CapCutVoice[]>("/capcut/voices", { params: { lang } });
+  return res.data;
+}
+
+export async function capCutPreview(voice: string, text?: string): Promise<Blob> {
+  const res = await api.post<Blob>(
+    "/capcut/preview",
+    { voice, text },
+    { responseType: "blob" }
+  );
+  return res.data;
+}
+
+export async function getGoogleTtsVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
+  const res = await api.get<CapCutVoice[]>("/google-tts/voices", { params: { lang } });
+  return res.data;
+}
+
+export async function googleTtsPreview(voice: string, text?: string): Promise<Blob> {
+  const res = await api.post<Blob>(
+    "/google-tts/preview",
+    { voice, text },
+    { responseType: "blob" }
+  );
+  return res.data;
+}
+
 export async function clearTempData(): Promise<{ cleared: boolean; subdirs_wiped: number }> {
   const res = await api.post("/temp/clear");
   return res.data;
+}
+
+export interface SubtitleStyle {
+  font_family: string;
+  font_size: number;
+  text_color: string;
+  outline_color: string;
+  outline_width: number;
+  bold: boolean;
+  italic: boolean;
+  box_enabled: boolean;
+  box_color: string;
+  box_opacity: number;
+  box_radius: number;
+  box_border_color: string;
+  box_border_width: number;
+  margin_v: number;
+  margin_h: number;
+}
+
+export interface AppConfig {
+  has_gemini_key: boolean;
+  gemini_api_key: string;
+  has_tts_credentials: boolean;
+  google_tts_credentials: string;
+  tts_credentials_info: string;
+  auto_context_enabled: boolean;
+  subtitle_style: SubtitleStyle;
+  watermark_text: string;
+  has_watermark_logo: boolean;
+  watermark_logo_name: string;
+}
+
+export async function getAppConfig(): Promise<AppConfig> {
+  const res = await api.get<AppConfig>("/config");
+  return res.data;
+}
+
+export async function saveAppConfig(body: {
+  gemini_api_key?: string;
+  google_tts_json?: string;
+  auto_context_enabled?: boolean;
+  subtitle_style?: Partial<SubtitleStyle>;
+  watermark_text?: string;
+}): Promise<{ status: string; error?: string; saved?: string[] }> {
+  const res = await api.post("/config", body);
+  return res.data;
+}
+
+export async function uploadWatermarkLogo(file: File): Promise<{ status: string; watermark_logo_name?: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await api.post("/config/logo", fd);
+  return res.data;
+}
+
+export async function deleteWatermarkLogo(): Promise<{ status: string; removed?: boolean }> {
+  const res = await api.delete("/config/logo");
+  return res.data;
+}
+
+export function watermarkLogoUrl(): string {
+  return "/api/config/logo";
 }

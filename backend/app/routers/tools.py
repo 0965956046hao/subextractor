@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.config import settings
 from app.models import UpdateSrtRequest
@@ -17,6 +17,22 @@ from app.services.context_service import load_video_context, generate_video_cont
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _original_download_name(video_id: str, suffix: str, ext: str = ".mp4") -> str:
+    """Build a download filename from the original video name (meta.json).
+
+    Falls back to the internal file name if no original name is recorded.
+    """
+    try:
+        meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+        if meta_path.exists():
+            original = json.loads(meta_path.read_text(encoding="utf-8")).get("filename") or ""
+            if original:
+                return f"{Path(original).stem}{suffix}{ext}"
+    except Exception:
+        pass
+    return f"video{suffix}{ext}"
 
 
 # ── GET /api/srt/{video_id}/entries ──
@@ -100,7 +116,100 @@ async def download_muxed(video_id: str):
     if not files:
         raise HTTPException(404, "Muxed file not found. Run mux first.")
     path = files[0]
-    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_muxed"))
+
+
+# ── POST /api/preview/subtitle/{video_id} ──
+
+@router.post("/api/preview/subtitle/{video_id}")
+async def preview_subtitle(video_id: str, request: Request):
+    """Render a frame (at `time` seconds) with a subtitle overlay using a given
+    style, for the manual "tự chỉnh vị trí" preview step.
+
+    Body: { region: {x1,y1,x2,y2}, style: {font_size, margin_v, ...}, text?, time? }
+    If `time` is omitted, the first frame is used. If the video has an SRT, the
+    subtitle text at that timestamp is used (falling back to `text`).
+    If `format: "overlay"`, returns a transparent PNG overlay (RGBA) sized to the
+    video so the caller can layer it on top of a playing <video>. Otherwise a JPEG.
+    Returns a JPEG of the frame with the subtitle burned at the given style.
+    """
+    import cv2
+
+    video_path = _video_path(video_id)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    region = body.get("region")
+    style_override = body.get("style") or {}
+    time_sec = float(body.get("time") or 0)
+    overlay_only = body.get("format") == "overlay"
+    sample_text = body.get("text") or "Phụ đề tiếng Việt"
+
+    # Prefer the real SRT line visible at this timestamp so the user can scrub.
+    try:
+        srt_path = _srt_path(video_id)
+        if srt_path.exists():
+            for e in parse_srt(srt_path.read_text(encoding="utf-8")):
+                if e.start <= time_sec < e.end:
+                    sample_text = e.text
+                    break
+    except Exception:
+        pass
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise HTTPException(500, "Không đọc được video")
+    if time_sec > 0:
+        cap.set(cv2.CAP_PROP_POS_MSEC, time_sec * 1000)
+    ok, frame = cap.read()
+    vh, vw = frame.shape[:2]
+    cap.release()
+    if not ok:
+        raise HTTPException(500, "Không đọc được frame từ video")
+
+    from app.services.hardcode_service import (
+        auto_fit_style,
+        apply_style_override,
+        _find_font,
+        _render_subtitle,
+        _overlay_subtitle,
+    )
+    from app.routers.config_router import get_subtitle_style
+
+    # Base style: start from the region-fit (matches what auto_fit would pick),
+    # then let the user override font size / vertical position / etc.
+    style = get_subtitle_style()
+    if region and isinstance(region, dict):
+        style = auto_fit_style(style, region, vh, vw)
+    style = apply_style_override(style, style_override)
+
+    font_path = _find_font(
+        style.get("font_family", "Arial"),
+        style.get("bold"),
+        style.get("italic"),
+    )
+    overlay = _render_subtitle(sample_text, vw, vh, font_path, style, fixed_size=True)
+
+    if overlay_only:
+        import numpy as np
+
+        # _render_subtitle returns PIL RGBA (RGB order); imencode expects BGR(A).
+        rgba = np.ascontiguousarray(overlay)
+        bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
+        ok_png, buf = cv2.imencode(".png", bgra)
+        if not ok_png:
+            raise HTTPException(500, "Không encode được PNG")
+        return Response(content=buf.tobytes(), media_type="image/png")
+
+    frame = _overlay_subtitle(frame, overlay)
+
+    ok_jpg, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ok_jpg:
+        raise HTTPException(500, "Không encode được JPEG")
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
 
 
 # ── POST /api/hardcode/{video_id} ──
@@ -114,6 +223,27 @@ async def hardcode_subtitles(video_id: str, request: Request):
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
 
+    # Optional body: { auto_fit: bool, region: {x1,y1,x2,y2}, style: {...}, watermark: bool }
+    auto_fit = False
+    region = None
+    style = None
+    watermark = False
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            auto_fit = bool(raw.get("auto_fit", False))
+            region = raw.get("region")
+            if region and not all(
+                isinstance(region.get(k), (int, float))
+                for k in ("x1", "y1", "x2", "y2")
+            ):
+                region = None
+            if isinstance(raw.get("style"), dict):
+                style = raw["style"]
+            watermark = bool(raw.get("watermark", False))
+    except Exception:
+        pass
+
     job_id = uuid.uuid4().hex[:12]
     job = {
         "job_id": job_id,
@@ -125,9 +255,16 @@ async def hardcode_subtitles(video_id: str, request: Request):
         "progress": 0,
         "error": None,
         "cancelled": False,
+        "auto_fit": auto_fit,
+        "region": region,
+        "style": style,
+        "watermark": watermark,
     }
     jobs[job_id] = job
-    logger.info("hardcode job %s: queued for %s", job_id, video_id)
+    logger.info(
+        "hardcode job %s: queued for %s (auto_fit=%s, watermark=%s)",
+        job_id, video_id, auto_fit, watermark,
+    )
     await queue.put(job_id)
     return {"job_id": job_id}
 
@@ -143,7 +280,7 @@ async def download_hardcoded(video_id: str):
     if not files:
         raise HTTPException(404, "Hardcoded file not found. Run hardcode first.")
     path = files[0]
-    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_hardcoded"))
 
 
 # ── GET /api/preview/hardcoded/{video_id} (inline, cho iframe) ──
@@ -307,7 +444,7 @@ async def download_dubbed(video_id: str):
     if not files:
         raise HTTPException(404, "Dubbed video not found. Run TTS first.")
     path = files[0]
-    return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_dubbed"))
 
 
 # ── GET /api/preview/dubbed/{video_id} (inline, cho iframe) ──
@@ -336,7 +473,17 @@ async def dub_subtitles(video_id: str, request: Request):
         body = await request.json()
     except Exception:
         pass
-    tts_voice = body.get("voice", "vi-VN-Standard-B")
+    tts_engine = body.get("engine", "google")
+    tts_voice = body.get("voice", "")
+    mute_original = bool(body.get("mute_original", True))
+    try:
+        original_gain_db = float(body.get("original_gain_db", 0.0))
+    except (TypeError, ValueError):
+        original_gain_db = 0.0
+    if tts_engine == "capcut" and not tts_voice:
+        tts_voice = settings.capcut_tts_default_voice
+    if not tts_voice:
+        tts_voice = "vi-VN-Standard-B"
 
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
@@ -353,11 +500,17 @@ async def dub_subtitles(video_id: str, request: Request):
         "error": None,
         "cancelled": False,
         "tts_voice": tts_voice,
+        "tts_engine": tts_engine,
+        "mute_original": mute_original,
+        "original_gain_db": original_gain_db,
     }
     ws_clients.setdefault(job_id, [])
-    logger.info("dub job %s: queued for %s", job_id, video_id)
+    logger.info(
+        "dub job %s: queued for %s (engine=%s, voice=%s, mute_original=%s, gain_db=%s)",
+        job_id, video_id, tts_engine, tts_voice, mute_original, original_gain_db,
+    )
     await queue.put(job_id)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "status": "queued", "phase": "dub", "progress": 0, "error": None, "logs": []}
 
 
 # ── GET /api/srt/{video_id}/available ──
@@ -454,6 +607,49 @@ async def load_project(video_id: str):
         return {"tracks": [], "tts_clips": [], "video_muted": False}
     return json.loads(proj_path.read_text(encoding="utf-8"))
 
+
+# ── POST /api/export/{video_id} ──
+
+@router.post("/api/export/{video_id}")
+async def export_video(video_id: str, request: Request):
+    """Export final video with burned subtitles and mixed TTS audio."""
+    _video_path(video_id)
+    body = await request.json()
+
+    jobs = get_jobs(request)
+    ws_clients = get_ws_clients(request)
+    queue = get_job_queue(request)
+
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "job_type": "export",
+        "status": "queued",
+        "phase": "",
+        "progress": 0,
+        "error": None,
+        "cancelled": False,
+        "tracks": body.get("tracks", []),
+        "tts_clips": body.get("tts_clips", []),
+    }
+    jobs[job_id] = job
+    logger.info("export job %s: queued for %s", job_id, video_id)
+    await queue.put(job_id)
+    return {"job_id": job_id, "status": "queued", "phase": "export", "progress": 0, "error": None, "logs": []}
+
+
+# ── GET /api/download/exported/{video_id} ──
+
+@router.get("/api/download/exported/{video_id}")
+async def download_exported(video_id: str):
+    exp_dir = settings.temp_dir / "export" / video_id
+    if not exp_dir.exists():
+        raise HTTPException(404, "Exported file not found. Run export first.")
+    files = list(exp_dir.glob("exported.mp4"))
+    if not files:
+        raise HTTPException(404, "Exported file not found. Run export first.")
+    return FileResponse(str(files[0]), media_type="video/mp4", filename=_original_download_name(video_id, "_exported"))
 
 @router.get("/api/tts-audio/{video_id}/{rest:path}")
 async def serve_tts_audio(video_id: str, rest: str):

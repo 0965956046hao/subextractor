@@ -450,9 +450,9 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
             <span className="text-xs font-medium text-emerald-600/80">{entries.length} subtitles extracted</span>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap">
             {/* Translate */}
-            <select value={transSrcLang} onChange={(e) => setTransSrcLang(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink cursor-pointer">
+            {/* <select value={transSrcLang} onChange={(e) => setTransSrcLang(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink cursor-pointer">
               <option value="zh">Trung</option>
               <option value="en">Anh</option>
               <option value="ja">Nhật</option>
@@ -480,16 +480,16 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               <option value="vi-VN-Standard-D">Nam D</option>
               <option value="vi-VN-Wavenet-A">WaveNet Nữ A</option>
               <option value="vi-VN-Wavenet-B">WaveNet Nam B</option>
-            </select>
-            <button
+            </select> */}
+            {/* <button
               onClick={() => runToolJob("tts")}
               disabled={!!toolJob && toolJob.status !== "done" && toolJob.status !== "error"}
               className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-cyan-500/10 text-cyan-700 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Lồng tiếng (TTS)
-            </button>
+            </button> */}
 
-            {availableSrtFiles.length > 0 && (
+            {/* {availableSrtFiles.length > 0 && (
               <select
                 onChange={(e) => {
                   const file = availableSrtFiles.find((f) => f.id === e.target.value);
@@ -539,7 +539,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-emerald-600/10 text-emerald-700 ring-1 ring-emerald-500/20 hover:bg-emerald-600/20 transition-colors cursor-pointer"
             >
               Lưu
-            </button>
+            </button> */}
 
             <a
               href={getDownloadUrl(videoId, "srt")}

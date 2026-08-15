@@ -64,8 +64,11 @@ def import_video(body: ImportRequest):
         raise HTTPException(500, f"Import failed: {e}")
 
     try:
+        meta = {"filename": body.filename or "douyin.mp4"}
+        if body.merge_id:
+            meta["source_merge_id"] = body.merge_id
         (video_dir / "meta.json").write_text(
-            json.dumps({"filename": body.filename or "douyin.mp4"}),
+            json.dumps(meta, ensure_ascii=False),
             encoding="utf-8",
         )
     except Exception:
@@ -75,6 +78,12 @@ def import_video(body: ImportRequest):
     return {"video_id": video_id}
 
 
+_READ_CHUNK = 1024 * 256
+_CONNECT_TIMEOUT = 30
+_READ_TIMEOUT = 60
+_MAX_RETRIES = 3
+
+
 def _download(url: str, dest: Path, on_progress=None) -> None:
     # Bypass certificate verification: local proxies (Clash/mihomo/mitm)
     # intercept HTTPS with a self-signed cert that Python doesn't trust.
@@ -82,20 +91,56 @@ def _download(url: str, dest: Path, on_progress=None) -> None:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Referer": "https://www.douyin.com/",
-            "Accept": "*/*",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
-        total = int(resp.headers.get("Content-Length") or 0)
-        done = 0
-        with open(dest, "wb") as f:
+    retryable = (TimeoutError, ConnectionError, OSError)
+    last_err: Exception | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            _download_once(url, dest, ctx, on_progress)
+            return
+        except retryable as e:
+            last_err = e
+            logger.warning(
+                "download attempt %d/%d failed: %s", attempt + 1, _MAX_RETRIES, e
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"Download failed after {_MAX_RETRIES} attempts: {last_err}")
+
+
+def _download_once(url: str, dest: Path, ctx, on_progress) -> None:
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Referer": "https://www.douyin.com/",
+        "Accept": "*/*",
+    }
+    # Resume from the partial file already on disk.
+    existing = dest.stat().st_size if dest.exists() else 0
+    if existing > 0:
+        headers["Range"] = f"bytes={existing}-"
+
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT, context=ctx) as resp:
+        status = getattr(resp, "status", 200)
+        partial = status == 206 and existing > 0
+
+        if partial:
+            crange = resp.headers.get("Content-Range", "")
+            total = int(crange.rsplit("/", 1)[-1]) if "/" in crange else 0
+        else:
+            total = int(resp.headers.get("Content-Length") or 0)
+
+        # urllib's `timeout` also applies to every read(); raise it for the body
+        # so a slow-but-alive server doesn't abort a large download.
+        try:
+            resp.fp.raw._sock.settimeout(_READ_TIMEOUT)
+        except Exception:
+            pass
+
+        mode = "ab" if partial else "wb"
+        done = existing if partial else 0
+        with open(dest, mode) as f:
             while True:
-                chunk = resp.read(1024 * 256)
+                chunk = resp.read(_READ_CHUNK)
                 if not chunk:
                     break
                 f.write(chunk)

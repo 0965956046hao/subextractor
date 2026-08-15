@@ -84,10 +84,11 @@ File chunks are streamed to disk incrementally (64KB buffer), not loaded into me
 
 ## Run Commands
 ```bash
-# Convenience: starts both backend (uvicorn) + frontend (Next.js) at once
+# Convenience: starts capcut-tts-api service (:8100) + backend (uvicorn :8000) + frontend (Next.js :3000)
 ./dev.sh
 
 # Or individually:
+cd capcut-tts-api && ../backend/.venv/bin/python -m service.main    # CapCut TTS service :8100
 cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
 cd frontend && npm run dev             # tsc --noEmit for typecheck
 ```
@@ -137,6 +138,7 @@ frontend/
 │   │   ├── page.tsx            # Home: LibraryPage (video library grid)
 │   │   ├── globals.css         # Tailwind + custom classes (double-bezel, btn-island, glass-panel, eyebrow, tag)
 │   │   ├── extract/page.tsx    # 3-step workflow: UploadPage → RegionSelector → ResultPage
+│   │   ├── settings/page.tsx   # Cấu hình: Gemini key, Google TTS, style phụ đề (font/màu/viền/nền)
 │   │   └── video/[id]/page.tsx # Video detail: metadata, JobProgress (polling), TranscriptPlayer
 │   ├── components/
 │   │   ├── UploadPage.tsx         # Drag-drop upload + progress bar
@@ -166,12 +168,28 @@ frontend/
 | GET | `/api/status/{job_id}` | Poll job status (fallback for WS) |
 | WS | `/api/ws/{job_id}` | WebSocket: `{type:"progress"|"log"|"done"|"error", ...}` |
 | GET | `/api/download/{video_id}?format=srt\|txt` | Download subtitle file (filename = `{original}.original.srt`) |
+| GET | `/api/download/muxed/{video_id}` | Download merged video (filename = `{original}_muxed.mp4`) |
+| GET | `/api/download/hardcoded/{video_id}` | Download hardcoded video (filename = `{original}_hardcoded.mp4`) |
+| GET | `/api/download/dubbed/{video_id}` | Download dubbed video (filename = `{original}_dubbed.mp4`) |
+| GET | `/api/download/exported/{video_id}` | Download exported video (filename = `{original}_exported.mp4`) |
 | GET | `/api/srt/{video_id}` | Raw SRT content as JSON `{content: "..."}` |
+| GET | `/api/capcut/voices?lang=vi-VN` | List CapCut voices (proxy → service :8100) |
+| GET | `/api/capcut/health` | CapCut TTS service status |
+| POST | `/api/capcut/preview` | Generate voice preview MP3 (body `{voice, text?}`) → audio/mpeg |
 
 ## Key Architecture
 
+### Original filename flow (Auto Pipeline)
+Khi resolve link Douyin (`/api/video-download/resolve`), frontend `pipeline-store.ts` lưu `rd.title` (tên gốc) vào `originalName` sau khi sanitize (`sanitizeFilename`), rồi gửi nó làm `filename` trong `POST /api/import-video` (thay vì hardcode `douyin.mp4`). Backend lưu vào `videos/{video_id}/meta.json`. Các endpoint download dùng tên này:
+- `tools.py::_original_download_name(video_id, suffix)` → `{original}_muxed/hardcoded/dubbed/exported.mp4`
+- `download.py::_download_name` → `{original}.original.srt/txt`
+- `video.py::_meta_filename` → hiển thị tên trong library
+
 ### No temp frame files
 OpenCV `VideoCapture` → in-memory frames → crop → OCR on numpy arrays. Only the first frame is written to disk (for region selector).
+
+### Dual dub engines (Google TTS / CapCut)
+`POST /api/dub/{video_id}` nhận `{engine: "google" | "capcut", voice}`. `dub_service.build_full_audio` chọn `synthesize_srt` (Google) hoặc `synthesize_srt_capcut` (gọi `capcut_tts_client` → HTTP tới service `capcut-tts-api` port 8100, mỗi entry 1 task, download MP3 về `tts/{video_id}/{voice_key}/{index:04d}.mp3`). Cả 2 đều giữ nguyên luồng sau: `combine_tts_mp3` → Demucs mix → mux. `pipeline_health()`: cần Gemini + ít nhất 1 engine dub sẵn sàng (`dub_engines`).
 
 ### OCR caching via dHash
 `BaseOCREngine.ocr_region_cached()`: if consecutive frame crop hashes differ by ≤5 bits, reuse previous OCR text. Max streak: 15 frames (configurable). Shared by both RapidOCR and Apple Vision engines.
@@ -187,7 +205,13 @@ One `ThreadPoolExecutor(max_workers=1)` in `worker.py`. Jobs queue via `asyncio.
 5. Post-processing: noise filtering (rare glued CJK+Latin tokens), A-B-A merge, final merge pass
 
 ### Config (`backend/app/config.py`)
-All env vars prefixed with `STE_`. Module-level `settings.temp_dir.mkdir(…)` runs at **import time** — creates `temp/`, `temp/videos/`, `temp/frames/`, `temp/srt/`. Do NOT add more import-time side effects.
+All env vars prefixed with `STE_`. Module-level `settings.temp_dir.mkdir(…)` runs at **import time** — creates `temp/`, `temp/videos/`, `temp/frames/`, `temp/srt/`, `temp/tts_preview/`. Do NOT add more import-time side effects.
+
+### User config (`backend/app/routers/config_router.py`)
+`GET/POST /api/config` reads/writes `temp/user_config.json`: `gemini_api_key`, `google_tts_credentials`, `auto_context_enabled`, and `subtitle_style` (font, size, colors, outline, bold/italic, box bg, radius, margin). `get_subtitle_style()` merges defaults (`DEFAULT_SUBTITLE_STYLE`) + stored values, coercing types — used by `hardcode_service` (both ASS and Pillow burn paths). Frontend settings UI lives at `/settings` (gear button in AutoPipeline header).
+
+### CapCut TTS gen-voice service (`capcut-tts-api/`)
+Sibling FastAPI project (port 8100, env prefix `CTTS_`) wrapping the CapCut TTS SDK (`capcut_tts_api.CapCutClient`). Endpoints: `POST /api/tts` (segments job), `GET /api/tts/{job_id}`, `GET /api/tts/{job_id}/audio/{filename}`, `GET /api/voices?lang=`. Run via `./dev.sh` (auto-starts) or `cd capcut-tts-api && ../backend/.venv/bin/python -m service.main`. Backend talks to it through `app/services/capcut_tts_client.py` (httpx).
 
 ## Frontend Design System
 Custom Tailwind tokens defined in `tailwind.config.js` and `globals.css`:
