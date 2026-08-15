@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     base_dir: Path = Path(__file__).resolve().parent.parent
     temp_dir: Path = base_dir / "temp"
 
-    extract_fps: int = 0
+    extract_fps: int = 15
     ocr_lang: str = "ch"
     similarity_threshold: float = 0.85
     merge_similarity: float = 0.9
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5
-    job_timeout: int = 1800
+    job_timeout: int = 0  # giây; 0 = không giới hạn thời gian xử lý job
 
     # Gemini translation
     gemini_api_key: str = ""

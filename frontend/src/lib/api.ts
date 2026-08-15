@@ -54,8 +54,10 @@ export interface VideoMeta {
   status?: VideoStatus;
   progress?: number;
   phase?: string;
+  job_type?: string;
   job_id?: string;
   error?: string | null;
+  logs?: LogEntry[];
 }
 
 export async function listVideos(): Promise<VideoMeta[]> {
@@ -278,9 +280,19 @@ export interface SubtitleStyle {
   margin_h: number;
 }
 
+export interface WatermarkPreset {
+  id: string;
+  name: string;
+  text: string;
+  has_logo: boolean;
+  logo_name: string;
+  active: boolean;
+}
+
 export interface AppConfig {
   has_gemini_key: boolean;
   gemini_api_key: string;
+  gemini_api_keys: string[];
   has_tts_credentials: boolean;
   google_tts_credentials: string;
   tts_credentials_info: string;
@@ -289,6 +301,8 @@ export interface AppConfig {
   watermark_text: string;
   has_watermark_logo: boolean;
   watermark_logo_name: string;
+  watermark_presets: WatermarkPreset[];
+  active_watermark_preset: string;
 }
 
 export async function getAppConfig(): Promise<AppConfig> {
@@ -298,6 +312,7 @@ export async function getAppConfig(): Promise<AppConfig> {
 
 export async function saveAppConfig(body: {
   gemini_api_key?: string;
+  gemini_api_keys?: string[];
   google_tts_json?: string;
   auto_context_enabled?: boolean;
   subtitle_style?: Partial<SubtitleStyle>;
@@ -321,4 +336,42 @@ export async function deleteWatermarkLogo(): Promise<{ status: string; removed?:
 
 export function watermarkLogoUrl(): string {
   return "/api/config/logo";
+}
+
+// ── Watermark presets (nhiều bộ text + logo) ──
+
+export async function createWatermarkPreset(body: { name: string; text: string }): Promise<{ status: string; preset_id?: string }> {
+  const res = await api.post("/config/watermark/presets", body);
+  return res.data;
+}
+
+export async function updateWatermarkPreset(presetId: string, body: { name?: string; text?: string }): Promise<{ status: string }> {
+  const res = await api.put(`/config/watermark/presets/${presetId}`, body);
+  return res.data;
+}
+
+export async function deleteWatermarkPreset(presetId: string): Promise<{ status: string; removed?: boolean }> {
+  const res = await api.delete(`/config/watermark/presets/${presetId}`);
+  return res.data;
+}
+
+export async function setActiveWatermarkPreset(presetId: string): Promise<{ status: string }> {
+  const res = await api.post("/config/watermark/active", { preset_id: presetId });
+  return res.data;
+}
+
+export async function uploadPresetLogo(presetId: string, file: File): Promise<{ status: string; watermark_logo_name?: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await api.post(`/config/watermark/presets/${presetId}/logo`, fd);
+  return res.data;
+}
+
+export async function deletePresetLogo(presetId: string): Promise<{ status: string; removed?: boolean }> {
+  const res = await api.delete(`/config/watermark/presets/${presetId}/logo`);
+  return res.data;
+}
+
+export function presetLogoUrl(presetId: string): string {
+  return `/api/config/watermark/presets/${presetId}/logo`;
 }

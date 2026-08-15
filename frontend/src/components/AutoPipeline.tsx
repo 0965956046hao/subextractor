@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, type PipelineHealth, type CapCutVoice, type VideoMeta } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import {
@@ -42,7 +42,7 @@ const STATUS_META: Record<string, { label: string; cls: string; dot: string }> =
 };
 
 function stepDetail(p: Pipeline): string {
-  const idx = STEP_STAGE[p.stage] ?? -1;
+  const idx = p.status === "error" && p.failedStep != null ? p.failedStep : STEP_STAGE[p.stage] ?? -1;
   switch (idx) {
     case 0:
       return p.srcLang ? `Puppeteer mở link · ngôn ngữ: ${langLabel(p.srcLang)}` : "Puppeteer mở link Douyin lấy URL video";
@@ -96,6 +96,8 @@ export default function AutoPipeline() {
   const [originalGainDb, setOriginalGainDb] = useState(6);
   const [autoFitSubs, setAutoFitSubs] = useState(true);
   const [watermarkOn, setWatermarkOn] = useState(false);
+  const [watermarkPreset, setWatermarkPreset] = useState("");
+  const [presets, setPresets] = useState<WatermarkPreset[]>([]);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
@@ -137,13 +139,35 @@ export default function AutoPipeline() {
     return () => clearInterval(t);
   }, []);
 
+  // Load watermark presets so the pipeline can pick which pair (text+logo) to use.
+  useEffect(() => {
+    let mounted = true;
+    getAppConfig()
+      .then((cfg) => {
+        if (!mounted) return;
+        setPresets(cfg.watermark_presets || []);
+        setWatermarkPreset(cfg.active_watermark_preset || "");
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // Load previously-completed videos from the backend so the "Đã xử lý" tab
-  // survives page reloads (the pipeline store is in-memory only).
+  // survives page reloads (the pipeline store is in-memory only). Also re-attach
+  // in-flight backend jobs so the "Đang xử lý" tab is visible from any device.
   useEffect(() => {
     let mounted = true;
     listVideos()
       .then((videos) => {
         if (mounted) setHistoryVideos(videos);
+        const active = videos.filter(
+          (v) => v.job_id && (v.status === "queued" || v.status === "processing" || v.status === "error" || v.status === "cancelled")
+        );
+        for (const v of active) {
+          usePipelineStore.getState().importActive(v);
+        }
       })
       .catch(() => {
         // ignore — no history available
@@ -273,15 +297,19 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    }, autoFitSubs, watermarkOn);
+    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "");
     setUrl("");
     setSelectedId(id);
     setTab("detail");
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
-  const activePipelines = pipelines.filter((p) => p.status === "queued" || p.status === "running");
-  const donePipelines = pipelines.filter((p) => p.status === "done" || p.status === "error");
+  const activePipelines = pipelines
+    .filter((p) => p.status === "queued" || p.status === "running")
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  const donePipelines = pipelines
+    .filter((p) => p.status === "done" || p.status === "error")
+    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
   // Persisted completed videos from the backend (survive page reloads), minus
   // any that are already represented by an in-memory pipeline (matched by videoId).
   const sessionVideoIds = new Set(pipelines.map((p) => p.videoId).filter(Boolean));
@@ -645,7 +673,7 @@ export default function AutoPipeline() {
                       Logo + Watermark
                     </p>
                     <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                      Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (dùng logo & nội dung trong Settings ⚙️).
+                      Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo bộ text + logo trong Settings ⚙️).
                     </p>
                   </div>
                   <button
@@ -663,6 +691,28 @@ export default function AutoPipeline() {
                     />
                   </button>
                 </div>
+                {watermarkOn && (
+                  <div className="mt-3">
+                    <label className="block">
+                      <span className="text-[11px] text-ink-muted mb-1.5 block">Bộ watermark sử dụng</span>
+                      <select
+                        value={watermarkPreset || presets[0]?.id || ""}
+                        onChange={(e) => setWatermarkPreset(e.target.value)}
+                        className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+                      >
+                        {presets.length === 0 ? (
+                          <option value="">Chưa có bộ nào — tạo trong Settings ⚙️</option>
+                        ) : (
+                          presets.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} {p.has_logo ? "(logo + chữ)" : "(chỉ chữ)"}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -855,6 +905,9 @@ function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; o
   const meta = STATUS_META[p.status] ?? STATUS_META.queued;
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
+    if (p.status === "error" && p.failedStep != null) {
+      return `Lỗi ở bước ${p.failedStep + 1}/9 · ${STEPS[p.failedStep]?.label ?? p.stage}`;
+    }
     if (p.status !== "running") return null;
     const idx = STEP_STAGE[p.stage];
     return idx != null ? `Bước ${idx + 1}/9 · ${STEPS[idx]?.label ?? p.stage}` : p.stage;
@@ -922,8 +975,8 @@ function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; o
           )}
         </div>
         {stepLabel && (
-          <p className="text-[11px] text-blue-600/80 mt-1 truncate">
-            {stepLabel} · {p.progress}%
+          <p className={`text-[11px] mt-1 truncate ${p.status === "error" ? "text-red-600/80" : "text-blue-600/80"}`}>
+            {stepLabel}{p.status === "running" ? ` · ${p.progress}%` : ""}
           </p>
         )}
       </div>
@@ -1120,7 +1173,13 @@ function HistoryRow({ v, onOpen, onDelete }: { v: VideoMeta; onOpen: () => void;
 }
 
 function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pipeline; now: number; onRemove: () => void; onStartNext?: () => void }) {
-  const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
+  const failedStep = p.status === "error" ? p.failedStep : null;
+  const activeStep =
+    p.status === "done"
+      ? STEPS.length
+      : failedStep != null
+      ? failedStep
+      : STEP_STAGE[p.stage] ?? 0;
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
@@ -1157,6 +1216,15 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                 <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 ring-1 ring-blue-500/25 text-blue-700 flex items-center gap-1">
                   <IconSpinner className="w-3 h-3" />
                   Đang xử lý
+                </span>
+              )}
+              {p.status === "error" && (
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-red-500/10 ring-1 ring-red-500/25 text-red-700 flex items-center gap-1">
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                  Lỗi ở bước {failedStep != null ? failedStep + 1 : "?"}
                 </span>
               )}
             </div>
@@ -1220,11 +1288,12 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
         <div className="space-y-2">
           {STEPS.map((s, i) => {
             const done = i < activeStep || p.status === "done";
-            const active = i === activeStep && p.status !== "done";
+            const isFailed = p.status === "error" && failedStep != null && i === failedStep;
+            const active = i === activeStep && p.status !== "done" && !isFailed;
             const start = p.stepStarts[i];
             const end = p.stepEnds[i];
             const skipped = p.stepSkipped[i];
-            const stepPct = p.stepProgress[i] ?? (done ? 100 : 0);
+            const stepPct = p.stepProgress[i] ?? (done || isFailed ? 100 : 0);
             let stepTime: string | null = null;
             if (skipped) stepTime = "Bỏ qua";
             else if (start != null && end != null) stepTime = fmtElapsed(end - start);
@@ -1236,6 +1305,8 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                   className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
                     skipped
                       ? "bg-black/[0.04] text-ink-light"
+                      : isFailed
+                      ? "bg-red-500/15 text-red-600"
                       : done
                       ? "bg-emerald-500/15 text-emerald-600"
                       : active
@@ -1245,6 +1316,11 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                 >
                   {skipped ? (
                     <span className="text-[11px]">–</span>
+                  ) : isFailed ? (
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
                   ) : done ? (
                     <IconCheck className="w-3.5 h-3.5" />
                   ) : active ? (
@@ -1255,18 +1331,20 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <p className={`text-[13px] font-medium ${done || active ? "text-ink" : "text-ink-light"}`}>
+                    <p className={`text-[13px] font-medium ${isFailed ? "text-red-600" : done || active ? "text-ink" : "text-ink-light"}`}>
                       {s.label}
                     </p>
                     <span
                       className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${
-                        skipped ? "text-ink-light" : done ? "text-emerald-600" : active ? "text-blue-600" : "text-ink-light"
+                        skipped ? "text-ink-light" : isFailed ? "text-red-600" : done ? "text-emerald-600" : active ? "text-blue-600" : "text-ink-light"
                       }`}
                     >
-                      {skipped ? "—" : `${stepPct}%`}
+                      {skipped ? "—" : isFailed ? "Lỗi" : `${stepPct}%`}
                     </span>
                   </div>
-                  <p className="text-[11px] text-ink-light">{stepDetail(p)}</p>
+                  <p className="text-[11px] text-ink-light">
+                    {isFailed || active ? stepDetail(p) : s.detail}
+                  </p>
                   {(active || done) && !skipped && (
                     <div className="mt-1.5 h-1 rounded-full bg-black/[0.06] overflow-hidden">
                       <div
@@ -1285,13 +1363,13 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                   {stepTime && (
                     <span
                       className={`text-[11px] font-mono tabular-nums ${
-                        skipped ? "text-ink-light" : active ? "text-blue-600" : "text-emerald-600"
+                        skipped ? "text-ink-light" : isFailed ? "text-red-600" : active ? "text-blue-600" : "text-emerald-600"
                       }`}
                     >
                       {stepTime}
                     </span>
                   )}
-                  {/* {canRerun && (
+                  {canRerun && (i >= 4 || Boolean(p.url)) && (
                     <button
                       onClick={() => rerunPipeline(p.id, i)}
                       title={`Chạy lại từ "${s.label}"`}
@@ -1303,7 +1381,7 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                       </svg>
                       Chạy lại
                     </button>
-                  )} */}
+                  )}
                 </div>
               </div>
             );

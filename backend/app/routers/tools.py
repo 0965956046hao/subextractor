@@ -49,6 +49,14 @@ async def get_srt_entries(video_id: str):
 @router.put("/api/srt/{video_id}")
 async def update_srt(video_id: str, body: UpdateSrtRequest):
     srt_path = _srt_path(video_id)
+    # Preserve the original OCR SRT on first overwrite so it can be inspected
+    # later (e.g. comparing timings after translation/hardcode).
+    if srt_path.exists():
+        current = srt_path.read_text(encoding="utf-8")
+        if current.strip() != body.content.strip():
+            backup = srt_path.with_name("subtitles_original.srt")
+            if not backup.exists():
+                backup.write_text(current, encoding="utf-8")
     srt_path.write_text(body.content, encoding="utf-8")
     return {"status": "ok", "video_id": video_id}
 
@@ -223,11 +231,12 @@ async def hardcode_subtitles(video_id: str, request: Request):
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
 
-    # Optional body: { auto_fit: bool, region: {x1,y1,x2,y2}, style: {...}, watermark: bool }
+    # Optional body: { auto_fit, region, style, watermark: bool, watermark_preset: id }
     auto_fit = False
     region = None
     style = None
     watermark = False
+    watermark_preset = None
     try:
         raw = await request.json()
         if isinstance(raw, dict):
@@ -241,6 +250,7 @@ async def hardcode_subtitles(video_id: str, request: Request):
             if isinstance(raw.get("style"), dict):
                 style = raw["style"]
             watermark = bool(raw.get("watermark", False))
+            watermark_preset = raw.get("watermark_preset")
     except Exception:
         pass
 
@@ -259,11 +269,12 @@ async def hardcode_subtitles(video_id: str, request: Request):
         "region": region,
         "style": style,
         "watermark": watermark,
+        "watermark_preset": watermark_preset,
     }
     jobs[job_id] = job
     logger.info(
-        "hardcode job %s: queued for %s (auto_fit=%s, watermark=%s)",
-        job_id, video_id, auto_fit, watermark,
+        "hardcode job %s: queued for %s (auto_fit=%s, watermark=%s, preset=%s)",
+        job_id, video_id, auto_fit, watermark, watermark_preset,
     )
     await queue.put(job_id)
     return {"job_id": job_id}
@@ -520,8 +531,15 @@ async def list_available_srts(video_id: str):
     """List all SRT files available for this video (original + translated)."""
     files = []
 
+    # Original OCR SRT: prefer the preserved backup if one exists (the live
+    # subtitles.srt may have been overwritten by the translated version).
+    backup = settings.temp_dir / "srt" / video_id / "subtitles_original.srt"
     orig = settings.temp_dir / "srt" / video_id / "subtitles.srt"
-    if orig.exists():
+    if backup.exists():
+        files.append({"id": "original", "name": "Gốc (OCR)", "path": str(backup)})
+        if orig.exists():
+            files.append({"id": "current", "name": "Hiện tại (dịch/đã sửa)", "path": str(orig)})
+    elif orig.exists():
         files.append({"id": "original", "name": "Gốc (OCR)", "path": str(orig)})
 
     tr_dir = settings.temp_dir / "translated" / video_id
@@ -538,6 +556,9 @@ async def list_available_srts(video_id: str):
 async def load_srt_file(video_id: str, file_id: str):
     """Load a specific SRT file and return its parsed content."""
     if file_id == "original":
+        backup = settings.temp_dir / "srt" / video_id / "subtitles_original.srt"
+        path = backup if backup.exists() else settings.temp_dir / "srt" / video_id / "subtitles.srt"
+    elif file_id == "current":
         path = settings.temp_dir / "srt" / video_id / "subtitles.srt"
     else:
         path = settings.temp_dir / "translated" / video_id / f"{file_id}.srt"
@@ -696,14 +717,8 @@ async def generate_context(request: Request, video_id: str):
     queue = get_job_queue(request)
 
     # Check API key
-    from app.services.translation_service import _read_user_config
-    import os
-    cfg = _read_user_config()
-    has_key = bool(
-        settings.gemini_api_key
-        or os.environ.get("GEMINI_API_KEY", "")
-        or cfg.get("gemini_api_key", "")
-    )
+    from app.services.retry_utils import configured_gemini_keys
+    has_key = bool(configured_gemini_keys())
     if not has_key:
         raise HTTPException(400, "Gemini API key not configured. Vào Settings (⚙️) để nhập key.")
 
@@ -737,9 +752,11 @@ async def list_gemini_files(request: Request, video_id: str = ""):
 
     from app.services.translation_service import _read_user_config
     from app.services.context_service import _load_files_index
+    from app.services.retry_utils import configured_gemini_keys
     import os
     cfg = _read_user_config()
-    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or cfg.get("gemini_api_key", "")
+    keys = configured_gemini_keys()
+    api_key = keys[0] if keys else ""
     if not api_key:
         raise HTTPException(400, "Gemini API key not configured")
 
@@ -799,9 +816,11 @@ async def delete_gemini_file(name: str, request: Request):
         raise HTTPException(400, "google-genai not installed")
 
     from app.services.translation_service import _read_user_config
+    from app.services.retry_utils import configured_gemini_keys
     import os
     cfg = _read_user_config()
-    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or cfg.get("gemini_api_key", "")
+    keys = configured_gemini_keys()
+    api_key = keys[0] if keys else ""
     if not api_key:
         raise HTTPException(400, "Gemini API key not configured")
 

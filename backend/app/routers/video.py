@@ -73,8 +73,10 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             "status": status,
             "progress": job.get("progress", 0),
             "phase": job.get("phase", ""),
+            "job_type": job.get("job_type", ""),
             "job_id": job_id,
             "error": job.get("error") if status == "error" else None,
+            "logs": job.get("logs", []),
         }
         active_rows_by_video[video_id] = row
         active.append(row)

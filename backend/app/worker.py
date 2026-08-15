@@ -314,6 +314,25 @@ async def run_hardcode_job(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = str(out_dir / f"{Path(video_path).stem}_hardcoded.mp4")
 
+        if (
+            not job.get("watermark")
+            and Path(out_path).exists()
+            and Path(out_path).stat().st_size > 0
+        ):
+            job["status"] = "done"
+            job["progress"] = 100
+            job["output_path"] = out_path
+            size_mb = Path(out_path).stat().st_size / (1024 * 1024)
+            await job_log_async(
+                job, ws_clients,
+                f"Video đã có phụ đề cứng từ lần chạy trước ({size_mb:.1f} MB) — bỏ qua encode.",
+                "success",
+            )
+            await notify_ws(ws_clients, job_id, {
+                "type": "done", "video_id": video_id, "filename": Path(out_path).name,
+            })
+            return
+
         loop = asyncio.get_event_loop()
 
         fn = functools.partial(
@@ -324,7 +343,7 @@ async def run_hardcode_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -387,7 +406,7 @@ async def run_align_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -446,7 +465,7 @@ async def run_translate_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -501,7 +520,7 @@ async def run_tts_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -556,7 +575,7 @@ async def run_dub_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -621,7 +640,7 @@ async def run_export_job(
 
         out_path = await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"

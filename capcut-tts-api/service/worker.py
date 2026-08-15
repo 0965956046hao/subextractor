@@ -93,6 +93,7 @@ def process_job_sync(
             raise JobCancelled()
         pct = int((done / total) * 100) if total else 100
         job["progress"] = pct
+        job_log(job, ws_clients, loop, f"✓ Đoạn {done}/{total} đã tạo", "success")
         _notify_sync(loop, ws_clients, job_id, {
             "type": "progress", "progress": pct, "phase": "tts",
         })

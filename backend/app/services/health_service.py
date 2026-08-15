@@ -10,7 +10,11 @@ import os
 from pathlib import Path
 
 from app.config import settings
-from app.services.retry_utils import gemini_retry
+from app.services.retry_utils import (
+    configured_gemini_keys,
+    gemini_call_rotating,
+    genai_generate_content_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +30,8 @@ def _read_user_config() -> dict:
 
 
 def _resolve_gemini_key() -> str:
-    return (
-        settings.gemini_api_key
-        or os.environ.get("GEMINI_API_KEY", "")
-        or _read_user_config().get("gemini_api_key", "")
-    )
+    keys = configured_gemini_keys()
+    return keys[0] if keys else ""
 
 
 def _resolve_tts_credentials() -> str:
@@ -62,21 +63,26 @@ def check_gemini() -> dict:
         }
 
     try:
-        from google import genai
+        keys = configured_gemini_keys()
+        count = len(keys)
 
-        client = genai.Client(api_key=key)
-        resp = gemini_retry(client.models.generate_content)(
-            model=settings.gemini_model,
-            contents="Reply with exactly: OK",
-        )
-        # The key is valid if the call succeeded; text may be empty when the
-        # model finishes on MAX_TOKENS. Treat a non-exception response as healthy.
-        got_response = resp is not None and (getattr(resp, "text", "") or getattr(resp, "candidates", None))
+        def _check_one():
+            resp = gemini_call_rotating(
+                genai_generate_content_factory,
+                model=settings.gemini_model,
+                contents="Reply with exactly: OK",
+            )
+            # The key is valid if the call succeeded; text may be empty when the
+            # model finishes on MAX_TOKENS. Treat a non-exception response as healthy.
+            return resp is not None and (getattr(resp, "text", "") or getattr(resp, "candidates", None))
+
+        healthy = _check_one()
+        extra = f" ({count} key)" if count > 1 else ""
         return {
             "service": "gemini",
             "configured": True,
-            "healthy": got_response,
-            "message": "Gemini API hoạt động bình thường" if got_response else "Gemini phản hồi trống (kiểm tra lại model)",
+            "healthy": healthy,
+            "message": f"Gemini API hoạt động bình thường{extra}" if healthy else "Gemini phản hồi trống (kiểm tra lại model)",
         }
     except Exception as e:
         logger.warning("Gemini health check failed: %s", e)

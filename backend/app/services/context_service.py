@@ -5,7 +5,12 @@ import os
 from pathlib import Path
 
 from app.config import settings
-from app.services.retry_utils import gemini_retry
+from app.services.retry_utils import (
+    gemini_retry,
+    configured_gemini_keys,
+    gemini_call_rotating,
+    genai_generate_content_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,11 +136,11 @@ def generate_video_context(video_id: str) -> str | None:
         return None
 
     api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or _read_user_config().get("gemini_api_key", "")
-    if not api_key:
+    if not api_key and not configured_gemini_keys():
         logger.warning("GEMINI_API_KEY not set, skipping context generation")
         return None
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key or configured_gemini_keys()[0])
 
     # Check if files already uploaded for this video_id — reuse to avoid spam
     existing_names = _load_files_index(video_id)
@@ -185,7 +190,8 @@ def generate_video_context(video_id: str) -> str | None:
         )
 
     try:
-        response = gemini_retry(client.models.generate_content)(
+        response = gemini_call_rotating(
+            genai_generate_content_factory,
             model=settings.gemini_model,
             contents=[
                 *uploaded_files,

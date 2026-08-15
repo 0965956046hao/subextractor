@@ -1,0 +1,167 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e5]:
+      - link "Back to library" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - button "Xoá job đã xong" [ref=e79] [cursor=pointer]
+      - button "Dọn sạch dữ liệu tạm" [ref=e11] [cursor=pointer]
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=e12] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e16]:
+      - generic [ref=e17]: Auto Pipeline
+      - heading "Link Douyin → Video có phụ đề Việt" [level=1] [ref=e18]
+      - paragraph [ref=e19]: "Dán link, hệ thống tự động: tải → merge audio/video → OCR → ngữ cảnh → dịch Gemini → nhúng phụ đề mới vào video."
+    - generic [ref=e22]:
+      - paragraph [ref=e23]: 1. Dán link video
+      - generic [ref=e24]:
+        - generic [ref=e28]: "Gemini API đã sẵn sàng. Engine lồng tiếng: Google TTS + CapCut sẵn sàng."
+        - button "Kiểm tra lại" [ref=e83] [cursor=pointer]
+      - generic [ref=e29]:
+        - textbox "Dán toàn bộ nội dung chia sẻ (hoặc link https://v.douyin.com/...)" [ref=e84]
+        - button "Bắt đầu" [disabled] [ref=e31]
+      - generic [ref=e33]:
+        - generic [ref=e34]: "Vùng quét phụ đề:"
+        - generic [ref=e35]:
+          - button "Tự động (vùng mặc định)" [ref=e36] [cursor=pointer]
+          - button "Chọn vùng thủ công" [ref=e37] [cursor=pointer]
+        - paragraph [ref=e38]: Pipeline sẽ dừng lại ở bước Chọn vùng quét để bạn kéo vùng lấy phụ đề.
+      - generic [ref=e39]:
+        - generic [ref=e40]:
+          - generic [ref=e41]: "Lồng tiếng:"
+          - generic [ref=e42]:
+            - button "Google TTS" [ref=e43] [cursor=pointer]
+            - button "CapCut" [ref=e44] [cursor=pointer]
+          - combobox [ref=e85]:
+            - option "Nhỏ Ngọt Ngào (BV421_vivn_streaming)" [selected]
+            - option "Giọng Nữ Phổ Thông (vi_female_huong)"
+            - option "Giọng Bé (BV074_streaming_dsp)"
+            - option "Cô Gái Hoạt Ngôn (BV074_streaming)"
+            - option "Hoai My (vi-VN-HoaiMyNeural)"
+            - option "Nam Minh (vi-VN-NamMinhNeural)"
+            - option "Việt Méo (BV075_streaming_vibrato_dsp)"
+            - option "Mai (BV562_streaming)"
+            - option "Ban Mai (multi_female_yangguangnv_uranus_bigtts)"
+            - option "Review Phim new (multi_female_richgirl_uranus_bigtts)"
+            - option "Bản Tin 1 (multi_female_quanweinv_uranus_bigtts)"
+            - option "Review Phim 4 (multi_female_stokie_uranus_bigtts)"
+            - option "Bản Tin nữ (multi_female_sisi_uranus_bigtts)"
+            - option "Review Phim 3 (multi_female_daqi_uranus_bigtts)"
+            - option "Review Phim 2 (multi_female_xyf04auto_uranus_bigtts)"
+            - option "Sunny Idol (multi_female_kiwi_uranus_bigtts)"
+            - option "Kenny Đại Đế (BV075_streaming_demon_dsp)"
+            - option "Robot VN (BV075_streaming_robot_dsp)"
+            - option "Giọng Nam Trầm (multi_male_felipe_uranus_bigtts)"
+            - option "Giọng Gái Mới Lớn (multi_female_peiqi_uranus_bigtts)"
+            - option "Nam bản tin (multi_female_xinwenjieshuo_uranus_bigtts)"
+            - option "Quên Tên Tự Test (multi_female_tianmeijieshuo_uranus_bigtts)"
+            - option "Thanh Niên Tự Tin (BV075_streaming)"
+            - option "Alex Đại Đế (BV560_streaming)"
+          - button "Nghe thử" [ref=e86] [cursor=pointer]
+        - paragraph [ref=e49]: Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100).
+        - generic [ref=e50]:
+          - generic [ref=e51]: "Voice gốc:"
+          - generic [ref=e52]:
+            - button "Tắt (tách bằng Demucs)" [ref=e53] [cursor=pointer]
+            - button "Giữ lại (giảm âm lượng)" [ref=e54] [cursor=pointer]
+        - generic [ref=e55]:
+          - generic [ref=e56]: "Căn chỉnh phụ đề:"
+          - generic [ref=e57]:
+            - button "Tự động khớp vị trí sub gốc" [ref=e58] [cursor=pointer]
+            - button "Tự chỉnh kích thước & vị trí" [ref=e59] [cursor=pointer]
+          - paragraph [ref=e60]: Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video.
+        - generic [ref=e62]:
+          - generic [ref=e63]:
+            - paragraph [ref=e64]: Logo + Watermark
+            - paragraph [ref=e65]: Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo bộ text + logo trong Settings ⚙️).
+          - button [ref=e66] [cursor=pointer]
+    - generic [ref=e70]:
+      - button "Tiến trình" [ref=e71] [cursor=pointer]
+      - button "Đang xử lý1" [ref=e121] [cursor=pointer]
+      - button "Đã xử lý2" [ref=e87] [cursor=pointer]
+    - generic [ref=e123]:
+      - generic [ref=e124]:
+        - generic [ref=e125]:
+          - generic [ref=e126]:
+            - paragraph [ref=e127]: Đang phân tích...
+            - generic [ref=e128]: Đang xử lý
+          - paragraph [ref=e132]: https://example.com/not-a-douyin-link
+        - generic [ref=e133]:
+          - button "Hủy xử lý" [ref=e134] [cursor=pointer]
+          - button "Xoá" [ref=e135] [cursor=pointer]
+      - generic [ref=e137]:
+        - generic [ref=e138]: Tổng tiến độ
+        - generic [ref=e139]: 0%
+      - generic [ref=e142]:
+        - generic [ref=e143]:
+          - generic [ref=e148]:
+            - generic [ref=e149]:
+              - paragraph [ref=e150]: Phân tích link
+              - generic [ref=e151]: 0%
+            - paragraph [ref=e152]: Puppeteer mở link Douyin lấy URL video
+          - generic [ref=e154]:
+            - generic [ref=e155]: 0%
+            - generic [ref=e156]: 21s
+        - generic [ref=e157]:
+          - generic [ref=e158]: "2"
+          - generic [ref=e160]:
+            - generic [ref=e161]:
+              - paragraph [ref=e162]: Merge video + audio
+              - generic [ref=e163]: 0%
+            - paragraph [ref=e164]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e165]:
+          - generic [ref=e166]: "3"
+          - generic [ref=e168]:
+            - generic [ref=e169]:
+              - paragraph [ref=e170]: Chọn vùng quét sub
+              - generic [ref=e171]: 0%
+            - paragraph [ref=e172]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e173]:
+          - generic [ref=e174]: "4"
+          - generic [ref=e176]:
+            - generic [ref=e177]:
+              - paragraph [ref=e178]: Chỉnh kích thước & vị trí sub
+              - generic [ref=e179]: 0%
+            - paragraph [ref=e180]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e181]:
+          - generic [ref=e182]: "5"
+          - generic [ref=e184]:
+            - generic [ref=e185]:
+              - paragraph [ref=e186]: OCR trích phụ đề
+              - generic [ref=e187]: 0%
+            - paragraph [ref=e188]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e189]:
+          - generic [ref=e190]: "6"
+          - generic [ref=e192]:
+            - generic [ref=e193]:
+              - paragraph [ref=e194]: Phân tích ngữ cảnh
+              - generic [ref=e195]: 0%
+            - paragraph [ref=e196]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e197]:
+          - generic [ref=e198]: "7"
+          - generic [ref=e200]:
+            - generic [ref=e201]:
+              - paragraph [ref=e202]: Dịch Gemini
+              - generic [ref=e203]: 0%
+            - paragraph [ref=e204]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e205]:
+          - generic [ref=e206]: "8"
+          - generic [ref=e208]:
+            - generic [ref=e209]:
+              - paragraph [ref=e210]: Lồng tiếng Việt
+              - generic [ref=e211]: 0%
+            - paragraph [ref=e212]: Puppeteer mở link Douyin lấy URL video
+        - generic [ref=e213]:
+          - generic [ref=e214]: "9"
+          - generic [ref=e216]:
+            - generic [ref=e217]:
+              - paragraph [ref=e218]: Nhúng SRT vào video
+              - generic [ref=e219]: 0%
+            - paragraph [ref=e220]: Puppeteer mở link Douyin lấy URL video
+      - generic [ref=e221]:
+        - generic [ref=e222]:
+          - generic [ref=e223]: Nhật ký chi tiết · 1 dòng
+          - generic [ref=e224]: "Thời gian: 21s"
+        - generic [ref=e226]:
+          - generic [ref=e227]: 00:16:42
+          - generic [ref=e228]: Đang phân tích link...
+  - alert [ref=e78]

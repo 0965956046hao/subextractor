@@ -1,7 +1,8 @@
 "use client";
 
 import { create } from "zustand";
-import type { Region, SubtitleStyle } from "@/lib/api";
+import type { Region, SubtitleStyle, VideoMeta } from "@/lib/api";
+import { listVideos } from "@/lib/api";
 
 function sanitizeFilename(name: string): string {
   return (name || "")
@@ -80,6 +81,7 @@ export interface Pipeline {
   stepStarts: (number | null)[];
   stepEnds: (number | null)[];
   stepSkipped: boolean[];
+  failedStep: number | null;
   ocrEngine: string;
   ocrLang: string;
   srcLang: string;
@@ -93,6 +95,7 @@ export interface Pipeline {
   originalGainDb: number;
   autoFit: boolean;
   watermark: boolean;
+  watermarkPreset: string;
 }
 
 export interface DubOptions {
@@ -117,7 +120,8 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string) => string;
+  importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
@@ -139,6 +143,7 @@ function newPipeline(
   dub: Partial<DubOptions> = {},
   autoFit = true,
   watermark = false,
+  watermarkPreset = "",
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -162,6 +167,7 @@ function newPipeline(
     stepStarts: emptySteps(null),
     stepEnds: emptySteps(null),
     stepSkipped: emptySteps(false),
+    failedStep: null,
     ocrEngine: "",
     ocrLang: "",
     srcLang: "",
@@ -175,15 +181,48 @@ function newPipeline(
     originalGainDb: d.originalGainDb,
     autoFit,
     watermark,
+    watermarkPreset,
   };
 }
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false) => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "") => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset)] }));
     runPrep(id);
+    return id;
+  },
+  importActive: (v) => {
+    if (!v.job_id) return "";
+    const videoId = v.video_id;
+    if (get().pipelines.some((p) => p.videoId === videoId)) return "";
+    const id = `remote-${v.job_id}`;
+    if (get().pipelines.some((p) => p.id === id)) return "";
+    const stage = stageForJobType(v.job_type, v.phase);
+    const idx = STEP_STAGE[stage];
+    const started = Date.now();
+    const p: Pipeline = {
+      ...newPipeline(id, "", "auto", {}, true),
+      status: v.status === "error" ? "error" : v.status === "queued" ? "queued" : "running",
+      stage,
+      progress: v.progress ?? 0,
+      title: v.filename || `Job ${v.job_id}`,
+      originalName: v.filename || "",
+      videoId,
+      startedAt: started,
+      error: v.error ?? "",
+      failedStep: v.status === "error" ? (idx ?? 4) : null,
+      stepProgress: stepProgressFor(stage, v.progress ?? 0),
+      stepStarts: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : i === idx ? started : null)),
+      stepEnds: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : null)),
+      logs: [{ message: "Đang theo dõi tiến trình từ máy chủ...", ts: started / 1000, level: "info" }],
+    };
+    set((s) => ({ pipelines: [...s.pipelines, p] }));
+    if (v.logs && Array.isArray(v.logs)) {
+      appendBackendLogs(id, v.logs as LogEntry[]);
+    }
+    pollRemoteVideo(id, videoId);
     return id;
   },
   importDone: (v) => {
@@ -334,7 +373,7 @@ export interface JobTick {
 }
 
 async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
-  for (let i = 0; i < 1200; i++) {
+  while (true) {
     await sleep(1500);
     try {
       const r = await fetch(`/api/status/${jobId}`);
@@ -348,11 +387,10 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
       // ignore transient
     }
   }
-  return { status: "error", error: "Quá thời gian chờ" };
 }
 
 async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
-  for (let i = 0; i < 1200; i++) {
+  while (true) {
     await sleep(800);
     try {
       const r = await fetch(`/api/video-merge/${jobId}`);
@@ -365,7 +403,108 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
       // ignore transient
     }
   }
-  return { status: "error", error: "Quá thời gian chờ" };
+}
+
+// ── Remote job tracking ─────────────────────────────────────────────────────
+// Maps a backend job_type/phase to the nearest pipeline stage. Used to re-attach
+// in-flight jobs (e.g. from another device / after a page reload) to the UI.
+function stageForJobType(jobType?: string, phase?: string): Stage {
+  const p = phase ?? "";
+  if (p === "context") return "context";
+  if (["translate", "translating", "align", "extract_audio", "whisper"].includes(p)) return "translating";
+  if (["tts", "dub"].includes(p)) return "dub";
+  if (["hardcode", "export"].includes(p)) return "muxing";
+  if (["frames", "ocr", "saving", "processing"].includes(p)) return "processing";
+  const t = jobType ?? "";
+  if (t === "context") return "context";
+  if (t === "translate" || t === "align") return "translating";
+  if (t === "tts" || t === "dub") return "dub";
+  if (t === "hardcode" || t === "export") return "muxing";
+  if (t === "ocr") return "processing";
+  if (t === "merge") return "merging";
+  return "processing";
+}
+
+function stepProgressFor(stage: Stage, progress: number): (number | null)[] {
+  const idx = STEP_STAGE[stage];
+  return STEPS.map((_, i) => {
+    if (idx == null) return null;
+    if (i < idx) return 100;
+    if (i === idx) return progress;
+    return 0;
+  });
+}
+
+// Polls /api/videos for the given video and mirrors its latest state into the
+// remote pipeline entry. Follows the newest active job for the video (the
+// backend dedupes to one row per video), so it keeps tracking across job
+// transitions (ocr → translate → dub → hardcode) and marks done/error when the
+// video finishes. Best-effort; silently stops if the pipeline is removed.
+async function pollRemoteVideo(id: string, videoId: string) {
+  while (true) {
+    await sleep(1500);
+    const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    if (!cur) return;
+    try {
+      const videos = await listVideos();
+      const row = videos.find((v) => v.video_id === videoId);
+      if (!row) {
+        usePipelineStore.getState().removePipeline(id);
+        return;
+      }
+      if (row.status === "done") {
+        patch(id, {
+          status: "done",
+          stage: "done",
+          progress: 100,
+          finishedAt: Date.now(),
+          stepProgress: STEPS.map(() => 100),
+          stepEnds: STEPS.map(() => Date.now()),
+          stepStarts: cur.stepStarts.map((s) => s ?? Date.now()),
+          resultUrl: `/api/download/hardcoded/${videoId}`,
+          dubbedUrl: row.has_dubbed ? `/api/download/dubbed/${videoId}` : null,
+          title: row.filename || cur.title,
+        });
+        return;
+      }
+      if (row.status === "error") {
+        const stage = stageForJobType(row.job_type, row.phase);
+        patch(id, {
+          status: "error",
+          stage: "error",
+          error: row.error ?? "Lỗi xử lý",
+          finishedAt: Date.now(),
+          failedStep: STEP_STAGE[stage] ?? 4,
+          title: row.filename || cur.title,
+        });
+        return;
+      }
+      if (row.status === "cancelled") {
+        patch(id, {
+          status: "error",
+          stage: "error",
+          error: "Đã hủy",
+          finishedAt: Date.now(),
+          title: row.filename || cur.title,
+        });
+        return;
+      }
+      // still active — mirror progress + logs
+      const stage = stageForJobType(row.job_type, row.phase);
+      if (row.logs && Array.isArray(row.logs)) {
+        appendBackendLogs(id, row.logs as LogEntry[]);
+      }
+      patch(id, {
+        status: "running",
+        stage,
+        progress: row.progress ?? 0,
+        title: row.filename || cur.title,
+        stepProgress: stepProgressFor(stage, row.progress ?? 0),
+      });
+    } catch {
+      // ignore transient
+    }
+  }
 }
 
 // ── Queue ──────────────────────────────────────────────────────────────────
@@ -530,6 +669,7 @@ async function runPrep(id: string, startStep = 0) {
     startedAt: Date.now(),
     finishedAt: null,
     error: "",
+    failedStep: null,
     logs: [],
     resultUrl: "",
     dubbedUrl: null,
@@ -671,9 +811,11 @@ async function runPrep(id: string, startStep = 0) {
     // Prep done → enqueue the heavy processing into the sequential queue.
     enqueue(id, 4);
   } catch (e) {
+    const stage = usePipelineStore.getState().pipelines.find((x) => x.id === id)?.stage;
     patch(id, {
       status: "error",
       stage: "error",
+      failedStep: stage != null ? (STEP_STAGE[stage] ?? null) : null,
       error: e instanceof Error ? e.message : "Lỗi không xác định",
       finishedAt: Date.now(),
     });
@@ -706,6 +848,7 @@ async function runPipeline(id: string, startStep = 4) {
     startedAt: cur.startedAt ?? Date.now(),
     finishedAt: null,
     error: "",
+    failedStep: null,
     stepProgress: cur.stepProgress.map((v, i) => (i >= startStep ? null : v)),
     stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
@@ -722,25 +865,42 @@ async function runPipeline(id: string, startStep = 4) {
         patch(id, { region });
         markStepSkipped(id, 2);
       }
-      patch(id, { stage: "processing" });
-      markStepStart(id, 4);
-      appendLog(id, "Chạy OCR trích phụ đề...");
-      const pr = await fetch("/api/process", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          video_id: videoId,
-          region,
-          lang: ocrLang,
-          ocr_type: ocrType,
-        }),
-      });
-      const pd = await pr.json();
-      if (!pr.ok) throw new Error(pd.detail || "Không thể bắt đầu OCR");
-      const ps = await pollJob(pd.job_id, tick(4));
-      if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
-      appendLog(id, "OCR xong, đã có phụ đề.");
-      markStepEnd(id, 4);
+      // Resume: nếu SRT đã tồn tại thì bỏ qua OCR, dùng thẳng phụ đề hiện có.
+      let srtExists = false;
+      try {
+        const srtCheck = await fetch(`/api/srt/${videoId}`);
+        if (srtCheck.ok) {
+          const srtData = await srtCheck.json();
+          srtExists = Boolean(srtData?.content?.trim());
+        }
+      } catch {
+        // ignore — chạy OCR bình thường
+      }
+      if (srtExists) {
+        appendLog(id, "Phụ đề đã có sẵn — bỏ qua OCR.");
+        markStepSkipped(id, 4);
+        patch(id, { stage: "context" });
+      } else {
+        patch(id, { stage: "processing" });
+        markStepStart(id, 4);
+        appendLog(id, "Chạy OCR trích phụ đề...");
+        const pr = await fetch("/api/process", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            video_id: videoId,
+            region,
+            lang: ocrLang,
+            ocr_type: ocrType,
+          }),
+        });
+        const pd = await pr.json();
+        if (!pr.ok) throw new Error(pd.detail || "Không thể bắt đầu OCR");
+        const ps = await pollJob(pd.job_id, tick(4));
+        if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
+        appendLog(id, "OCR xong, đã có phụ đề.");
+        markStepEnd(id, 4);
+      }
     }
 
     // 5. Context
@@ -851,6 +1011,7 @@ async function runPipeline(id: string, startStep = 4) {
           region: cur.region ?? DEFAULT_REGION,
           style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
           watermark: cur.watermark,
+          watermark_preset: cur.watermark ? (cur.watermarkPreset || null) : null,
         }),
       });
       const hd = await hr.json();
@@ -870,9 +1031,11 @@ async function runPipeline(id: string, startStep = 4) {
     appendLog(id, "Hoàn tất!");
     cleanupTempForVideo(videoId);
   } catch (e) {
+    const stage = usePipelineStore.getState().pipelines.find((x) => x.id === id)?.stage;
     patch(id, {
       status: "error",
       stage: "error",
+      failedStep: stage != null ? (STEP_STAGE[stage] ?? null) : null,
       error: e instanceof Error ? e.message : "Lỗi không xác định",
       finishedAt: Date.now(),
     });

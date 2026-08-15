@@ -92,18 +92,17 @@ async def list_folder_files(body: ListFilesRequest):
 async def generate_meta(body: GenerateMetaRequest, request: Request):
     """Use Gemini to parse raw input into structured meta.json."""
     from app.services.translation_service import _read_user_config
+    from app.services.retry_utils import configured_gemini_keys, gemini_call_rotating, genai_generate_content_factory
 
     cfg = _read_user_config()
-    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or cfg.get("gemini_api_key", "")
-    if not api_key:
+    keys = configured_gemini_keys()
+    if not keys:
         raise HTTPException(400, "Gemini API key not configured")
 
     try:
         from google import genai
     except ImportError:
         raise HTTPException(400, "google-genai not installed")
-
-    client = genai.Client(api_key=api_key)
 
     prompt = f"""Parse the following video metadata into a valid JSON object with this exact structure:
 
@@ -143,7 +142,8 @@ Original description: {body.original_description or "unknown"}
     prompt += "\n\nOutput ONLY the JSON object, no markdown, no explanation."
 
     try:
-        response = client.models.generate_content(
+        response = gemini_call_rotating(
+            genai_generate_content_factory,
             model=settings.gemini_model,
             contents=prompt,
             config={"temperature": 0.3},
