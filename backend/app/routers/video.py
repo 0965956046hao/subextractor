@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.dependencies import get_jobs
+from app.dependencies import get_jobs, get_pipeline_states
 from app.services.video_processor import resolve_video_path
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,10 @@ def _srt_exists(video_id: str) -> bool:
 
 
 @router.get("/api/videos")
-async def list_videos(jobs: dict = Depends(get_jobs)):
+async def list_videos(
+    jobs: dict = Depends(get_jobs),
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
     videos = []
 
     # ── Active jobs (queued / processing / error / cancelled) ──
@@ -78,6 +81,9 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             "error": job.get("error") if status == "error" else None,
             "logs": job.get("logs", []),
         }
+        ps = pipeline_states.get(video_id)
+        if ps:
+            row["pipeline"] = ps
         active_rows_by_video[video_id] = row
         active.append(row)
     videos.extend(active)
@@ -101,6 +107,27 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             if row and row["status"] not in ("cancelled",):
                 continue
             seen.add(video_id)
+            ps = pipeline_states.get(video_id)
+            # A video with SRT on disk but whose AutoPipeline is still running
+            # (OCR finished, translate/dub/hardcode pending) must NOT be reported
+            # as "done". Report it as processing so other tabs keep tracking it.
+            if ps and ps.get("status") in ("queued", "running"):
+                videos.append({
+                    "video_id": video_id,
+                    "filename": _meta_filename(video_id) or video_id,
+                    "has_video": True,
+                    "entries": 0,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "processing",
+                    "progress": ps.get("progress", 0),
+                    "phase": ps.get("stage", ""),
+                    "job_type": "pipeline",
+                    "job_id": None,
+                    "error": None,
+                    "logs": [],
+                    "pipeline": ps,
+                })
+                continue
             try:
                 has_video = _get_video_path(video_id).exists()
             except Exception:
@@ -109,7 +136,7 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
             content = srt_path.read_text(encoding="utf-8")
             entries = sum(1 for block in content.split("\n\n") if "-->" in block)
             has_dubbed = (settings.temp_dir / "tts" / video_id / "dubbed_video.mp4").exists()
-            videos.append({
+            row = {
                 "video_id": video_id,
                 "filename": filename,
                 "has_video": has_video,
@@ -119,7 +146,15 @@ async def list_videos(jobs: dict = Depends(get_jobs)):
                     srt_path.stat().st_mtime, tz=timezone.utc
                 ).isoformat(),
                 "status": "done",
-            })
+            }
+            if ps:
+                # AutoPipeline finished with an error → surface it as error so
+                # remote tabs mirror the failure instead of showing "done".
+                if ps.get("status") == "error":
+                    row["status"] = "error"
+                    row["error"] = ps.get("error") or "Lỗi xử lý"
+                row["pipeline"] = ps
+            videos.append(row)
 
     # ── Uploaded videos (no SRT, no active job) ──
     video_root = settings.temp_dir / "videos"
@@ -216,7 +251,7 @@ async def cleanup_video(video_id: str):
 
 
 @router.delete("/api/video/{video_id}")
-async def delete_video(video_id: str):
+async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeline_states)):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
     removed: list[str] = []
@@ -232,6 +267,7 @@ async def delete_video(video_id: str):
             merge_id = meta.get("source_merge_id")
         except Exception:
             merge_id = None
+    pipeline_states.pop(video_id, None)
     for name in TEMP_DATA_SUBDIRS:
         d = settings.temp_dir / name / video_id
         if d.exists():
@@ -250,7 +286,7 @@ async def delete_video(video_id: str):
 
 
 @router.post("/api/video/{video_id}/abort")
-async def abort_video(video_id: str, jobs: dict = Depends(get_jobs)):
+async def abort_video(video_id: str, jobs: dict = Depends(get_jobs), pipeline_states: dict = Depends(get_pipeline_states)):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
     cancelled = 0
@@ -260,6 +296,7 @@ async def abort_video(video_id: str, jobs: dict = Depends(get_jobs)):
             job["status"] = "cancelled"
             cancelled += 1
             logger.info("job %s: aborted via video %s", job_id, video_id)
+    pipeline_states.pop(video_id, None)
     srt_dir = settings.temp_dir / "srt" / video_id
     video_dir = settings.temp_dir / "videos" / video_id
     frames_dir = settings.temp_dir / "frames" / video_id
@@ -280,11 +317,12 @@ TEMP_DATA_SUBDIRS = (
 
 
 @router.post("/api/temp/clear")
-async def clear_temp(jobs: dict = Depends(get_jobs)):
+async def clear_temp(jobs: dict = Depends(get_jobs), pipeline_states: dict = Depends(get_pipeline_states)):
     for job in jobs.values():
         if job.get("status") not in ("done", "cancelled"):
             job["cancelled"] = True
             job["status"] = "cancelled"
+    pipeline_states.clear()
     removed = 0
     for name in TEMP_DATA_SUBDIRS:
         d = settings.temp_dir / name
@@ -325,10 +363,11 @@ async def get_video(video_id: str):
 @router.get("/api/frame/{video_id}")
 async def get_frame(video_id: str):
     from app.services.video_processor import get_first_frame
+    from fastapi.concurrency import run_in_threadpool
 
     video_path = _get_video_path(video_id)
     try:
-        frame_path = get_first_frame(str(video_path), video_id)
+        frame_path = await run_in_threadpool(get_first_frame, str(video_path), video_id)
     except Exception as e:
         raise HTTPException(500, f"Failed to extract frame: {e}")
     return FileResponse(str(frame_path), media_type="image/jpeg")

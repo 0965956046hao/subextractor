@@ -1,14 +1,13 @@
 import concurrent.futures
 import json
 import logging
-import os
 from pathlib import Path
 
 from app.config import settings
 from app.services.retry_utils import (
     gemini_retry,
     configured_gemini_keys,
-    gemini_call_rotating,
+    _next_key,
     genai_generate_content_factory,
 )
 
@@ -54,20 +53,25 @@ def append_translation_context(video_id: str, note: str) -> None:
     p.write_text(content, encoding="utf-8")
 
 
-def _save_files_index(video_id: str, file_names: list[str]):
+def _save_files_index(video_id: str, api_key: str, file_names: list[str]):
     p = _files_index_path(video_id)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(file_names), encoding="utf-8")
+    p.write_text(json.dumps({"api_key": api_key, "files": file_names}), encoding="utf-8")
 
 
-def _load_files_index(video_id: str) -> list[str]:
+def _load_files_index(video_id: str) -> tuple[str | None, list[str]]:
+    """Return (api_key, file_names). Handles legacy list format (key unknown)."""
     p = _files_index_path(video_id)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
-            return []
-    return []
+            return None, []
+        if isinstance(data, dict):
+            return data.get("api_key"), (data.get("files") or [])
+        if isinstance(data, list):
+            return None, data
+    return None, []
 
 
 def _read_user_config() -> dict:
@@ -82,6 +86,7 @@ def _read_user_config() -> dict:
 
 
 def load_video_context(video_id: str) -> str | None:
+    """Load previously generated video context, if it exists."""
     """Load previously generated video context, if it exists."""
     cp = _context_path(video_id)
     if cp.exists():
@@ -135,18 +140,22 @@ def generate_video_context(video_id: str) -> str | None:
         logger.warning("google-genai not installed, skipping context generation")
         return None
 
-    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or _read_user_config().get("gemini_api_key", "")
-    if not api_key and not configured_gemini_keys():
+    keys = configured_gemini_keys()
+    if not keys:
         logger.warning("GEMINI_API_KEY not set, skipping context generation")
         return None
 
-    client = genai.Client(api_key=api_key or configured_gemini_keys()[0])
+    # Use ONE key for the entire operation (upload + generate). File Store is
+    # key-scoped: a file uploaded with key A is 403 when read by key B.
+    api_key = _next_key(keys)
+    client = genai.Client(api_key=api_key)
 
-    # Check if files already uploaded for this video_id — reuse to avoid spam
-    existing_names = _load_files_index(video_id)
+    # Check if files already uploaded for this video_id AND by this key —
+    # reuse to avoid spam. Files uploaded by a different key must be re-uploaded.
+    stored_key, existing_names = _load_files_index(video_id)
     uploaded_files = []
 
-    if existing_names:
+    if existing_names and stored_key == api_key:
         logger.info("Found %d files in File Store for %s, reusing", len(existing_names), video_id)
         for name in existing_names:
             try:
@@ -177,7 +186,7 @@ def generate_video_context(video_id: str) -> str | None:
             logger.warning("No frames uploaded for %s", video_id)
             return None
 
-        _save_files_index(video_id, [gf.name for gf in uploaded_files])
+        _save_files_index(video_id, api_key, [gf.name for gf in uploaded_files])
 
     # Send all File Store files to Gemini Vision in ONE request
     share_hint = load_share_text(video_id)
@@ -190,8 +199,8 @@ def generate_video_context(video_id: str) -> str | None:
         )
 
     try:
-        response = gemini_call_rotating(
-            genai_generate_content_factory,
+        fn = genai_generate_content_factory(api_key)
+        response = gemini_retry(fn)(
             model=settings.gemini_model,
             contents=[
                 *uploaded_files,

@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 
 from app.services.health_service import check_gemini, check_tts, pipeline_health
 
@@ -13,7 +14,7 @@ router = APIRouter()
 @router.get("/api/health/checks")
 async def health_checks():
     """Full prerequisite health check (Gemini + TTS). Blocks pipeline start."""
-    return pipeline_health()
+    return await run_in_threadpool(pipeline_health)
 
 
 @router.get("/api/health/gemini")

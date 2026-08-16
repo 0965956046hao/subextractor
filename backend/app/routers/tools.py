@@ -5,12 +5,12 @@ import shlex
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from app.config import settings
-from app.models import UpdateSrtRequest
-from app.dependencies import get_jobs, get_ws_clients, get_job_queue
+from app.models import UpdateSrtRequest, PipelineState
+from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
 from app.services.media_utils import _srt_path, _video_path
 from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
@@ -245,6 +245,28 @@ async def preview_subtitle(video_id: str, request: Request):
                     break
     except Exception:
         pass
+
+    from fastapi.concurrency import run_in_threadpool
+
+    # OpenCV frame read + subtitle render + encode are all CPU/IO-bound and
+    # would otherwise block the event loop (freezing /api/status and everything
+    # else) whenever a video is being processed. Run them in a worker thread.
+    return await run_in_threadpool(
+        _render_preview_image,
+        video_path, time_sec, region, style_override, sample_text, overlay_only,
+    )
+
+
+def _render_preview_image(
+    video_path: Path,
+    time_sec: float,
+    region: dict | None,
+    style_override: dict,
+    sample_text: str,
+    overlay_only: bool,
+) -> Response:
+    """Blocking preview renderer — runs in a threadpool (see preview_subtitle)."""
+    import cv2
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -823,6 +845,12 @@ async def generate_context(request: Request, video_id: str):
 @router.get("/api/gemini/files")
 async def list_gemini_files(request: Request, video_id: str = ""):
     """List files in Gemini File Store, optionally filtered by video_id via local index."""
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(_list_gemini_files_sync, video_id)
+
+
+def _list_gemini_files_sync(video_id: str) -> dict:
+    """Blocking Gemini File Store listing — runs in a threadpool."""
     try:
         from google import genai
     except ImportError:
@@ -831,7 +859,6 @@ async def list_gemini_files(request: Request, video_id: str = ""):
     from app.services.translation_service import _read_user_config
     from app.services.context_service import _load_files_index
     from app.services.retry_utils import configured_gemini_keys
-    import os
     cfg = _read_user_config()
     keys = configured_gemini_keys()
     api_key = keys[0] if keys else ""
@@ -842,7 +869,12 @@ async def list_gemini_files(request: Request, video_id: str = ""):
 
     if video_id:
         # Look up file names from local index, then get details from Gemini
-        indexed_names = set(_load_files_index(video_id))
+        stored_key, indexed_files = _load_files_index(video_id)
+        # File Store is key-scoped — use the key that uploaded these files,
+        # falling back to the first configured key when the index has none.
+        if stored_key and stored_key in keys:
+            client = genai.Client(api_key=stored_key)
+        indexed_names = set(indexed_files)
         if not indexed_names:
             return {"count": 0, "files": [], "video_id": video_id}
 
@@ -888,6 +920,12 @@ async def list_gemini_files(request: Request, video_id: str = ""):
 @router.delete("/api/gemini/files/{name:path}")
 async def delete_gemini_file(name: str, request: Request):
     """Delete a file from Gemini File Store by name."""
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(_delete_gemini_file_sync, name)
+
+
+def _delete_gemini_file_sync(name: str) -> dict:
+    """Blocking Gemini delete — runs in a threadpool."""
     try:
         from google import genai
     except ImportError:
@@ -895,7 +933,6 @@ async def delete_gemini_file(name: str, request: Request):
 
     from app.services.translation_service import _read_user_config
     from app.services.retry_utils import configured_gemini_keys
-    import os
     cfg = _read_user_config()
     keys = configured_gemini_keys()
     api_key = keys[0] if keys else ""
@@ -909,3 +946,20 @@ async def delete_gemini_file(name: str, request: Request):
         raise HTTPException(500, f"Failed to delete file: {e}")
 
     return {"deleted": name}
+
+
+# ── POST /api/pipeline/{video_id} ──
+
+@router.post("/api/pipeline/{video_id}")
+async def update_pipeline_state(
+    video_id: str,
+    body: PipelineState,
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
+    """Frontend AutoPipeline progress for a video. Tab 1 reports its step
+    progress here; list_videos merges it into rows so every other tab mirrors
+    the exact same stage / overall % / per-step progress."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    pipeline_states[video_id] = body.model_dump()
+    return {"ok": True, "video_id": video_id}

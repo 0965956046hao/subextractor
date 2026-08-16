@@ -1,8 +1,9 @@
 "use client";
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type { Region, SubtitleStyle, VideoMeta, TimelineIssue } from "@/lib/api";
-import { listVideos } from "@/lib/api";
+import { listVideos, reportPipelineState } from "@/lib/api";
 
 function sanitizeFilename(name: string): string {
   return (name || "")
@@ -98,6 +99,7 @@ export interface Pipeline {
   watermarkPreset: string;
   checkSubs: boolean;
   timelineCheck: TimelineCheck | null;
+  resumeStep: number | null;
 }
 
 export interface TimelineCheck {
@@ -141,6 +143,7 @@ interface PipelineState {
   cancelPipeline: (id: string) => void;
   resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
   openTimelineCheck: (id: string) => void;
+  restorePaused: () => void;
 }
 
 function emptySteps<T>(v: T): T[] {
@@ -196,10 +199,13 @@ function newPipeline(
     watermarkPreset,
     checkSubs,
     timelineCheck: null,
+    resumeStep: null,
   };
 }
 
-export const usePipelineStore = create<PipelineState>((set, get) => ({
+export const usePipelineStore = create<PipelineState>()(
+  persist(
+    (set, get) => ({
   pipelines: [],
   addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false) => {
     const id = Math.random().toString(36).slice(2, 10);
@@ -208,26 +214,40 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     return id;
   },
   importActive: (v) => {
-    if (!v.job_id) return "";
     const videoId = v.video_id;
     if (get().pipelines.some((p) => p.videoId === videoId)) return "";
-    const id = `remote-${v.job_id}`;
+    const ps = v.pipeline;
+    const isPipelineRunning = !!ps && (ps.status === "running" || ps.status === "queued");
+    if (!v.job_id && !isPipelineRunning) return "";
+    const id = v.job_id ? `remote-${v.job_id}` : `remote-${videoId}`;
     if (get().pipelines.some((p) => p.id === id)) return "";
-    const stage = stageForJobType(v.job_type, v.phase);
+    const stage = (ps?.stage as Stage) ?? stageForJobType(v.job_type, v.phase);
     const idx = STEP_STAGE[stage];
     const started = Date.now();
+    const progress = ps?.progress ?? v.progress ?? 0;
+    const stepProgress = Array.isArray(ps?.step_progress) && ps!.step_progress.length === STEPS.length
+      ? (ps!.step_progress as (number | null)[])
+      : stepProgressFor(stage, progress);
+    const status: Pipeline["status"] =
+      ps?.status === "error" || v.status === "error"
+        ? "error"
+        : ps?.status === "done" || v.status === "done"
+          ? "done"
+          : v.status === "queued" || ps?.status === "queued"
+            ? "queued"
+            : "running";
     const p: Pipeline = {
       ...newPipeline(id, "", "auto", {}, true),
-      status: v.status === "error" ? "error" : v.status === "queued" ? "queued" : "running",
+      status,
       stage,
-      progress: v.progress ?? 0,
+      progress,
       title: v.filename || `Job ${v.job_id}`,
       originalName: v.filename || "",
       videoId,
       startedAt: started,
-      error: v.error ?? "",
-      failedStep: v.status === "error" ? (idx ?? 4) : null,
-      stepProgress: stepProgressFor(stage, v.progress ?? 0),
+      error: ps?.error ?? v.error ?? "",
+      failedStep: status === "error" ? (idx ?? 4) : null,
+      stepProgress,
       stepStarts: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : i === idx ? started : null)),
       stepEnds: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : null)),
       logs: [{ message: "Đang theo dõi tiến trình từ máy chủ...", ts: started / 1000, level: "info" }],
@@ -296,6 +316,10 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       regionWaiters.delete(id);
       resolve.resolve(region);
     }
+    // Restored pipeline (page reload): no live runner → resume prep from where it waited.
+    if (!liveRunners.has(id)) {
+      runPrep(id, s.resumeStep ?? 3);
+    }
   },
   confirmSubtitleStyle: (id, style) => {
     const s = get().pipelines.find((p) => p.id === id);
@@ -309,6 +333,10 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     if (resolve) {
       subtitleStyleWaiters.delete(id);
       resolve.resolve(style);
+    }
+    // Restored pipeline: resume heavy processing from step 4.
+    if (!liveRunners.has(id)) {
+      enqueue(id, s.resumeStep ?? 4);
     }
   },
   cancelPipeline: async (id) => {
@@ -359,13 +387,29 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       timelineCheckWaiters.delete(id);
       resolve.resolve(action);
     }
+    // Restored pipeline (page reload): no live runner → finish step 6 and resume dub.
+    if (!liveRunners.has(id)) {
+      markStepEnd(id, 6);
+      patch(id, { timelineCheck: null });
+      enqueue(id, s.resumeStep ?? 7);
+    }
   },
   openTimelineCheck: (id) => {
     const s = get().pipelines.find((p) => p.id === id);
     if (!s || !s.timelineCheck?.waiting || s.timelineCheck.open) return;
     patch(id, { timelineCheck: { ...s.timelineCheck, open: true } });
   },
-}));
+  restorePaused: () => {
+    runRestorePaused();
+  },
+    }),
+    {
+      name: "ste-pipelines",
+      partialize: (s) => ({ pipelines: s.pipelines }),
+      version: 1,
+    }
+  )
+);
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -493,15 +537,20 @@ function stepProgressFor(stage: Stage, progress: number): (number | null)[] {
 // transitions (ocr → translate → dub → hardcode) and marks done/error when the
 // video finishes. Best-effort; silently stops if the pipeline is removed.
 async function pollRemoteVideo(id: string, videoId: string) {
+  liveRunners.add(id);
   while (true) {
     await sleep(1500);
     const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
-    if (!cur) return;
+    if (!cur) {
+      liveRunners.delete(id);
+      return;
+    }
     try {
       const videos = await listVideos();
       const row = videos.find((v) => v.video_id === videoId);
       if (!row) {
         usePipelineStore.getState().removePipeline(id);
+        liveRunners.delete(id);
         return;
       }
       if (row.status === "done") {
@@ -517,6 +566,7 @@ async function pollRemoteVideo(id: string, videoId: string) {
           dubbedUrl: row.has_dubbed ? `/api/download/dubbed/${videoId}` : null,
           title: row.filename || cur.title,
         });
+        liveRunners.delete(id);
         return;
       }
       if (row.status === "error") {
@@ -529,6 +579,7 @@ async function pollRemoteVideo(id: string, videoId: string) {
           failedStep: STEP_STAGE[stage] ?? 4,
           title: row.filename || cur.title,
         });
+        liveRunners.delete(id);
         return;
       }
       if (row.status === "cancelled") {
@@ -539,19 +590,28 @@ async function pollRemoteVideo(id: string, videoId: string) {
           finishedAt: Date.now(),
           title: row.filename || cur.title,
         });
+        liveRunners.delete(id);
         return;
       }
-      // still active — mirror progress + logs
-      const stage = stageForJobType(row.job_type, row.phase);
+      // still active — mirror progress + logs. Prefer the frontend-reported
+      // pipeline state (exact stage / overall % / per-step progress) when the
+      // video carries one; fall back to the single-job mapping otherwise.
+      const ps = row.pipeline;
+      const stage = (ps?.stage as Stage) ?? stageForJobType(row.job_type, row.phase);
+      const progress = ps?.progress ?? row.progress ?? 0;
+      const stepProgress =
+        Array.isArray(ps?.step_progress) && ps!.step_progress.length === STEPS.length
+          ? (ps!.step_progress as (number | null)[])
+          : stepProgressFor(stage, progress);
       if (row.logs && Array.isArray(row.logs)) {
         appendBackendLogs(id, row.logs as LogEntry[]);
       }
       patch(id, {
         status: "running",
         stage,
-        progress: row.progress ?? 0,
+        progress,
         title: row.filename || cur.title,
-        stepProgress: stepProgressFor(stage, row.progress ?? 0),
+        stepProgress,
       });
     } catch {
       // ignore transient
@@ -564,6 +624,10 @@ async function pollRemoteVideo(id: string, videoId: string) {
 let queue: { id: string; startStep: number }[] = [];
 let processing = false;
 const abortedPipelines = new Set<string>();
+// Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).
+// After a page reload these are empty, so restored interactive waits must
+// resume the runner from resumeStep instead of relying on the (dead) coroutine.
+const liveRunners = new Set<string>();
 const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
 const subtitleStyleWaiters = new Map<string, { resolve: (s: Partial<SubtitleStyle>) => void; reject: () => void }>();
 const timelineCheckWaiters = new Map<string, { resolve: (a: "fix" | "continue") => void; reject: (e: Error) => void }>();
@@ -664,12 +728,41 @@ function setStepProgress(id: string, i: number, p: number) {
   patch(id, { stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)) });
 }
 
+// ── Cross-tab pipeline sync ─────────────────────────────────────────────────
+// The tab that DRIVES a pipeline reports its step progress to the backend
+// (POST /api/pipeline/{video_id}); list_videos merges it into rows so every
+// other tab mirrors the exact same stage / overall % / per-step progress via
+// pollRemoteVideo. Remote `remote-*` pipelines never report back (they only
+// follow), avoiding feedback loops. Throttled to avoid spamming on progress
+// ticks; terminal done/error states are always flushed immediately.
+const lastPipelineReport = new Map<string, number>();
+
+function reportPipeline(id: string, force = false) {
+  const p = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!p || !p.videoId) return;
+  if (id.startsWith("remote-")) return;
+  const now = Date.now();
+  const last = lastPipelineReport.get(id) ?? 0;
+  if (!force && now - last < 800) return;
+  lastPipelineReport.set(id, now);
+  reportPipelineState(p.videoId, {
+    status: p.status,
+    stage: p.stage,
+    progress: p.progress,
+    step_progress: p.stepProgress,
+    error: p.error || "",
+  }).catch(() => {
+    /* best-effort */
+  });
+}
+
 function recalcOverall(id: string) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   const total = cur.stepProgress.reduce((acc: number, v) => acc + (v ?? 0), 0);
   const overall = Math.round(total / STEPS.length);
   patch(id, { progress: overall });
+  reportPipeline(id);
 }
 
 function markStepStart(id: string, i: number) {
@@ -681,6 +774,7 @@ function markStepStart(id: string, i: number) {
     stepSkipped: cur.stepSkipped.map((v, idx) => (idx === i ? false : v)),
     stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? 0 : v)),
   });
+  reportPipeline(id);
 }
 
 function markStepEnd(id: string, i: number) {
@@ -748,6 +842,7 @@ async function runPrep(id: string, startStep = 0) {
     subtitleStyle: startStep <= 3 ? null : cur.subtitleStyle,
   });
 
+  liveRunners.add(id);
   try {
     if (abortedPipelines.has(id)) return;
     // 0. Resolve link
@@ -767,7 +862,7 @@ async function runPrep(id: string, startStep = 0) {
       audioUrl = rd.audio_url ?? null;
       sourceLang = detectSourceLang(cleaned);
       ocrLang = detectOcrLang(sourceLang);
-      const originalName = sanitizeFilename(rd.title || "") || "video";
+      originalName = sanitizeFilename(rd.title || "") || "video";
       patch(id, {
         videoUrl,
         audioUrl,
@@ -843,7 +938,7 @@ async function runPrep(id: string, startStep = 0) {
         appendLog(id, "Vùng quét mặc định (tự động) — bỏ qua bước chọn vùng.");
         markStepSkipped(id, 2);
       } else {
-        patch(id, { stage: "region" });
+        patch(id, { stage: "region", resumeStep: 3 });
         markStepStart(id, 2);
         appendLog(id, "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...");
         region = cur.region ?? (await waitForRegion(id));
@@ -859,7 +954,7 @@ async function runPrep(id: string, startStep = 0) {
         markStepSkipped(id, 3);
         appendLog(id, "Tự động khớp vị trí — bỏ qua bước chỉnh tay.");
       } else {
-        patch(id, { stage: "subtitle_preview" });
+        patch(id, { stage: "subtitle_preview", resumeStep: 4 });
         markStepStart(id, 3);
         appendLog(id, "Chỉnh kích thước & vị trí phụ đề trên frame đầu tiên, nhấn Xác nhận để tiếp tục...");
         let style = cur.subtitleStyle;
@@ -886,6 +981,9 @@ async function runPrep(id: string, startStep = 0) {
       error: e instanceof Error ? e.message : "Lỗi không xác định",
       finishedAt: Date.now(),
     });
+    reportPipeline(id, true);
+  } finally {
+    liveRunners.delete(id);
   }
 }
 
@@ -922,6 +1020,7 @@ async function runPipeline(id: string, startStep = 4) {
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
   });
 
+  liveRunners.add(id);
   try {
     if (abortedPipelines.has(id)) return;
 
@@ -974,19 +1073,35 @@ async function runPipeline(id: string, startStep = 4) {
     if (startStep <= 5) {
       patch(id, { stage: "context" });
       markStepStart(id, 5);
-      appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
+      // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
+      let ctxExists = false;
       try {
-        const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
-        const cd = await cr.json();
-        if (cr.ok && cd.job_id) {
-          patch(id, { contextOn: true });
-          const cs = await pollJob(cd.job_id, tick(5));
-          appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
-        } else {
-          appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
+        const ctxCheck = await fetch(`/api/context/${videoId}`);
+        if (ctxCheck.ok) {
+          const ctxData = await ctxCheck.json();
+          ctxExists = Boolean(ctxData?.context?.trim());
         }
       } catch {
-        appendLog(id, "Bỏ qua ngữ cảnh.");
+        // ignore
+      }
+      if (ctxExists) {
+        appendLog(id, "Ngữ cảnh đã có sẵn — bỏ qua.");
+        markStepSkipped(id, 5);
+      } else {
+        appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
+        try {
+          const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
+          const cd = await cr.json();
+          if (cr.ok && cd.job_id) {
+            patch(id, { contextOn: true });
+            const cs = await pollJob(cd.job_id, tick(5));
+            appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
+          } else {
+            appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
+          }
+        } catch {
+          appendLog(id, "Bỏ qua ngữ cảnh.");
+        }
       }
       markStepEnd(id, 5);
     }
@@ -995,17 +1110,29 @@ async function runPipeline(id: string, startStep = 4) {
     if (startStep <= 6) {
       patch(id, { stage: "translating" });
       markStepStart(id, 6);
-      appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
-      const tr = await fetch(`/api/translate/${videoId}`, {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ source_lang: sourceLang, target_lang: "vi" }),
-      });
-      const td = await tr.json();
-      if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-      const ts = await pollJob(td.job_id, tick(6));
-      if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
-      appendLog(id, "Dịch xong.");
+      // Resume: nếu bản dịch đã tồn tại thì bỏ qua POST translate, dùng thẳng kết quả.
+      let translatedExists = false;
+      try {
+        const trCheck = await fetch(`/api/download/translated/${videoId}`);
+        translatedExists = trCheck.ok;
+      } catch {
+        // ignore
+      }
+      if (!translatedExists) {
+        appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
+        const tr = await fetch(`/api/translate/${videoId}`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ source_lang: sourceLang, target_lang: "vi" }),
+        });
+        const td = await tr.json();
+        if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
+        const ts = await pollJob(td.job_id, tick(6));
+        if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
+        appendLog(id, "Dịch xong.");
+      } else {
+        appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
+      }
 
       patch(id, { stage: "saving" });
       appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
@@ -1034,6 +1161,7 @@ async function runPipeline(id: string, startStep = 4) {
               ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
               : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
           );
+          patch(id, { resumeStep: 7 });
           const choice = await waitForTimelineCheck(id);
           if (choice === "fix") {
             appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
@@ -1054,69 +1182,96 @@ async function runPipeline(id: string, startStep = 4) {
     if (startStep <= 7) {
       patch(id, { stage: "dub" });
       markStepStart(id, 7);
-      const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
-      // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
-      // Google TTS with 400 "Voice does not exist". Only send dubVoice when the
-      // engine is CapCut; Google always uses a Google voice.
-      const voice =
-        engine === "capcut"
-          ? cur.dubVoice || "BV421_vivn_streaming"
-          : cur.dubVoice && !cur.dubVoice.startsWith("BV") && !cur.dubVoice.startsWith("AV")
-            ? cur.dubVoice
-            : "vi-VN-Standard-B";
-      appendLog(id, engine === "capcut"
-        ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
-        : "Tách giọng & lồng tiếng Việt (Google TTS)...");
+      // Resume: nếu video lồng tiếng đã tồn tại thì bỏ qua.
+      let dubbedExists = false;
       try {
-        const dr = await fetch(`/api/dub/${videoId}`, {
-          method: "POST",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({
-            voice,
-            engine,
-            mute_original: cur.muteOriginal,
-            original_gain_db: cur.originalGainDb,
-          }),
-        });
-        const dd = await dr.json();
-        if (dr.ok && dd.job_id) {
-          const ds = await pollJob(dd.job_id, tick(7));
-          if (ds.status === "done") {
-            patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
-            appendLog(id, "Lồng tiếng Việt xong.");
+        const dubbedCheck = await fetch(`/api/download/dubbed/${videoId}`);
+        dubbedExists = dubbedCheck.ok;
+      } catch {
+        // ignore
+      }
+      if (dubbedExists) {
+        patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
+        appendLog(id, "Video lồng tiếng đã có sẵn — bỏ qua.");
+        markStepSkipped(id, 7);
+      } else {
+        const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
+        // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
+        // Google TTS with 400 "Voice does not exist". Only send dubVoice when the
+        // engine is CapCut; Google always uses a Google voice.
+        const voice =
+          engine === "capcut"
+            ? cur.dubVoice || "BV421_vivn_streaming"
+            : cur.dubVoice && !cur.dubVoice.startsWith("BV") && !cur.dubVoice.startsWith("AV")
+              ? cur.dubVoice
+              : "vi-VN-Standard-B";
+        appendLog(id, engine === "capcut"
+          ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
+          : "Tách giọng & lồng tiếng Việt (Google TTS)...");
+        try {
+          const dr = await fetch(`/api/dub/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({
+              voice,
+              engine,
+              mute_original: cur.muteOriginal,
+              original_gain_db: cur.originalGainDb,
+            }),
+          });
+          const dd = await dr.json();
+          if (dr.ok && dd.job_id) {
+            const ds = await pollJob(dd.job_id, tick(7));
+            if (ds.status === "done") {
+              patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
+              appendLog(id, "Lồng tiếng Việt xong.");
+            } else {
+              appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
+            }
           } else {
-            appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
-          }
-        } else {
           appendLog(id, `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`);
         }
       } catch {
         appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
       }
       markStepEnd(id, 7);
+      }
     }
 
     // 8. Hardcode
     if (startStep <= 8) {
       patch(id, { stage: "muxing" });
       markStepStart(id, 8);
-      appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
-      const hr = await fetch(`/api/hardcode/${videoId}`, {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          auto_fit: cur.autoFit,
-          region: cur.region ?? DEFAULT_REGION,
-          style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
-          watermark: cur.watermark,
-          watermark_preset: cur.watermark ? (cur.watermarkPreset || null) : null,
-        }),
-      });
-      const hd = await hr.json();
-      if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
-      const hs = await pollJob(hd.job_id, tick(8));
-      if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
-      markStepEnd(id, 8);
+      // Resume: nếu video đã có phụ đề cứng thì bỏ qua.
+      let hardcodedExists = false;
+      try {
+        const hcCheck = await fetch(`/api/download/hardcoded/${videoId}`);
+        hardcodedExists = hcCheck.ok;
+      } catch {
+        // ignore
+      }
+      if (hardcodedExists) {
+        appendLog(id, "Video đã có phụ đề cứng — bỏ qua encode.");
+        markStepSkipped(id, 8);
+      } else {
+        appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
+        const hr = await fetch(`/api/hardcode/${videoId}`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            auto_fit: cur.autoFit,
+            region: cur.region ?? DEFAULT_REGION,
+            style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
+            watermark: cur.watermark,
+            watermark_preset: cur.watermark ? (cur.watermarkPreset || null) : null,
+          }),
+        });
+        const hd = await hr.json();
+        if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
+        const hs = await pollJob(hd.job_id, tick(8));
+        if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
+        markStepEnd(id, 8);
+      }
     }
 
     patch(id, {
@@ -1127,6 +1282,7 @@ async function runPipeline(id: string, startStep = 4) {
       finishedAt: Date.now(),
     });
     appendLog(id, "Hoàn tất!");
+    reportPipeline(id, true);
     cleanupTempForVideo(videoId);
   } catch (e) {
     const stage = usePipelineStore.getState().pipelines.find((x) => x.id === id)?.stage;
@@ -1137,5 +1293,134 @@ async function runPipeline(id: string, startStep = 4) {
       error: e instanceof Error ? e.message : "Lỗi không xác định",
       finishedAt: Date.now(),
     });
+    reportPipeline(id, true);
+  } finally {
+    liveRunners.delete(id);
+  }
+}
+
+// ── Persisted-state resume ─────────────────────────────────────────────────
+// After a page reload, the store is rehydrated from localStorage but all runner
+// coroutines are dead and the waiter maps are empty. This walks every pipeline
+// that was mid-flight and resumes it:
+//   • Interactive waits (region / subtitle style / timeline check) → left alone;
+//     the confirm handlers re-start the runner via resumeStep when the user acts.
+//   • Heavy steps → re-attaches to the still-running backend job (if any) so it
+//     doesn't start a duplicate, then continues the chain from the next step.
+//   • Prep steps → restarts the prep runner from the current step (or skips to
+//     region if the video was already imported).
+let restoreRunning = false;
+
+async function runRestorePaused() {
+  if (restoreRunning) return;
+  restoreRunning = true;
+  try {
+    const pipes = usePipelineStore.getState().pipelines;
+    for (const p of pipes) {
+      if (p.status !== "running" && p.status !== "queued") continue;
+      if (liveRunners.has(p.id)) continue;
+
+      // Interactive waits: nothing to do — the confirm/resolve handlers resume.
+      if (p.stage === "region" || p.stage === "subtitle_preview") continue;
+      if (p.timelineCheck?.waiting) continue;
+
+      const stepIdx = STEP_STAGE[p.stage];
+      if (stepIdx == null) {
+        // Freshly-added pipeline that hadn't started prep yet (stage idle).
+        if (p.stage === "idle") runPrep(p.id, 0);
+        continue;
+      }
+
+      // Remote job-tracker pipelines (importActive) follow the backend directly;
+      // restart their poller instead of re-running the heavy chain.
+      if (p.id.startsWith("remote-")) {
+        if (p.videoId) pollRemoteVideo(p.id, p.videoId);
+        continue;
+      }
+
+      // Prep steps (0-3)
+      if (stepIdx <= 3) {
+        const resumeFrom = p.videoId && stepIdx < 2 ? 2 : stepIdx;
+        runPrep(p.id, resumeFrom);
+        continue;
+      }
+
+      // Heavy steps (4-8)
+      await resumeHeavy(p.id, p.videoId, stepIdx, p.stage);
+    }
+  } finally {
+    restoreRunning = false;
+  }
+}
+
+// Re-attach a heavy step to the backend. If a job is still queued/processing for
+// this video, follow it to completion (mirroring progress) and continue the chain
+// from the next step. Otherwise resume the runner at the current step — the
+// idempotent skip checks (SRT / context / translated / dubbed / hardcoded) make
+// re-running cheap and safe.
+async function resumeHeavy(
+  id: string,
+  videoId: string | null,
+  stepIdx: number,
+  stage: Stage,
+) {
+  const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!cur) return;
+
+  if (!videoId) {
+    enqueue(id, stepIdx);
+    return;
+  }
+
+  let activeRow: VideoMeta | null = null;
+  try {
+    const videos = await listVideos();
+    const row = videos.find(
+      (v) =>
+        v.video_id === videoId &&
+        v.job_id &&
+        (v.status === "queued" || v.status === "processing"),
+    );
+    activeRow = row ?? null;
+  } catch {
+    // ignore — treat as no active job
+  }
+
+  if (activeRow) {
+    const jobStage = stageForJobType(activeRow.job_type, activeRow.phase);
+    const jobIdx = STEP_STAGE[jobStage] ?? stepIdx;
+    patch(id, {
+      status: "running",
+      stage: jobStage,
+      progress: activeRow.progress ?? 0,
+      startedAt: cur.startedAt ?? Date.now(),
+      error: "",
+      failedStep: null,
+      stepProgress: stepProgressFor(jobStage, activeRow.progress ?? 0),
+    });
+    const tick = (t: JobTick) => {
+      setStepProgress(id, jobIdx, t.progress);
+      recalcOverall(id);
+      if (t.logs) appendBackendLogs(id, t.logs);
+    };
+    const st = await pollJob(activeRow.job_id as string, tick);
+    if (st.status === "error") {
+      patch(id, {
+        status: "error",
+        stage: "error",
+        failedStep: jobIdx,
+        error: st.error ?? "Lỗi xử lý",
+        finishedAt: Date.now(),
+      });
+      return;
+    }
+    // The backend may have advanced past where the UI left off (e.g. reload
+    // during OCR but translate already running) — mark the skipped steps done.
+    for (let i = Math.min(stepIdx, jobIdx); i <= jobIdx; i++) {
+      markStepEnd(id, i);
+    }
+    enqueue(id, jobIdx + 1);
+  } else {
+    enqueue(id, stepIdx);
   }
 }

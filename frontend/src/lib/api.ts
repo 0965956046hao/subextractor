@@ -44,6 +44,14 @@ export function getFrameUrl(videoId: string): string {
 
 export type VideoStatus = "uploaded" | "queued" | "processing" | "done" | "error" | "cancelled";
 
+export interface PipelineProgress {
+  status: string;
+  stage: string;
+  progress: number;
+  step_progress: (number | null)[];
+  error?: string;
+}
+
 export interface VideoMeta {
   video_id: string;
   filename: string;
@@ -58,11 +66,16 @@ export interface VideoMeta {
   job_id?: string;
   error?: string | null;
   logs?: LogEntry[];
+  pipeline?: PipelineProgress;
 }
 
 export async function listVideos(): Promise<VideoMeta[]> {
   const res = await api.get<{ videos: VideoMeta[] }>("/videos");
   return res.data.videos;
+}
+
+export async function reportPipelineState(videoId: string, state: PipelineProgress): Promise<void> {
+  await api.post(`/pipeline/${videoId}`, state);
 }
 
 export async function deleteVideo(videoId: string): Promise<void> {

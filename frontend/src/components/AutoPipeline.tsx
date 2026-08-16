@@ -86,7 +86,7 @@ export default function AutoPipeline() {
   const pipelines = usePipelineStore((s) => s.pipelines);
   const addPipeline = usePipelineStore((s) => s.addPipeline);
   const removePipeline = usePipelineStore((s) => s.removePipeline);
-  const clearFinished = usePipelineStore((s) => s.clearFinished);
+  const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const importDone = usePipelineStore((s) => s.importDone);
 
   const [url, setUrl] = useState("");
@@ -165,11 +165,16 @@ export default function AutoPipeline() {
       .then((videos) => {
         if (mounted) setHistoryVideos(videos);
         const active = videos.filter(
-          (v) => v.job_id && (v.status === "queued" || v.status === "processing" || v.status === "error" || v.status === "cancelled")
+          (v) =>
+            (v.job_id && (v.status === "queued" || v.status === "processing" || v.status === "error" || v.status === "cancelled")) ||
+            (v.pipeline && (v.pipeline.status === "running" || v.pipeline.status === "queued"))
         );
         for (const v of active) {
           usePipelineStore.getState().importActive(v);
         }
+        // Resume pipelines persisted to localStorage (page reload): re-attach
+        // in-flight backend jobs and re-register interactive waits.
+        usePipelineStore.getState().restorePaused();
       })
       .catch(() => {
         // ignore — no history available
@@ -333,6 +338,44 @@ export default function AutoPipeline() {
     }
   };
 
+  // Delete a pipeline row completely: for running/queued jobs abort the backend
+  // first, and whenever the pipeline owns a video also delete the backend files
+  // (SRT, frames, TTS, hardcoded…) and drop it from the persisted history list.
+  // Otherwise the video reappears as a HistoryRow on the next listVideos().
+  const removePipelineEntry = async (p: Pipeline) => {
+    if (p.status === "running" || p.status === "queued") {
+      await cancelPipeline(p.id);
+    } else {
+      removePipeline(p.id);
+    }
+    if (selectedId === p.id) setSelectedId(null);
+    if (p.videoId) {
+      try {
+        await deleteVideo(p.videoId);
+      } catch {
+        // ignore
+      }
+      setHistoryVideos((prev) => prev.filter((v) => v.video_id !== p.videoId));
+    }
+  };
+
+  // "Xoá job đã xong": same as removePipelineEntry, but for every finished
+  // pipeline (and matching history rows) so nothing lingers on the backend.
+  const handleClearFinished = async () => {
+    for (const p of pipelines.filter((x) => x.status === "done" || x.status === "error")) {
+      if (p.videoId) {
+        try {
+          await deleteVideo(p.videoId);
+        } catch {
+          // ignore
+        }
+      }
+      removePipeline(p.id);
+    }
+    if (selectedId != null && !pipelines.some((x) => x.id === selectedId)) setSelectedId(null);
+    setHistoryVideos((prev) => prev.filter((v) => v.status !== "done"));
+  };
+
   return (
     <>
     <main className="min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
@@ -348,7 +391,7 @@ export default function AutoPipeline() {
           </Link>
           {hasFinished && (
             <button
-              onClick={clearFinished}
+              onClick={handleClearFinished}
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
             >
               Xoá job đã xong
@@ -809,8 +852,7 @@ export default function AutoPipeline() {
                         setTab("detail");
                       }}
                       onRemove={() => {
-                        removePipeline(p.id);
-                        if (selectedId === p.id) setSelectedId(null);
+                        removePipelineEntry(p);
                       }}
                     />
                   ))}
@@ -837,8 +879,7 @@ export default function AutoPipeline() {
                         setTab("detail");
                       }}
                       onRemove={() => {
-                        removePipeline(p.id);
-                        if (selectedId === p.id) setSelectedId(null);
+                        removePipelineEntry(p);
                       }}
                     />
                   ))}
@@ -875,7 +916,7 @@ export default function AutoPipeline() {
           <DetailView
             pipeline={selected}
             now={now}
-            onRemove={() => removePipeline(selected.id)}
+            onRemove={() => removePipelineEntry(selected)}
             onStartNext={focusNewVideo}
           />
         </AnimatedBlock>

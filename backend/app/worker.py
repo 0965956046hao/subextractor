@@ -55,7 +55,11 @@ async def notify_ws(ws_clients: dict, job_id: str, data: dict):
     clients = ws_clients.get(job_id, set())
     for ws in clients.copy():
         try:
-            await ws.send_json(data)
+            # A slow / backgrounded client that isn't reading its socket would
+            # otherwise block the event loop on send_json, freezing /api/status,
+            # /api/frame and everything else (→ "socket hang up" in the proxy).
+            # Bound the send so one stuck client can never stall the loop.
+            await asyncio.wait_for(ws.send_json(data), timeout=2)
         except Exception:
             clients.discard(ws)
 

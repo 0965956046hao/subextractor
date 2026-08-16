@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from app.config import settings
@@ -34,7 +35,7 @@ PREVIEW_TIMEOUT = 60
 async def capcut_voices(lang: Optional[str] = "vi-VN"):
     """List CapCut voices (default Vietnamese) from the gen-voice service."""
     try:
-        return list_voices(lang=lang)
+        return await run_in_threadpool(list_voices, lang=lang)
     except CapCutTTSError as e:
         raise HTTPException(502, f"CapCut TTS service lỗi: {e}") from e
 
@@ -42,7 +43,7 @@ async def capcut_voices(lang: Optional[str] = "vi-VN"):
 @router.get("/api/capcut/health")
 async def capcut_health():
     """Report CapCut gen-voice service status."""
-    h = check_health()
+    h = await run_in_threadpool(check_health)
     if not h.get("healthy"):
         return {"healthy": False, "message": "CapCut TTS service không chạy (port 8100)", "voices_loaded": 0}
     return {"healthy": True, "message": "CapCut TTS service hoạt động", "voices_loaded": h.get("voices_loaded", 0)}
@@ -60,7 +61,11 @@ async def capcut_preview(body: dict):
         text = PREVIEW_TEXT
 
     try:
-        job_id = submit_job([{"text": text, "start": 0.0, "end": 0.0}], voice, rate="1.0", filename_prefix="preview")
+        job_id = await run_in_threadpool(
+            submit_job,
+            [{"text": text, "start": 0.0, "end": 0.0}],
+            voice, rate="1.0", filename_prefix="preview",
+        )
         job = await asyncio.get_event_loop().run_in_executor(None, lambda: poll_job(job_id, timeout=PREVIEW_TIMEOUT))
     except CapCutTTSError as e:
         raise HTTPException(502, f"CapCut TTS lỗi khi tạo preview: {e}") from e
@@ -75,7 +80,7 @@ async def capcut_preview(body: dict):
     filename = Path(audio_files[0]).name
     out_path = settings.temp_dir / "tts_preview" / f"{voice.replace('/', '_')}.mp3"
     try:
-        download_audio(job_id, filename, out_path)
+        await run_in_threadpool(download_audio, job_id, filename, out_path)
     except CapCutTTSError as e:
         raise HTTPException(502, f"Không tải được audio preview: {e}") from e
 
