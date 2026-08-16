@@ -12,7 +12,7 @@ from app.config import settings
 from app.models import UpdateSrtRequest
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue
 from app.services.media_utils import _srt_path, _video_path
-from app.services.srt_utils import parse_srt
+from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,46 @@ async def get_srt_entries(video_id: str):
     return {"entries": [e.model_dump() for e in parse_srt(content)]}
 
 
+# ── GET /api/srt/{video_id}/validate ──
+# Detect illogical timelines (end<=start, overlaps, out-of-order).
+
+@router.get("/api/srt/{video_id}/validate")
+async def validate_srt_timeline(video_id: str):
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    issues = validate_timeline(parse_srt(srt_path.read_text(encoding="utf-8")))
+    return {"video_id": video_id, "issues": issues, "count": len(issues)}
+
+
+# ── POST /api/srt/{video_id}/fix-timeline ──
+# Auto-fix illogical timelines: min duration for end<=start, merge overlaps
+# keeping the longest text. Backs up the previous content first.
+
+@router.post("/api/srt/{video_id}/fix-timeline")
+async def fix_srt_timeline(video_id: str):
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    current = srt_path.read_text(encoding="utf-8")
+    entries = parse_srt(current)
+    if not entries:
+        return {"video_id": video_id, "entries": [], "fixes": [], "count": 0}
+    fixed, fixes = fix_timeline(entries)
+    new_content = entries_to_srt(fixed)
+    if new_content.strip() != current.strip():
+        backup = srt_path.with_name("subtitles_original.srt")
+        if not backup.exists():
+            backup.write_text(current, encoding="utf-8")
+    srt_path.write_text(new_content, encoding="utf-8")
+    return {
+        "video_id": video_id,
+        "entries": [e.model_dump() for e in fixed],
+        "fixes": fixes,
+        "count": len(fixes),
+    }
+
+
 # ── PUT /api/srt/{video_id} ──
 
 @router.put("/api/srt/{video_id}")
@@ -59,6 +99,45 @@ async def update_srt(video_id: str, body: UpdateSrtRequest):
                 backup.write_text(current, encoding="utf-8")
     srt_path.write_text(body.content, encoding="utf-8")
     return {"status": "ok", "video_id": video_id}
+
+
+# ── POST /api/srt/{video_id}/risk-check ──
+# Check-only: ask Gemini (in batches) to flag risky lines (untranslated text,
+# overlapping timeline, adjacent content still similar). Never edits the SRT.
+# Returns a job_id; poll /api/status/{job_id} then GET the result endpoint.
+
+@router.post("/api/srt/{video_id}/risk-check")
+async def start_risk_check(video_id: str, request: Request):
+    _srt_path(video_id)
+
+    jobs = get_jobs(request)
+    ws_clients = get_ws_clients(request)
+    queue = get_job_queue(request)
+
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "job_type": "risk_check",
+        "status": "queued",
+        "phase": "",
+        "progress": 0,
+        "error": None,
+        "cancelled": False,
+    }
+    jobs[job_id] = job
+    logger.info("risk-check job %s: queued for %s", job_id, video_id)
+    await queue.put(job_id)
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/api/srt/{video_id}/risk-check")
+async def get_risk_check_result(video_id: str):
+    result_path = settings.temp_dir / "risk_check" / f"{video_id}.json"
+    if not result_path.exists():
+        return {"video_id": video_id, "risks": [], "checked_at": None}
+    data = json.loads(result_path.read_text(encoding="utf-8"))
+    return {"video_id": video_id, **data}
 
 
 # ── POST /api/mux/{video_id} ──
@@ -567,7 +646,6 @@ async def load_srt_file(video_id: str, file_id: str):
         raise HTTPException(404, f"SRT file not found: {file_id}")
 
     content = path.read_text(encoding="utf-8")
-    from app.services.srt_utils import parse_srt
     entries = parse_srt(content)
     return {"entries": [e.model_dump() for e in entries]}
 

@@ -9,7 +9,10 @@ import {
   getTranslatedDownloadUrl,
   getMuxedDownloadUrl,
   updateSrt,
+  validateSrtTimeline,
+  fixSrtTimeline,
 } from "@/lib/api";
+import type { TimelineIssue } from "@/lib/api";
 
 interface SrtEntry {
   index: number;
@@ -124,6 +127,8 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
   const [hasApiKeys, setHasApiKeys] = useState(false);
   const [selectedSrt, setSelectedSrt] = useState<{ id: string; name: string } | null>(null);
   const [selectedTts, setSelectedTts] = useState<{ id: string; name: string } | null>(null);
+  const [timelineIssues, setTimelineIssues] = useState<TimelineIssue[]>([]);
+  const [fixingTimeline, setFixingTimeline] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +142,16 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       });
     return () => { cancelled = true; };
   }, [videoId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    validateSrtTimeline(videoId)
+      .then((d) => {
+        if (!cancelled) setTimelineIssues(d.issues ?? []);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [videoId, entries]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -395,6 +410,24 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       setToast("Áp dụng thất bại");
       setTimeout(() => setToast(null), 2500);
     }
+  };
+
+  const handleFixTimeline = async () => {
+    setFixingTimeline(true);
+    try {
+      const d = await fixSrtTimeline(videoId);
+      if (d.entries.length > 0) {
+        setEntries(d.entries);
+        setTimelineIssues([]);
+        setToast(`Đã sửa ${d.count} lỗi timeline (giữ sub dài nhất)`);
+      } else {
+        setToast("Không có lỗi timeline để sửa");
+      }
+    } catch {
+      setToast("Sửa timeline thất bại");
+    }
+    setFixingTimeline(false);
+    setTimeout(() => setToast(null), 2500);
   };
 
   const duration = videoRef.current?.duration || 0;
@@ -658,6 +691,39 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Timeline validation banner */}
+        {timelineIssues.length > 0 && (
+          <div className="mb-4 p-4 rounded-2xl bg-amber-500/[0.05] ring-1 ring-amber-500/[0.18]">
+            <div className="flex items-center gap-2 mb-2">
+              <svg className="w-4 h-4 text-amber-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <span className="text-[11px] font-medium text-amber-700 uppercase tracking-wider">
+                Phát hiện {timelineIssues.length} lỗi timeline vô lý
+              </span>
+            </div>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {timelineIssues.slice(0, 8).map((issue, i) => (
+                <p key={`${issue.index}-${i}`} className="text-[12px] text-ink-muted leading-snug">
+                  {issue.message}
+                </p>
+              ))}
+              {timelineIssues.length > 8 && (
+                <p className="text-[11px] text-ink-light">+{timelineIssues.length - 8} lỗi nữa…</p>
+              )}
+            </div>
+            <button
+              onClick={handleFixTimeline}
+              disabled={fixingTimeline}
+              className="mt-3 px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-amber-600/10 text-amber-700 ring-1 ring-amber-500/25 hover:bg-amber-600/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {fixingTimeline ? "Đang sửa…" : "Tự sửa timeline (giữ sub dài nhất)"}
+            </button>
           </div>
         )}
 

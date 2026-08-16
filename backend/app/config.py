@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     base_dir: Path = Path(__file__).resolve().parent.parent
     temp_dir: Path = base_dir / "temp"
 
-    extract_fps: int = 15
+    extract_fps: int = 10
     ocr_lang: str = "ch"
     similarity_threshold: float = 0.85
     merge_similarity: float = 0.9

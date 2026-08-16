@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { Region, SubtitleStyle, VideoMeta } from "@/lib/api";
+import type { Region, SubtitleStyle, VideoMeta, TimelineIssue } from "@/lib/api";
 import { listVideos } from "@/lib/api";
 
 function sanitizeFilename(name: string): string {
@@ -96,6 +96,15 @@ export interface Pipeline {
   autoFit: boolean;
   watermark: boolean;
   watermarkPreset: string;
+  checkSubs: boolean;
+  timelineCheck: TimelineCheck | null;
+}
+
+export interface TimelineCheck {
+  waiting: boolean;
+  open: boolean;
+  issues: TimelineIssue[];
+  fixing: boolean;
 }
 
 export interface DubOptions {
@@ -120,7 +129,7 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
@@ -130,6 +139,8 @@ interface PipelineState {
   confirmRegion: (id: string, region: Region) => void;
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
+  resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
+  openTimelineCheck: (id: string) => void;
 }
 
 function emptySteps<T>(v: T): T[] {
@@ -144,6 +155,7 @@ function newPipeline(
   autoFit = true,
   watermark = false,
   watermarkPreset = "",
+  checkSubs = false,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -182,14 +194,16 @@ function newPipeline(
     autoFit,
     watermark,
     watermarkPreset,
+    checkSubs,
+    timelineCheck: null,
   };
 }
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "") => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs)] }));
     runPrep(id);
     return id;
   },
@@ -305,6 +319,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
     rejectRegion(id);
     rejectSubtitleStyle(id);
+    rejectTimelineCheck(id);
     if (videoId) {
       try {
         await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -312,6 +327,43 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
         // ignore
       }
     }
+  },
+  resolveTimelineCheck: async (id, action) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s || !s.timelineCheck?.waiting) return;
+    if (action === "fix") {
+      patch(id, { timelineCheck: { ...s.timelineCheck, fixing: true } });
+      try {
+        const videoId = s.videoId;
+        if (!videoId) throw new Error("Chưa có video");
+        const res = await fetch(`/api/srt/${videoId}/fix-timeline`, { method: "POST" });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || "Sửa timeline thất bại");
+        patch(id, {
+          timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false },
+        });
+      } catch (e) {
+        patch(id, { timelineCheck: { ...s.timelineCheck, fixing: false } });
+        const resolve = timelineCheckWaiters.get(id);
+        if (resolve) {
+          timelineCheckWaiters.delete(id);
+          resolve.reject(e instanceof Error ? e : new Error("Sửa timeline thất bại"));
+        }
+        return;
+      }
+    } else {
+      patch(id, { timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false } });
+    }
+    const resolve = timelineCheckWaiters.get(id);
+    if (resolve) {
+      timelineCheckWaiters.delete(id);
+      resolve.resolve(action);
+    }
+  },
+  openTimelineCheck: (id) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s || !s.timelineCheck?.waiting || s.timelineCheck.open) return;
+    patch(id, { timelineCheck: { ...s.timelineCheck, open: true } });
   },
 }));
 
@@ -514,6 +566,7 @@ let processing = false;
 const abortedPipelines = new Set<string>();
 const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
 const subtitleStyleWaiters = new Map<string, { resolve: (s: Partial<SubtitleStyle>) => void; reject: () => void }>();
+const timelineCheckWaiters = new Map<string, { resolve: (a: "fix" | "continue") => void; reject: (e: Error) => void }>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -540,6 +593,20 @@ function rejectSubtitleStyle(id: string) {
   if (w) {
     subtitleStyleWaiters.delete(id);
     w.reject();
+  }
+}
+
+function waitForTimelineCheck(id: string): Promise<"fix" | "continue"> {
+  return new Promise<"fix" | "continue">((resolve, reject) => {
+    timelineCheckWaiters.set(id, { resolve, reject });
+  });
+}
+
+function rejectTimelineCheck(id: string) {
+  const w = timelineCheckWaiters.get(id);
+  if (w) {
+    timelineCheckWaiters.delete(id);
+    w.reject(new Error("Đã hủy kiểm tra timeline"));
   }
 }
 
@@ -949,6 +1016,37 @@ async function runPipeline(id: string, startStep = 4) {
         headers: JSON_HEADERS,
         body: JSON.stringify({ content: srtText }),
       });
+
+      // Optional: always pause for the user to review the translated SRT in the
+      // timeline-check popup (only when checkSubs is on). No auto-skip.
+      if (cur.checkSubs && videoId) {
+        appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
+        try {
+          const checkRes = await fetch(`/api/srt/${videoId}/validate`);
+          const checkData = await checkRes.json();
+          const issues: TimelineIssue[] = checkData.issues ?? [];
+          patch(id, {
+            timelineCheck: { waiting: true, open: false, issues, fixing: false },
+          });
+          appendLog(
+            id,
+            issues.length > 0
+              ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
+              : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
+          );
+          const choice = await waitForTimelineCheck(id);
+          if (choice === "fix") {
+            appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
+          } else {
+            appendLog(id, "Bỏ qua — giữ nguyên timeline hiện tại.");
+          }
+        } catch (e) {
+          appendLog(id, `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`);
+        } finally {
+          patch(id, { timelineCheck: null });
+        }
+      }
+
       markStepEnd(id, 6);
     }
 

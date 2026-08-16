@@ -666,6 +666,55 @@ async def _auto_context(video_id: str, generate_fn, loop):
         logger.warning("Auto context generation failed (non-critical)", exc_info=True)
 
 
+async def run_risk_check_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        from app.services.risk_check_service import run_risk_check_sync
+
+        job["status"] = "processing"
+        job["phase"] = "risk_check"
+        await job_log_async(job, ws_clients, "Bắt đầu kiểm tra rủi ro file sub bằng Gemini…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "risk_check",
+        })
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_risk_check_sync,
+            loop, job_id, jobs, ws_clients, job["video_id"],
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, "Kiểm tra rủi ro hoàn tất.", "success")
+
+    except asyncio.TimeoutError:
+        logger.error("risk_check job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("risk_check job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi kiểm tra rủi ro: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
 async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
     """Generate video context from OCR snapshots via Gemini Vision."""
     from app.services.context_service import generate_video_context, load_video_context
@@ -727,6 +776,8 @@ async def worker_loop(
                     await run_export_job(jobs, ws_clients, job_id)
                 elif job_type == "context":
                     await run_context_job(jobs, ws_clients, job_id)
+                elif job_type == "risk_check":
+                    await run_risk_check_job(jobs, ws_clients, job_id)
                 else:
                     await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:

@@ -162,6 +162,66 @@ export async function updateSrt(videoId: string, content: string): Promise<void>
   await api.put(`/srt/${videoId}`, { content });
 }
 
+export interface TimelineIssue {
+  index: number;
+  type: "negative_duration" | "overlap" | "out_of_order";
+  message: string;
+  start: number;
+  end: number;
+  prev_index?: number;
+}
+
+export interface TimelineFix {
+  index: number;
+  type: "negative_duration" | "overlap";
+  from: string;
+  to: string;
+}
+
+export async function validateSrtTimeline(
+  videoId: string
+): Promise<{ issues: TimelineIssue[]; count: number }> {
+  const res = await api.get<{ issues: TimelineIssue[]; count: number }>(
+    `/srt/${videoId}/validate`
+  );
+  return res.data;
+}
+
+export async function fixSrtTimeline(
+  videoId: string
+): Promise<{ entries: SrtEntry[]; fixes: TimelineFix[]; count: number }> {
+  const res = await api.post<{ entries: SrtEntry[]; fixes: TimelineFix[]; count: number }>(
+    `/srt/${videoId}/fix-timeline`
+  );
+  return res.data;
+}
+
+export interface SubtitleRisk {
+  index: number;
+  text: string;
+  problems: string[];
+  note: string;
+}
+
+export type SubtitleRiskProblem =
+  | "NOT_TRANSLATED"
+  | "TIMELINE_OVERLAP"
+  | "ADJACENT_SIMILAR";
+
+export async function startSrtRiskCheck(videoId: string): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>(`/srt/${videoId}/risk-check`);
+  return res.data;
+}
+
+export async function getSrtRiskResult(
+  videoId: string
+): Promise<{ risks: SubtitleRisk[]; checked_at?: number | null }> {
+  const res = await api.get<{ risks: SubtitleRisk[]; checked_at?: number | null }>(
+    `/srt/${videoId}/risk-check`
+  );
+  return res.data;
+}
+
 export async function muxSubtitles(videoId: string): Promise<JobStatus> {
   const res = await api.post<JobStatus>(`/mux/${videoId}`);
   return res.data;

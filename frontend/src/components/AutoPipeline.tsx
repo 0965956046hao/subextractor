@@ -6,6 +6,7 @@ import { AnimatedBlock } from "@/lib/animation";
 import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
+import TimelineCheckModal from "@/components/TimelineCheckModal";
 import {
   usePipelineStore,
   STEPS,
@@ -97,6 +98,7 @@ export default function AutoPipeline() {
   const [autoFitSubs, setAutoFitSubs] = useState(true);
   const [watermarkOn, setWatermarkOn] = useState(false);
   const [watermarkPreset, setWatermarkPreset] = useState("");
+  const [checkSubs, setCheckSubs] = useState(false);
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
@@ -297,7 +299,7 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "");
+    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
@@ -713,6 +715,32 @@ export default function AutoPipeline() {
                     </label>
                   </div>
                 )}
+              </div>
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Kiểm tra timeline phụ đề
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Sau khi dịch xong, pipeline dừng lại để kiểm tra timeline vô lý (end ≤ start, chồng lấn) và hiển thị popup cho bạn duyệt trước khi tiếp tục.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCheckSubs(!checkSubs)}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                      checkSubs ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        checkSubs ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1184,6 +1212,8 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
+  const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
+  const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
 
@@ -1524,6 +1554,63 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
             </div>
           </div>
         </div>
+      )}
+
+      {p.timelineCheck?.waiting && !p.timelineCheck.open && p.videoId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards" }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-amber-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-ink">Kiểm tra timeline phụ đề</p>
+                  <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
+                    {p.timelineCheck.issues.length > 0
+                      ? `Phát hiện ${p.timelineCheck.issues.length} lỗi timeline vô lý trong phụ đề đã dịch.`
+                      : "Phụ đề đã dịch xong. Bạn có thể kiểm tra timeline trước khi tiếp tục."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 mt-5">
+                <button
+                  onClick={() => resolveTimelineCheck(p.id, "continue")}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                >
+                  Tiếp tục xử lý
+                </button>
+                <button
+                  onClick={() => openTimelineCheck(p.id)}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  Hiện popup kiểm tra
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {p.timelineCheck?.waiting && p.timelineCheck.open && p.videoId && (
+        <TimelineCheckModal
+          videoId={p.videoId}
+          initialIssues={p.timelineCheck.issues}
+          onResolve={() => resolveTimelineCheck(p.id, "continue")}
+        />
       )}
     </div>
   );
