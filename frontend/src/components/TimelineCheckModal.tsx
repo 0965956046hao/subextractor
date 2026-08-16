@@ -470,9 +470,10 @@ export default function TimelineCheckModal({
             </div>
           )}
 
-          {/* Body: video (full width) → timeline (full width) → SRT list (full width) */}
+          {/* Body: video (left) + SRT list (right), timeline editor full-width below */}
           <div className="flex flex-col gap-4 min-h-0 flex-1">
-            {/* Video */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 flex-1">
+            {/* Left: video */}
             <div className="relative rounded-xl overflow-hidden bg-black ring-1 ring-black/10 flex-shrink-0">
               <video
                 ref={videoRef}
@@ -496,135 +497,9 @@ export default function TimelineCheckModal({
               )}
             </div>
 
-            {/* Timeline editor */}
-            <div className="rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] p-3 flex-shrink-0">
-              <div className="flex items-center justify-between mb-2 gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-                    Timeline
-                  </p>
-                  <div className="flex items-center gap-1 rounded-full bg-black/[0.04] ring-1 ring-black/[0.05] px-1.5 py-1">
-                    <button
-                      onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.25))}
-                      className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
-                      title="Thu nhỏ"
-                    >
-                      −
-                    </button>
-                    <span className="text-[10px] font-mono text-ink-muted min-w-[3rem] text-center">
-                      {Math.round(zoom * 100)}%
-                    </span>
-                    <button
-                      onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.25))}
-                      className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
-                      title="Phóng to"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-                <p className="text-[11px] text-ink-light font-mono">
-                  {fmtClock(currentTime)} / {fmtClock(effectiveDuration)}
-                </p>
-              </div>
-              <div className="overflow-x-auto" ref={trackRef}>
-                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }}>
-                  {/* ruler */}
-                  <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-black/[0.06]">
-                    {Array.from({ length: Math.ceil(effectiveDuration / interval) + 1 }).map((_, i) => (
-                      <div
-                        key={i}
-                        className="absolute h-full flex items-start"
-                        style={{ left: i * interval * pps }}
-                      >
-                        <span className="text-[9px] text-ink-light font-mono pl-1">
-                          {fmtClock(i * interval)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  {/* playhead — red marker tracking the video position */}
-                  <div
-                    className="absolute top-5 bottom-0 w-[2px] bg-red-500 z-10 pointer-events-none"
-                    style={{ left: currentTime * pps }}
-                  >
-                    <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 rounded-full shadow ring-2 ring-white" />
-                  </div>
-                  {/* rows */}
-                  {entries.map((entry, i) => {
-                    const row = lanes.get(i) ?? 0;
-                    const left = entry.start * pps;
-                    const width = Math.max((entry.end - entry.start) * pps, 4);
-                    const isIssue = issueIndexes.has(entry.index);
-                    const isRisk = riskIndexes.has(entry.index);
-                    const active = entry.index === activeIndex;
-                    return (
-                      <div
-                        key={entry.index}
-                        onPointerDown={(e) => handleBlockPointerDown(e, entry.index, "move")}
-                        onPointerMove={handleBlockPointerMove}
-                        onPointerUp={handleBlockPointerUp}
-                        onClick={() => selectEntry(entry.index, entry.start)}
-                        className={`absolute rounded-md cursor-grab active:cursor-grabbing touch-none flex items-center justify-center px-2 ring-1 transition-colors group ${
-                          isIssue
-                            ? "bg-red-500/85 ring-red-600 text-white"
-                            : isRisk
-                            ? "bg-amber-500/85 ring-amber-600 text-white"
-                            : active
-                            ? "bg-blue-600/85 ring-blue-700 text-white"
-                            : "bg-blue-500/70 ring-blue-600/50 text-white"
-                        }`}
-                        style={{
-                          top: 5 + ROW_H / 2 + row * ROW_H,
-                          height: ROW_H - 10,
-                          left,
-                          width,
-                          transform: "translateY(-50%)",
-                        }}
-                      >
-                        {/* resize handles */}
-                        <span
-                          className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-black/20 rounded-l-md"
-                          onPointerDown={(e) => {
-                            e.stopPropagation();
-                            handleBlockPointerDown(e, entry.index, "resize-start");
-                          }}
-                        />
-                        <span className="text-[10px] font-medium truncate px-1 pointer-events-none">
-                          #{entry.index}
-                        </span>
-                        <span
-                          className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-black/20 rounded-r-md"
-                          onPointerDown={(e) => {
-                            e.stopPropagation();
-                            handleBlockPointerDown(e, entry.index, "resize-end");
-                          }}
-                        />
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteEntry(entry.index);
-                          }}
-                          className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-600 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity cursor-pointer shadow-md z-10"
-                          title="Xóa dòng này"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="mt-2 flex items-center gap-3 text-[10px] text-ink-light">
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-500/70 inline-block" /> Bình thường</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Lỗi timeline</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> Rủi ro (Gemini)</span>
-                <span className="ml-auto text-ink-light">Kéo để di chuyển · Kéo mép để đổi độ dài</span>
-              </div>
-            </div>
 
-            {/* SRT list */}
-            <div className="flex flex-col min-h-0 flex-1">
+            {/* Right: SRT list */}
+            <div className="flex flex-col min-h-0">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
                   Phụ đề ({entries.length} dòng)
@@ -762,6 +637,135 @@ export default function TimelineCheckModal({
                 )}
               </div>
             </div>
+          </div>
+
+            {/* Timeline editor */}
+            <div className="rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] p-3 flex-shrink-0">
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
+                    Timeline
+                  </p>
+                  <div className="flex items-center gap-1 rounded-full bg-black/[0.04] ring-1 ring-black/[0.05] px-1.5 py-1">
+                    <button
+                      onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.25))}
+                      className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
+                      title="Thu nhỏ"
+                    >
+                      −
+                    </button>
+                    <span className="text-[10px] font-mono text-ink-muted min-w-[3rem] text-center">
+                      {Math.round(zoom * 100)}%
+                    </span>
+                    <button
+                      onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.25))}
+                      className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
+                      title="Phóng to"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-ink-light font-mono">
+                  {fmtClock(currentTime)} / {fmtClock(effectiveDuration)}
+                </p>
+              </div>
+              <div className="overflow-x-auto" ref={trackRef}>
+                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }}>
+                  {/* ruler */}
+                  <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-black/[0.06]">
+                    {Array.from({ length: Math.ceil(effectiveDuration / interval) + 1 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="absolute h-full flex items-start"
+                        style={{ left: i * interval * pps }}
+                      >
+                        <span className="text-[9px] text-ink-light font-mono pl-1">
+                          {fmtClock(i * interval)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* playhead — red marker tracking the video position */}
+                  <div
+                    className="absolute top-5 bottom-0 w-[2px] bg-red-500 z-10 pointer-events-none"
+                    style={{ left: currentTime * pps }}
+                  >
+                    <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 rounded-full shadow ring-2 ring-white" />
+                  </div>
+                  {/* rows */}
+                  {entries.map((entry, i) => {
+                    const row = lanes.get(i) ?? 0;
+                    const left = entry.start * pps;
+                    const width = Math.max((entry.end - entry.start) * pps, 4);
+                    const isIssue = issueIndexes.has(entry.index);
+                    const isRisk = riskIndexes.has(entry.index);
+                    const active = entry.index === activeIndex;
+                    return (
+                      <div
+                        key={entry.index}
+                        onPointerDown={(e) => handleBlockPointerDown(e, entry.index, "move")}
+                        onPointerMove={handleBlockPointerMove}
+                        onPointerUp={handleBlockPointerUp}
+                        onClick={() => selectEntry(entry.index, entry.start)}
+                        className={`absolute rounded-md cursor-grab active:cursor-grabbing touch-none flex items-center justify-center px-2 ring-1 transition-colors group ${
+                          isIssue
+                            ? "bg-red-500/85 ring-red-600 text-white"
+                            : isRisk
+                            ? "bg-amber-500/85 ring-amber-600 text-white"
+                            : active
+                            ? "bg-blue-600/85 ring-blue-700 text-white"
+                            : "bg-blue-500/70 ring-blue-600/50 text-white"
+                        }`}
+                        style={{
+                          top: 5 + ROW_H / 2 + row * ROW_H,
+                          height: ROW_H - 10,
+                          left,
+                          width,
+                          transform: "translateY(-50%)",
+                        }}
+                      >
+                        {/* resize handles */}
+                        <span
+                          className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-black/20 rounded-l-md"
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            handleBlockPointerDown(e, entry.index, "resize-start");
+                          }}
+                        />
+                        <span className="text-[10px] font-medium truncate px-1 pointer-events-none">
+                          #{entry.index}
+                        </span>
+                        <span
+                          className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-black/20 rounded-r-md"
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            handleBlockPointerDown(e, entry.index, "resize-end");
+                          }}
+                        />
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteEntry(entry.index);
+                          }}
+                          className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-600 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity cursor-pointer shadow-md z-10"
+                          title="Xóa dòng này"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-3 text-[10px] text-ink-light">
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-500/70 inline-block" /> Bình thường</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Lỗi timeline</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> Rủi ro (Gemini)</span>
+                <span className="ml-auto text-ink-light">Kéo để di chuyển · Kéo mép để đổi độ dài</span>
+              </div>
+            </div>
+
           </div>
 
           {/* Footer */}
