@@ -103,8 +103,10 @@ export interface Pipeline {
   dubVoice: string;
   muteOriginal: boolean;
   originalGainDb: number;
+  multiVoice: boolean;
   autoFit: boolean;
   watermark: boolean;
+  useFalThumbnail: boolean;
   autoUploadYoutube: boolean;
 }
 
@@ -113,6 +115,7 @@ export interface DubOptions {
   voice: string;
   muteOriginal: boolean;
   originalGainDb: number;
+  multiVoice: boolean;
 }
 
 export interface ImportedDone {
@@ -126,11 +129,12 @@ const DEFAULT_DUB: DubOptions = {
   voice: "BV421_vivn_streaming",
   muteOriginal: true,
   originalGainDb: 0,
+  multiVoice: false,
 };
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, autoUploadYoutube?: boolean) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, autoUploadYoutube?: boolean, useFalThumbnail?: boolean) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
@@ -154,6 +158,7 @@ function newPipeline(
   autoFit = true,
   watermark = false,
   autoUploadYoutube = false,
+  useFalThumbnail = true,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -191,8 +196,10 @@ function newPipeline(
     dubVoice: d.voice,
     muteOriginal: d.muteOriginal,
     originalGainDb: d.originalGainDb,
+    multiVoice: d.multiVoice,
     autoFit,
     watermark,
+    useFalThumbnail,
     autoUploadYoutube,
   };
 }
@@ -213,9 +220,9 @@ function schedulePersist() {
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, autoUploadYoutube = false) => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, autoUploadYoutube = false, useFalThumbnail = true) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, autoUploadYoutube)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, autoUploadYoutube, useFalThumbnail)] }));
     runPrep(id);
     schedulePersist();
     return id;
@@ -864,7 +871,11 @@ async function runPipeline(id: string, startStep = 4) {
       const tr = await fetch(`/api/translate/${videoId}`, {
         method: "POST",
         headers: JSON_HEADERS,
-        body: JSON.stringify({ source_lang: sourceLang, target_lang: "vi" }),
+        body: JSON.stringify({
+          source_lang: sourceLang,
+          target_lang: "vi",
+          multi_voice: cur.multiVoice,
+        }),
       });
       const td = await tr.json();
       if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
@@ -910,6 +921,7 @@ async function runPipeline(id: string, startStep = 4) {
             engine,
             mute_original: cur.muteOriginal,
             original_gain_db: cur.originalGainDb,
+            multi_voice: cur.multiVoice && engine === "capcut",
           }),
         });
         const dd = await dr.json();
@@ -985,7 +997,10 @@ async function runPipeline(id: string, startStep = 4) {
         // ignore
       }
 
-      if (!hasFalKey) {
+      if (!cur.useFalThumbnail) {
+        appendLog(id, "Bỏ qua cập nhật thumbnail (tắt fal.ai edit thumbnail).");
+        markStepSkipped(id, 10);
+      } else if (!hasFalKey) {
         appendLog(id, "Bỏ qua cập nhật thumbnail (chưa có FAL key).");
         markStepSkipped(id, 10);
       } else {

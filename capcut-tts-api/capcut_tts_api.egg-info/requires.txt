@@ -1,0 +1,7 @@
+requests>=2.25.0
+
+[service]
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.5
+pydantic-settings>=2.1

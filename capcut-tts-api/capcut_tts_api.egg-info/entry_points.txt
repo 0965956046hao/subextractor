@@ -1,0 +1,3 @@
+[console_scripts]
+capcut-tts-api = capcut_tts_api.cli:main
+capcut-tts-service = service.main:main

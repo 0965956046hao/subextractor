@@ -337,6 +337,7 @@ async def translate_subtitles(video_id: str, request: Request):
     srt_content = body.get("srt_content", "")
     source_lang = body.get("source_lang", "zh")
     target_lang = body.get("target_lang", "vi")
+    multi_voice = bool(body.get("multi_voice", False))
 
     if srt_content:
         tr_dir = settings.temp_dir / "translated" / video_id
@@ -363,6 +364,7 @@ async def translate_subtitles(video_id: str, request: Request):
         "use_custom_srt": bool(srt_content),
         "source_lang": source_lang,
         "target_lang": target_lang,
+        "multi_voice": multi_voice,
     }
     jobs[job_id] = job
     logger.info("translate job %s: queued for %s (custom=%s)", job_id, video_id, bool(srt_content))
@@ -476,6 +478,7 @@ async def dub_subtitles(video_id: str, request: Request):
     tts_engine = body.get("engine", "google")
     tts_voice = body.get("voice", "")
     mute_original = bool(body.get("mute_original", True))
+    multi_voice = bool(body.get("multi_voice", False))
     try:
         original_gain_db = float(body.get("original_gain_db", 0.0))
     except (TypeError, ValueError):
@@ -503,6 +506,7 @@ async def dub_subtitles(video_id: str, request: Request):
         "tts_engine": tts_engine,
         "mute_original": mute_original,
         "original_gain_db": original_gain_db,
+        "multi_voice": multi_voice,
     }
     ws_clients.setdefault(job_id, [])
     logger.info(

@@ -100,8 +100,10 @@ export default function AutoPipeline() {
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
   const [muteOriginal, setMuteOriginal] = useState(true);
   const [originalGainDb, setOriginalGainDb] = useState(6);
+  const [multiVoice, setMultiVoice] = useState(false);
   const [autoFitSubs, setAutoFitSubs] = useState(true);
   const [watermarkOn, setWatermarkOn] = useState(false);
+  const [useFalThumbnail, setUseFalThumbnail] = useState(true);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
@@ -342,7 +344,8 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    }, autoFitSubs, watermarkOn, autoUploadYoutube);
+      multiVoice: multiVoice && dubEngine === "capcut",
+    }, autoFitSubs, watermarkOn, autoUploadYoutube, useFalThumbnail);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
@@ -679,6 +682,35 @@ export default function AutoPipeline() {
                 </p>
               )}
 
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Nhiều giọng nói (đa nhân vật)
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      {dubEngine === "capcut"
+                        ? "Gemini tự chọn giọng CapCut phù hợp cho từng dòng theo nhân vật (nam/nữ/tuổi), lồng tiếng mỗi dòng bằng đúng giọng đã chọn."
+                        : "Chỉ dùng được với engine CapCut."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={dubEngine !== "capcut"}
+                    onClick={() => setMultiVoice(!multiVoice)}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      multiVoice ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        multiVoice ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
               <div className="mt-4 border-t border-black/[0.05] pt-4 flex items-center gap-3 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   Căn chỉnh phụ đề:
@@ -732,6 +764,32 @@ export default function AutoPipeline() {
                     <span
                       className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
                         watermarkOn ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      fal.ai Edit thumbnail
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Dùng fal.ai chỉnh lại thumbnail 16:9 + tiêu đề tiếng Việt (cần FAL key trong Settings ⚙️).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUseFalThumbnail(!useFalThumbnail)}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                      useFalThumbnail ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        useFalThumbnail ? "left-[22px]" : "left-0.5"
                       }`}
                     />
                   </button>

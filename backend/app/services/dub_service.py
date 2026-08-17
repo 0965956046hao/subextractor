@@ -9,7 +9,8 @@ from app.config import settings
 from app.services.srt_utils import parse_srt
 from app.services.media_utils import _srt_path, _video_path, _get_audio_duration
 from app.services.job_utils import notify_ws_sync, job_log_sync
-from app.services.tts_service import synthesize_srt, synthesize_srt_capcut
+from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
+from app.services.translation_service import load_voice_map
 
 logger = logging.getLogger(__name__)
 
@@ -156,12 +157,15 @@ def build_full_audio(
     tts_engine: str = "google",
     mute_original: bool = True,
     original_gain_db: float = 0.0,
+    multi_voice: bool = False,
     progress_callback=None,
     log_fn=None,
 ) -> Path:
     """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a.
 
     `tts_engine` = "google" (Google TTS) | "capcut" (CapCut gen-voice service).
+    `multi_voice` = True: đọc ``voice_map.json`` và đọc mỗi dòng bằng giọng riêng
+    (chỉ áp dụng cho engine CapCut).
     `mute_original` = True: Demucs tách giọng, giữ instrumental (no_vocals).
     `mute_original` = False: giữ nguyên audio gốc, giảm âm lượng `original_gain_db` dB.
     """
@@ -201,13 +205,37 @@ def build_full_audio(
     cb(40)
 
     if tts_engine == "capcut":
-        audio_files = synthesize_srt_capcut(
-            video_id,
-            progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-            voice_name=voice_name,
-            rate=settings.capcut_tts_default_rate,
-            log_fn=log_fn,
-        )
+        if multi_voice:
+            voice_map = load_voice_map(video_id)
+            if not voice_map:
+                if log_fn:
+                    log_fn("Không tìm thấy voice_map.json — bỏ qua nhiều giọng, dùng giọng mặc định.", level="warning")
+                audio_files = synthesize_srt_capcut(
+                    video_id,
+                    progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
+                    voice_name=voice_name,
+                    rate=settings.capcut_tts_default_rate,
+                    log_fn=log_fn,
+                )
+            else:
+                if log_fn:
+                    log_fn(f"Nhiều giọng nói: đọc {len(voice_map)} dòng với giọng riêng...")
+                audio_files = synthesize_srt_capcut_multi(
+                    video_id,
+                    entries,
+                    voice_map,
+                    default_voice=voice_name,
+                    rate=settings.capcut_tts_default_rate,
+                    log_fn=log_fn,
+                )
+        else:
+            audio_files = synthesize_srt_capcut(
+                video_id,
+                progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
+                voice_name=voice_name,
+                rate=settings.capcut_tts_default_rate,
+                log_fn=log_fn,
+            )
     else:
         audio_files = synthesize_srt(
             video_id,
@@ -241,6 +269,7 @@ def dub_video_with_tts(
     tts_engine: str = "google",
     mute_original: bool = True,
     original_gain_db: float = 0.0,
+    multi_voice: bool = False,
     progress_callback=None,
     log_fn=None,
 ) -> Path:
@@ -252,6 +281,7 @@ def dub_video_with_tts(
         tts_engine,
         mute_original=mute_original,
         original_gain_db=original_gain_db,
+        multi_voice=multi_voice,
         progress_callback=progress_callback,
         log_fn=log_fn,
     )
@@ -308,6 +338,7 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             tts_engine=job.get("tts_engine", "google"),
             mute_original=job.get("mute_original", True),
             original_gain_db=job.get("original_gain_db", 0.0),
+            multi_voice=job.get("multi_voice", False),
             progress_callback=progress,
             log_fn=_log,
         )

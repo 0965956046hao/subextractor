@@ -7,11 +7,32 @@ from typing import Optional
 from app.config import settings
 from app.services.media_utils import _srt_path, _video_path
 from app.services.srt_utils import parse_srt, entries_to_srt
-from app.services.context_service import load_video_context, load_translation_context, append_translation_context
+from app.services.context_service import (
+    load_video_context,
+    load_translation_context,
+    append_translation_context,
+    _load_capcut_voice_catalog,
+)
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.retry_utils import gemini_retry
 
 logger = logging.getLogger(__name__)
+
+
+def _voice_map_path(video_id: str) -> Path:
+    return settings.temp_dir / "translated" / video_id / "voice_map.json"
+
+
+def load_voice_map(video_id: str) -> dict:
+    """Load the saved per-line voice map: {index: voice_type}. Empty if absent."""
+    p = _voice_map_path(video_id)
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return {int(k): v for k, v in data.items()}
+        except Exception:
+            return {}
+    return {}
 
 
 def _read_user_config() -> dict:
@@ -141,7 +162,94 @@ def _clean_gemini_response(text: str) -> str:
     return "\n".join(lines[start:]).strip()
 
 
-def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, log_fn=None) -> str:
+VOICE_MAP_PROMPT = """You are a Vietnamese dubbing voice director. Assign the BEST CapCut voice to each SRT line.
+
+VIDEO CONTEXT (character descriptions + suggested voices):
+{context}
+
+AVAILABLE CAPCUT VOICES (voice_type — display name):
+{catalog}
+
+RULES:
+1. Read the video context: who is speaking (gender, age, personality, voice characteristics).
+2. Pick a voice_type for EACH SRT line from the AVAILABLE list only. Never invent a voice.
+3. MỖI NHÂN VẬT CHỈ DÙNG 1 GIỌNG duy nhất xuyên suốt video. Nếu cùng một nhân vật xuất hiện ở nhiều dòng (kể cả không liên tiếp), LUÔN gán cùng voice_type — tuyệt đối không đổi giọng cho cùng 1 nhân vật.
+4. Chỉ đổi giọng khi chắc chắn người nói khác nhân vật (nam ↔ nữ, già ↔ trẻ, khác vai trò).
+5. Giọng của nhân vật nam: ưu tiên giọng nam; nhân vật nữ: ưu tiên giọng nữ (xem tên/display_name của giọng).
+6. Narrator/background lines: pick a neutral voice.
+7. Output ONLY a JSON object mapping SRT index → voice_type, e.g. {{"1": "BV421_vivn_streaming", "2": "vi_female_huong"}}. No markdown, no explanation.
+
+SRT LINES:
+{srt}
+"""
+
+
+def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
+    """Assign a CapCut voice to each SRT line via Gemini; save as voice_map.json.
+
+    Returns {index: voice_type}. Saves to ``translated/{video_id}/voice_map.json``.
+    """
+    catalog = _load_capcut_voice_catalog()
+    if not catalog:
+        logger.warning("CapCut voice catalog unavailable — voice map skipped")
+        return {}
+
+    context = load_video_context(video_id) or "Không có"
+    model = _get_gemini_client()
+
+    base_prompt = VOICE_MAP_PROMPT.format(
+        context=context,
+        catalog=catalog,
+        srt="{srt}",
+    )
+
+    voice_map: dict[int, str] = {}
+    batch_size = 50
+    total = len(entries)
+    total_batches = (total + batch_size - 1) // batch_size
+
+    for bi, batch_start in enumerate(range(0, total, batch_size)):
+        batch = entries[batch_start:batch_start + batch_size]
+        batch_srt = entries_to_srt(batch)
+        prompt = base_prompt.replace("{srt}", batch_srt)
+        if log_fn:
+            log_fn(f"  Chọn giọng đọc batch {bi + 1}/{total_batches} ({len(batch)} dòng)...")
+        try:
+            response = gemini_retry(model.models.generate_content)(
+                model=settings.gemini_model,
+                contents=prompt,
+                config={
+                    "system_instruction": "You assign CapCut voices to subtitle lines. Output JSON only.",
+                    "temperature": 0.2,
+                },
+            )
+            raw = response.text.strip()
+            raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    idx = int(str(k).strip())
+                    voice = str(v).strip()
+                    if 1 <= idx <= len(batch) and voice:
+                        voice_map[batch_start + idx] = voice
+        except Exception as e:
+            logger.warning("Voice map batch %d-%d failed: %s", batch_start + 1, min(batch_start + batch_size, total), e)
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: chọn giọng thất bại ({e}), bỏ qua.", level="warning")
+
+    if not voice_map:
+        return {}
+
+    p = _voice_map_path(video_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({str(k): v for k, v in voice_map.items()}, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Voice map saved for %s: %d voices", video_id, len(voice_map))
+    if log_fn:
+        log_fn(f"Đã chọn giọng cho {len(voice_map)}/{total} dòng phụ đề.", level="success")
+    return voice_map
+
+
+def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None) -> str:
     """Translate SRT file using Gemini and save as translated_vi.srt."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
@@ -296,6 +404,12 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     out_content = entries_to_srt(translated_entries)
     out_path.write_text(out_content, encoding="utf-8")
 
+    # Multi-voice: ask Gemini to assign a CapCut voice to each line → voice_map.json
+    if multi_voice:
+        if log_fn:
+            log_fn("Bật nhiều giọng nói — đang chọn giọng cho từng dòng phụ đề...")
+        generate_voice_map(video_id, translated_entries, log_fn=log_fn)
+
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)
     if log_fn:
         log_fn(f"Đã dịch xong {len(translated_entries)}/{len(entries)} dòng, lưu file SRT tiếng Việt.", level="success")
@@ -324,6 +438,7 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             source_lang=job.get("source_lang", "zh"),
             target_lang=job.get("target_lang", "vi"),
             use_custom_srt=job.get("use_custom_srt", False),
+            multi_voice=job.get("multi_voice", False),
             log_fn=_log,
         )
 

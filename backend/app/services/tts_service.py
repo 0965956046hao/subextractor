@@ -319,6 +319,144 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
     return audio_files
 
 
+def synthesize_srt_capcut_multi(
+    video_id: str,
+    entries,
+    voice_map: dict,
+    default_voice: str = "BV421_vivn_streaming",
+    rate: str = "1.0",
+    log_fn=None,
+) -> List[Path]:
+    """Convert each SRT entry to an MP3 using ITS OWN CapCut voice (multi-voice dub).
+
+    `voice_map` maps SRT line number (1-based) → voice_type (from ``voice_map.json``
+    generated during translation). Entries without an entry fall back to
+    `default_voice`. Returns a list of MP3 paths aligned to `entries` — the same
+    contract as `synthesize_srt_capcut` — so the rest of the dubbing pipeline
+    (`combine_tts_mp3`, mix, mux) is unchanged.
+    """
+    from app.services.capcut_tts_client import generate_segments_to_dir
+
+    voice_key = default_voice.replace("-", "_")
+    out_dir = settings.temp_dir / "tts" / video_id / voice_key
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    total = len(entries)
+    audio_files: List[Path] = [None] * total
+    synth_ok = 0
+    synth_fail = 0
+    failed: List[int] = []
+
+    # Group entries by voice so each distinct voice becomes ONE CapCut batch job.
+    groups: dict[str, list] = {}
+    for i, e in enumerate(entries):
+        voice = voice_map.get(i + 1) or default_voice
+        groups.setdefault(voice, []).append(i)
+
+    if log_fn:
+        log_fn(f"Nhiều giọng: tổng hợp {total} dòng bằng {len(groups)} giọng CapCut khác nhau...")
+
+    import re
+
+    def _write_found(voice_prefix: str, written, idxs):
+        nonlocal synth_ok
+        written_names = {p.name for p in written}
+        found = []
+        for pos, i in enumerate(idxs):
+            target = out_dir / f"{i + 1:04d}.mp3"
+            if target.exists():
+                audio_files[i] = target
+                synth_ok += 1
+                found.append(i)
+                continue
+            seg = out_dir / f"{voice_prefix}_{pos + 1:04d}.mp3"
+            if seg.name in written_names and seg.exists():
+                seg.rename(target)
+                audio_files[i] = target
+                synth_ok += 1
+                found.append(i)
+                continue
+            failed.append(i)
+        return found
+
+    for voice, idxs in groups.items():
+        idxs = [i for i in idxs if entries[i].text.strip()]
+        if not idxs:
+            continue
+        texts = [entries[i].text.strip() for i in idxs]
+        # Unique prefix per voice so per-group files never collide in out_dir.
+        prefix = "mv_" + re.sub(r"[^A-Za-z0-9_]", "_", voice)[:40]
+        if log_fn:
+            log_fn(f"  Giọng {voice}: {len(idxs)} dòng...")
+        try:
+            written = generate_segments_to_dir(
+                texts,
+                out_dir,
+                voice=voice,
+                rate=rate,
+                prefix=prefix,
+                progress_callback=None,
+            )
+        except Exception as e:
+            logger.warning("CapCut multi-voice job failed for %s: %s", voice, e)
+            written = []
+        _write_found(prefix, written, idxs)
+
+    # Fallback: any line whose assigned voice failed → retry with the DEFAULT voice.
+    if failed:
+        retry_idxs = [i for i in failed if entries[i].text.strip()]
+        if log_fn:
+            log_fn(f"  {len(retry_idxs)} dòng thất bại với giọng đã chọn — thử lại bằng giọng mặc định {default_voice}...")
+        retry_texts = [entries[i].text.strip() for i in retry_idxs]
+        prefix = "mv_" + re.sub(r"[^A-Za-z0-9_]", "_", default_voice)[:40]
+        try:
+            written = generate_segments_to_dir(
+                retry_texts,
+                out_dir,
+                voice=default_voice,
+                rate=rate,
+                prefix=prefix,
+                progress_callback=None,
+            )
+        except Exception as e:
+            logger.warning("CapCut fallback default-voice job failed: %s", e)
+            written = []
+        written_names = {p.name for p in written}
+        still_failed = []
+        for pos, i in enumerate(retry_idxs):
+            target = out_dir / f"{i + 1:04d}.mp3"
+            if target.exists():
+                audio_files[i] = target
+                synth_ok += 1
+                continue
+            seg = out_dir / f"{prefix}_{pos + 1:04d}.mp3"
+            if seg.name in written_names and seg.exists():
+                seg.rename(target)
+                audio_files[i] = target
+                synth_ok += 1
+                continue
+            still_failed.append(i)
+        failed = still_failed
+
+    # Final fallback: silence for anything still missing.
+    for i in failed:
+        if not entries[i].text.strip():
+            continue
+        idx = i + 1
+        synth_fail += 1
+        silent_path = out_dir / f"{idx:04d}.mp3"
+        _create_silence(silent_path, max(entries[i].end - entries[i].start, 0.5))
+        audio_files[i] = silent_path
+
+    logger.info("CapCut multi-voice TTS complete: %d audio files in %s", synth_ok, out_dir)
+    if log_fn:
+        ok_note = f"CapCut multi-voice TTS xong: {synth_ok} file giọng nói."
+        if synth_fail:
+            ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
+        log_fn(ok_note, level="success" if synth_fail == 0 else "warning")
+    return audio_files
+
+
 def _create_silence(out_path: Path, duration_sec: float):
     """Create a silent MP3 placeholder using FFmpeg."""
     try:

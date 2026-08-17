@@ -9,6 +9,22 @@ from app.services.retry_utils import gemini_retry
 
 logger = logging.getLogger(__name__)
 
+VOICE_CATALOG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "capcut-tts-api" / "Voice.json"
+
+
+def _load_capcut_voice_catalog() -> str:
+    """Load the vi-VN CapCut voice catalog as a formatted list for the prompt."""
+    try:
+        data = json.loads(VOICE_CATALOG_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("Không đọc được Voice.json (%s)", e)
+        return ""
+    voices = [v for v in data if v.get("lang") == "vi-VN" and v.get("display_name")]
+    if not voices:
+        return ""
+    lines = [f"- {v['voice_type']} ({v['display_name']})" for v in voices]
+    return "\n".join(lines)
+
 CONTEXT_DIR_NAME = "context"
 CONTEXT_FILE_NAME = "context.txt"
 FILES_INDEX_NAME = "gemini_files.json"
@@ -207,6 +223,18 @@ def generate_video_context(video_id: str) -> str | None:
         )
 
     try:
+        voice_catalog = _load_capcut_voice_catalog()
+        voice_instruction = ""
+        if voice_catalog:
+            voice_instruction = (
+                "\n\nDANH SÁCH GIỌNG ĐỌC CAPCUT CÓ SẴN (voice_type + tên hiển thị):\n"
+                f"{voice_catalog}\n\n"
+                "Ở cuối phần mô tả, thêm mục 'GIỌNG LỒNG TIẾNG ĐỀ XUẤT' gồm các dòng "
+                "'- Tên nhân vật: voice_type (tên hiển thị)' — chọn giọng phù hợp NHẤT cho từng "
+                "nhân vật dựa trên giới tính, độ tuổi, tính cách và giọng nói đã mô tả ở trên. "
+                "MỖI NHÂN VẬT CHỈ GÁN 1 GIỌNG DUY NHẤT. "
+                "Chỉ chọn từ danh sách có sẵn, không tự đặt tên giọng mới."
+            )
         response = gemini_retry(client.models.generate_content)(
             model=settings.gemini_model,
             contents=[
@@ -216,12 +244,16 @@ def generate_video_context(video_id: str) -> str | None:
                 "Describe in Vietnamese (4-6 sentences), including:\n"
                 "- Content type (phim cổ trang / hiện đại / hoạt hình / tài liệu / tutorial...)\n"
                 "- Time period and setting (bối cảnh lịch sử, không gian)\n"
-                "- Main characters: count, gender (nam/nữ), estimated age, relationships\n"
+                "- Main characters: count, gender (nam/nữ), estimated age, voice characteristics "
+                "(cao/thấp, trầm/thanh, tốc độ nói, giọng già/trẻ), personality, relationships\n"
                 "- How characters address each other (xưng hô: huynh-đệ, anh-em, ngài-tiểu nhân, bạn-cậu...)\n"
                 "- Overall tone (nghiêm túc / hài hước / hành động / lãng mạn...)\n"
                 "- Any notable visual style, costumes, or recurring text on screen\n\n"
+                "Mô tả chi tiết GIỌNG NÓI của từng nhân vật chính (giới tính, độ tuổi, âm vực, "
+                "tính cách thể hiện qua giọng) để phục vụ việc chọn giọng đọc lồng tiếng phù hợp."
                 "Be specific and detailed. This context will be used to improve subtitle translation accuracy."
-                + hint_text,
+                + hint_text
+                + voice_instruction,
             ],
         )
 

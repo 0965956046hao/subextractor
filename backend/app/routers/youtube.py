@@ -31,6 +31,7 @@ class ListFilesRequest(BaseModel):
 
 class GenerateMetaRequest(BaseModel):
     title: str = ""
+    ctr_title: str = ""
     description: str = ""
     tags: list[str] = []
     hashtags: list[str] = []
@@ -109,6 +110,7 @@ async def generate_meta(body: GenerateMetaRequest, request: Request):
 
 {{
   "title": "Vietnamese title here",
+  "ctr_title": "Giật tít hấp dẫn bấm vào để xem",
   "description": "Full Vietnamese description with \\n line breaks",
   "tags": ["tag1", "tag2", ...],
   "hashtags": ["#Hashtag1", "#Hashtag2", ...],
@@ -119,6 +121,7 @@ async def generate_meta(body: GenerateMetaRequest, request: Request):
 
 Rules:
 - title: catchy Vietnamese title, include episode number if provided
+- ctr_title: 3-5 đề xuất tiêu đề giật tít (clickbait) bằng tiếng Việt để tăng CTR, tách nhau bởi " | ". Mỗi tiêu đề ngắn gọn, kích thích tò mò, gây sốc nhẹ nhưng KHÔNG bịa nội dung không có trong video
 - description: detailed Vietnamese description with paragraphs separated by \\n\\n, include info about genre, episode number, series name
 - tags: 10-15 relevant search keywords in Vietnamese and original language
 - hashtags: 8-10 hashtags with # prefix, no spaces (CamelCase format)
@@ -159,6 +162,7 @@ Original description: {body.original_description or "unknown"}
 
     # Ensure all required fields
     meta.setdefault("title", body.title)
+    meta.setdefault("ctr_title", body.ctr_title)
     meta.setdefault("description", body.description)
     meta.setdefault("tags", body.tags or [])
     meta.setdefault("hashtags", body.hashtags or [])
