@@ -694,6 +694,7 @@ async def run_risk_check_job(
         fn = functools.partial(
             run_risk_check_sync,
             loop, job_id, jobs, ws_clients, job["video_id"],
+            job.get("lang", "vi"),
         )
 
         await asyncio.wait_for(

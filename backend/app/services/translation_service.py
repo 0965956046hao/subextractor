@@ -238,7 +238,6 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
 
 
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None) -> str:
-    """Translate SRT file using Gemini and save as translated_vi.srt."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
         if not custom_path.exists():
@@ -387,10 +386,11 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             if log_fn:
                 log_fn(f"  Batch {bi + 1}: đã cập nhật ngữ cảnh ({len(note)} ký tự) cho các batch tiếp theo.")
 
-    # Save translated SRT
+    # Save translated SRT, named by target language so multiple translations
+    # (zh / en / vi) can coexist per video.
     out_dir = settings.temp_dir / "translated" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "subtitles_vi.srt"
+    out_path = out_dir / f"subtitles_{target_lang}.srt"
     out_content = entries_to_srt(translated_entries)
     out_path.write_text(out_content, encoding="utf-8")
 
@@ -402,7 +402,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
 
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)
     if log_fn:
-        log_fn(f"Đã dịch xong {len(translated_entries)}/{len(entries)} dòng, lưu file SRT tiếng Việt.", level="success")
+        lang_label = LANG_NAMES.get(target_lang, target_lang)
+        log_fn(f"Đã dịch xong {len(translated_entries)}/{len(entries)} dòng, lưu file SRT {lang_label}.", level="success")
     return out_content
 
 

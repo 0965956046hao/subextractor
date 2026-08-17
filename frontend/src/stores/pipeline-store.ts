@@ -14,14 +14,14 @@ function sanitizeFilename(name: string): string {
 }
 
 export const STEPS = [
-  { label: "Phân tích link", detail: "Mở link Douyin lấy URL video" },
+  { label: "Phân tích link", detail: "Lấy URL / tải video theo nguồn (Douyin/YouTube)" },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
   { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
   { label: "Chỉnh kích thước & vị trí sub", detail: "Xem trước, chỉnh cỡ chữ và vị trí" },
   { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
-  { label: "Dịch Gemini", detail: "Dịch phụ đề sang tiếng Việt" },
-  { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền" },
+  { label: "Dịch Gemini", detail: "Dịch tự động sang Trung / Anh / Việt (có thể tắt)" },
+  { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền (có thể tắt)" },
   { label: "Nhúng SRT vào video", detail: "FFmpeg gộp SRT mới vào MP4" },
   { label: "Tạo meta", detail: "Gemini tạo tiêu đề/mô tả/tags từ ngữ cảnh" },
   { label: "Cập nhật thumbnail", detail: "fal.ai chỉnh lại thumbnail 16:9 + tiêu đề" },
@@ -97,6 +97,9 @@ export interface Pipeline {
   ocrEngine: string;
   ocrLang: string;
   srcLang: string;
+  translateOn: boolean;
+  translateTarget: string;
+  dubOn: boolean;
   contextOn: boolean;
   meta: Record<string, unknown> | null;
   region: Region | null;
@@ -148,7 +151,21 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, autoUploadYoutube?: boolean, useFalThumbnail?: boolean) => string;
+addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, autoUploadYoutube?: boolean, useFalThumbnail?: boolean, srcLang?: string, translateOn?: boolean, translateTarget?: string, dubOn?: boolean) => string;
+  addPipelineFromUpload: (input: {
+    videoId: string;
+    filename: string;
+    srcLang?: string;
+    regionMode?: "manual" | "auto";
+    dub?: Partial<DubOptions>;
+    autoFit?: boolean;
+    watermark?: boolean;
+    watermarkPreset?: string;
+    checkSubs?: boolean;
+    translateOn?: boolean;
+    translateTarget?: string;
+    dubOn?: boolean;
+  }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
@@ -173,12 +190,16 @@ function newPipeline(
   url: string,
   regionMode: "manual" | "auto" = "manual",
   dub: Partial<DubOptions> = {},
-  autoFit = true,
+  autoFit = false,
   watermark = false,
   watermarkPreset = "",
   checkSubs = false,
-  autoUploadYoutube = false,
+autoUploadYoutube = false,
   useFalThumbnail = true,
+  srcLang = "",
+  translateOn = true,
+  translateTarget = "vi",
+  dubOn = true,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -206,8 +227,11 @@ function newPipeline(
     stepSkipped: emptySteps(false),
     failedStep: null,
     ocrEngine: "",
-    ocrLang: "",
-    srcLang: "",
+    ocrLang: srcLang ? detectOcrLang(srcLang) : "",
+    srcLang,
+    translateOn,
+    translateTarget,
+    dubOn,
     contextOn: false,
     meta: null,
     region: null,
@@ -247,11 +271,45 @@ export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, autoUploadYoutube = false, useFalThumbnail = true) => {
+addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, autoUploadYoutube = false, useFalThumbnail = true, srcLang = "", translateOn = true, translateTarget = "vi", dubOn = true) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, autoUploadYoutube, useFalThumbnail)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, autoUploadYoutube, useFalThumbnail, srcLang, translateOn, translateTarget, dubOn)] }));
     runPrep(id);
     schedulePersist();
+    return id;
+  },
+  addPipelineFromUpload: (input) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const p = newPipeline(
+      id,
+      input.filename,
+      input.regionMode ?? "auto",
+      input.dub ?? {},
+      input.autoFit ?? true,
+      input.watermark ?? false,
+      input.watermarkPreset ?? "",
+      input.checkSubs ?? false,
+      false,
+      true,
+      input.srcLang ?? "zh",
+      input.translateOn ?? true,
+      input.translateTarget ?? "vi",
+      input.dubOn ?? true,
+    );
+    // Uploaded file is already registered on the backend: skip resolve + merge
+    // and start directly at region selection (step 2).
+    set((s) => ({
+      pipelines: [
+        ...s.pipelines,
+        {
+          ...p,
+          videoId: input.videoId,
+          title: input.filename,
+          originalName: sanitizeFilename(input.filename) || "video",
+        },
+      ],
+    }));
+    runPrep(id, 2);
     return id;
   },
   importActive: (v) => {
@@ -474,6 +532,10 @@ function detectSourceLang(url: string): string {
   if (/douyin\.com/i.test(url)) return "zh";
   if (/tiktok\.com/i.test(url)) return "en";
   return "zh";
+}
+
+function isYouTubeUrl(url: string): boolean {
+  return /(^|\.)youtube\.com|youtu\.be|youtube-nocookie\.com/i.test(url);
 }
 
 function detectOcrLang(sourceLang: string): string {
@@ -919,98 +981,132 @@ async function runPrep(id: string, startStep = 0) {
       const cleaned = extractUrl(rawUrl);
       if (!cleaned) throw new Error("Không tìm thấy link (https://...) trong nội dung đã dán.");
       markStepStart(id, 0);
-      appendLog(id, "Đang phân tích link...");
-      const r = await fetch("/api/video-download/resolve", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ url: cleaned }),
-      });
-      const rd = await r.json();
-      if (!r.ok) throw new Error(rd.detail || "Không thể phân tích link");
-      videoUrl = rd.video_url ?? null;
-      audioUrl = rd.audio_url ?? null;
-      sourceLang = detectSourceLang(cleaned);
-      ocrLang = detectOcrLang(sourceLang);
-      originalName = sanitizeFilename(rd.title || "") || "video";
-      patch(id, {
-        videoUrl,
-        audioUrl,
-        title: rd.title || "",
-        originalName,
-        srcLang: sourceLang,
-        ocrLang,
-        ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
-      });
-      appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
-      markStepEnd(id, 0);
-
-      // Luồng puppeteer riêng lấy thumbnail (sau khi có URL video)
-      try {
-        const tr = await fetch("/api/video-download/thumbnail", {
+if (isYouTubeUrl(cleaned)) {
+        // YouTube: yt-dlp downloads + merges server-side → import directly.
+        appendLog(id, "Đang tải video từ YouTube (yt-dlp)...");
+        const yr = await fetch("/api/video-download/yt-import", {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify({ url: cleaned }),
         });
-        const td = await tr.json();
-        if (td.thumbnail) {
-          thumbUrl = td.thumbnail;
-          patch(id, { thumbnail: td.thumbnail });
-          appendLog(id, `Thumbnail: ${td.thumbnail}`);
-        } else {
+        const yd = await yr.json();
+        if (!yr.ok) throw new Error(yd.detail || "Không thể tải video YouTube");
+        videoId = yd.video_id;
+        sourceLang = cur.srcLang || detectSourceLang(cleaned);
+        ocrLang = detectOcrLang(sourceLang);
+        originalName = sanitizeFilename(yd.title || yd.filename || "") || "youtube";
+        patch(id, {
+          videoId,
+          videoUrl: null,
+          audioUrl: null,
+          title: yd.title || yd.filename || "",
+          originalName,
+          srcLang: sourceLang,
+          ocrLang,
+          ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
+        });
+        appendLog(id, `Đã tải video YouTube: ${yd.title || yd.filename || videoId} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+        markStepEnd(id, 0);
+      } else {
+        appendLog(id, "Đang phân tích link...");
+        const r = await fetch("/api/video-download/resolve", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ url: cleaned }),
+        });
+        const rd = await r.json();
+        if (!r.ok) throw new Error(rd.detail || "Không thể phân tích link");
+        videoUrl = rd.video_url ?? null;
+        audioUrl = rd.audio_url ?? null;
+        sourceLang = detectSourceLang(cleaned);
+        ocrLang = detectOcrLang(sourceLang);
+        originalName = sanitizeFilename(rd.title || "") || "video";
+        patch(id, {
+          videoUrl,
+          audioUrl,
+          title: rd.title || "",
+          originalName,
+          srcLang: sourceLang,
+          ocrLang,
+          ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
+        });
+        appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+        markStepEnd(id, 0);
+
+        // Luồng puppeteer riêng lấy thumbnail (sau khi có URL video)
+        try {
+          const tr = await fetch("/api/video-download/thumbnail", {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ url: cleaned }),
+          });
+          const td = await tr.json();
+          if (td.thumbnail) {
+            thumbUrl = td.thumbnail;
+            patch(id, { thumbnail: td.thumbnail });
+            appendLog(id, `Thumbnail: ${td.thumbnail}`);
+          } else {
+            appendLog(id, "Thumbnail: không lấy được");
+          }
+        } catch {
           appendLog(id, "Thumbnail: không lấy được");
         }
-      } catch {
-        appendLog(id, "Thumbnail: không lấy được");
       }
     }
 
     // 1. Merge + import (silent)
     if (startStep <= 1) {
-      let mergeId = "";
-      if (audioUrl && videoUrl) {
-        patch(id, { stage: "merging" });
-        markStepStart(id, 1);
-        appendLog(id, "Phát hiện 2 file riêng (video + audio) → merge...");
-        const mr = await fetch("/api/video-merge", {
-          method: "POST",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ video_url: videoUrl, audio_url: audioUrl }),
-        });
-        const md = await mr.json();
-        if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
-        const ms = await pollMerge(md.job_id, tick(1));
-        if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
-        mergeId = (ms.filename || "").replace(/\.mp4$/, "");
-        appendLog(id, "Merge xong.");
-        markStepEnd(id, 1);
-      } else {
+      if (videoId) {
+        // Already imported (YouTube): yt-dlp đã merge sẵn video + audio.
         markStepSkipped(id, 1);
-        appendLog(id, "Chỉ 1 file video (đã có audio).");
-      }
+        appendLog(id, "Video YouTube đã có sẵn audio (yt-dlp gộp sẵn).");
+      } else {
+        let mergeId = "";
+        if (audioUrl && videoUrl) {
+          patch(id, { stage: "merging" });
+          markStepStart(id, 1);
+          appendLog(id, "Phát hiện 2 file riêng (video + audio) → merge...");
+          const mr = await fetch("/api/video-merge", {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ video_url: videoUrl, audio_url: audioUrl }),
+          });
+          const md = await mr.json();
+          if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
+          const ms = await pollMerge(md.job_id, tick(1));
+          if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
+          mergeId = (ms.filename || "").replace(/\.mp4$/, "");
+          appendLog(id, "Merge xong.");
+          markStepEnd(id, 1);
+        } else {
+          markStepSkipped(id, 1);
+          appendLog(id, "Chỉ 1 file video (đã có audio).");
+        }
 
-      appendLog(id, "Đăng ký video vào hệ thống...");
-      const impName = `${originalName || "video"}.mp4`;
-      const impBody = mergeId
-        ? { merge_id: mergeId, filename: impName }
-        : { url: videoUrl, filename: impName };
-      const ir = await fetch("/api/import-video", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify(impBody),
-      });
-      const idata = await ir.json();
-      if (!ir.ok) throw new Error(idata.detail || "Import thất bại");
-      videoId = idata.video_id;
-      patch(id, { videoId });
-      appendLog(id, `Video ID: ${videoId}`);
-      try {
-        await fetch(`/api/context/${videoId}/share-text`, {
+        appendLog(id, "Đăng ký video vào hệ thống...");
+        const impName = `${originalName || "video"}.mp4`;
+        const impBody = mergeId
+          ? { merge_id: mergeId, filename: impName }
+          : { url: videoUrl, filename: impName };
+        const ir = await fetch("/api/import-video", {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ text: rawUrl }),
+          body: JSON.stringify(impBody),
         });
-      } catch {
-        // ignore
+        const idata = await ir.json();
+        if (!ir.ok) throw new Error(idata.detail || "Import thất bại");
+        videoId = idata.video_id;
+        patch(id, { videoId });
+        appendLog(id, `Video ID: ${videoId}`);
+        try {
+          await fetch(`/api/context/${videoId}/share-text`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ text: rawUrl }),
+          });
+        } catch {
+          // ignore
+        }
       }
       if (thumbUrl) {
         try {
@@ -1170,6 +1266,12 @@ async function runPipeline(id: string, startStep = 4) {
 
     // 5. Context
     if (startStep <= 5) {
+      const translateSkipped =
+        cur.translateOn === false || sourceLang === (cur.translateTarget || "vi");
+      if (translateSkipped) {
+        appendLog(id, "Bỏ qua phân tích ngữ cảnh (không dùng dịch tự động).");
+        markStepSkipped(id, 5);
+      } else {
       patch(id, { stage: "context" });
       markStepStart(id, 5);
       // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
@@ -1203,88 +1305,99 @@ async function runPipeline(id: string, startStep = 4) {
         }
       }
       markStepEnd(id, 5);
+      }
     }
 
     // 6. Translate + save
     if (startStep <= 6) {
       patch(id, { stage: "translating" });
       markStepStart(id, 6);
-// Resume: nếu bản dịch đã tồn tại thì bỏ qua POST translate, dùng thẳng kết quả.
-      let translatedExists = false;
-      try {
-        const trCheck = await fetch(`/api/download/translated/${videoId}`);
-        translatedExists = trCheck.ok;
-      } catch {
-        // ignore
-      }
-      if (!translatedExists) {
-        appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
-        const tr = await fetch(`/api/translate/${videoId}`, {
-          method: "POST",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({
-            source_lang: sourceLang,
-            target_lang: "vi",
-            multi_voice: cur.multiVoice,
-          }),
-        });
-        const td = await tr.json();
-        if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-        const ts = await pollJob(td.job_id, tick(6));
-        if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
-        appendLog(id, "Dịch xong.");
+const translateTarget = cur.translateTarget || "vi";
+
+      if (cur.translateOn === false) {
+        appendLog(id, "Đã tắt dịch tự động — giữ nguyên phụ đề gốc.");
+        markStepSkipped(id, 6);
+      } else if (sourceLang === translateTarget) {
+        appendLog(id, `Ngôn ngữ đích (${langLabel(translateTarget)}) trùng ngôn ngữ gốc — giữ nguyên phụ đề gốc.`);
+        markStepSkipped(id, 6);
       } else {
-        appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
-      }
-
-      patch(id, { stage: "saving" });
-      appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
-      const srtRes = await fetch(`/api/download/translated/${videoId}`);
-      const srtText = await srtRes.text();
-      await fetch(`/api/srt/${videoId}`, {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ content: srtText }),
-      });
-
-      // Optional: always pause for the user to review the translated SRT in the
-      // timeline-check popup (only when checkSubs is on). No auto-skip.
-      if (cur.checkSubs && videoId) {
-        appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
+        // Resume: nếu bản dịch đúng ngôn ngữ đích đã tồn tại thì dùng thẳng kết quả.
+        let translatedExists = false;
         try {
-          const checkRes = await fetch(`/api/srt/${videoId}/validate`);
-          const checkData = await checkRes.json();
-          const issues: TimelineIssue[] = checkData.issues ?? [];
-          patch(id, {
-            timelineCheck: { waiting: true, open: false, issues, fixing: false },
-          });
-          appendLog(
-            id,
-            issues.length > 0
-              ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
-              : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
-          );
-          patch(id, { resumeStep: 7 });
-          const choice = await waitForTimelineCheck(id);
-          if (choice === "fix") {
-            appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
-          } else {
-            appendLog(id, "Bỏ qua — giữ nguyên timeline hiện tại.");
-          }
-        } catch (e) {
-          appendLog(id, `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`);
-        } finally {
-          patch(id, { timelineCheck: null });
+          const trCheck = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+          translatedExists = trCheck.ok;
+        } catch {
+          // ignore
         }
-      }
+        if (!translatedExists) {
+          appendLog(id, `Dịch Gemini (${langLabel(sourceLang)} → ${langLabel(translateTarget)})...`);
+          const tr = await fetch(`/api/translate/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ source_lang: sourceLang, target_lang: translateTarget, multi_voice: cur.multiVoice }),
+          });
+          const td = await tr.json();
+          if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
+          const ts = await pollJob(td.job_id, tick(6));
+          if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
+          appendLog(id, "Dịch xong.");
+        } else {
+          appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
+        }
 
-      markStepEnd(id, 6);
+        patch(id, { stage: "saving" });
+        appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
+        const srtRes = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+        const srtText = await srtRes.text();
+        await fetch(`/api/srt/${videoId}`, {
+          method: "PUT",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ content: srtText }),
+        });
+
+        // Optional: always pause for the user to review the translated SRT in the
+        // timeline-check popup (only when checkSubs is on). No auto-skip.
+        if (cur.checkSubs && videoId) {
+          appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
+          try {
+            const checkRes = await fetch(`/api/srt/${videoId}/validate`);
+            const checkData = await checkRes.json();
+            const issues: TimelineIssue[] = checkData.issues ?? [];
+            patch(id, {
+              timelineCheck: { waiting: true, open: false, issues, fixing: false },
+            });
+            appendLog(
+              id,
+              issues.length > 0
+                ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
+                : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
+            );
+            patch(id, { resumeStep: 7 });
+            const choice = await waitForTimelineCheck(id);
+            if (choice === "fix") {
+              appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
+            } else {
+              appendLog(id, "Bỏ qua — giữ nguyên timeline hiện tại.");
+            }
+          } catch (e) {
+            appendLog(id, `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`);
+          } finally {
+            patch(id, { timelineCheck: null });
+          }
+        }
+
+        markStepEnd(id, 6);
+      }
     }
 
     // 7. Dub
     if (startStep <= 7) {
       patch(id, { stage: "dub" });
       markStepStart(id, 7);
+      if (cur.dubOn === false) {
+        appendLog(id, "Đã tắt lồng tiếng tự động — bỏ qua bước lồng tiếng.");
+        markStepSkipped(id, 7);
+      } else {
       // Resume: nếu video lồng tiếng đã tồn tại thì bỏ qua.
       let dubbedExists = false;
       try {
@@ -1340,6 +1453,7 @@ async function runPipeline(id: string, startStep = 4) {
         }
         markStepEnd(id, 7);
       }
+    }
     }
 
     // 8. Hardcode

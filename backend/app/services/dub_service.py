@@ -7,7 +7,13 @@ from typing import List
 
 from app.config import settings
 from app.services.srt_utils import parse_srt
-from app.services.media_utils import _srt_path, _video_path, _get_audio_duration
+from app.services.media_utils import (
+    _srt_path,
+    _video_path,
+    _get_audio_duration,
+    _get_video_resolution,
+    target_dims_min1080,
+)
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
 from app.services.translation_service import load_voice_map, generate_voice_map
@@ -329,6 +335,10 @@ def dub_video_with_tts(
         return out_path
     if log_fn:
         log_fn("Mux audio lồng tiếng vào video (FFmpeg)...")
+    vw, vh = _get_video_resolution(str(video_path))
+    tw, th = target_dims_min1080(vw, vh)
+    if (tw, th) != (vw, vh) and log_fn:
+        log_fn(f"Nâng độ phân giải video: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
     subprocess.run(
         [
             "ffmpeg", "-y",
@@ -336,7 +346,8 @@ def dub_video_with_tts(
             "-i", str(full_audio),
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+            "-vf", f"scale={tw}:{th}:flags=lanczos",
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium",
             "-c:a", "copy",
             "-shortest",
             str(out_path),

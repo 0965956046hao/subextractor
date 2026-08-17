@@ -62,6 +62,26 @@ Frontend: http://localhost:3000
 5. Kéo chuột chọn vùng phụ đề trên frame đầu
 6. Chờ xử lý (xem tiến trình + log realtime) → xem / tải file `.srt`
 
+## DS2API (DeepSeek → OpenAI/Claude/Gemini proxy)
+
+`./dev.sh` tự động start **ds2api** (port `5001`) cùng backend/frontend/capcut-tts-api.
+
+- **WebUI Admin:** http://localhost:5001/admin — quản lý tài khoản DeepSeek, API keys, test API
+- **Admin key:** `test-admin` (override bằng env `DS2API_ADMIN_KEY`)
+- **Config:** `ds2api/config.json` — thêm account DeepSeek (`email` + `password`) và client keys ở đây (hoặc qua WebUI Admin)
+- **Sửa config xong cần restart** ds2api (config chỉ nạp 1 lần lúc start, không hot-reload)
+
+Ví dụ gọi API (chuẩn OpenAI):
+
+```bash
+curl http://localhost:5001/v1/chat/completions \
+  -H "Authorization: Bearer <client-key-trong-config>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"Xin chào"}]}'
+```
+
+> Lưu ý: model dùng là `deepseek-v4-flash` / `deepseek-v4-pro` (xem `/v1/models`). Client key phải nằm trong `ds2api/config.json` → `keys`/`api_keys`.
+
 ## Project Structure
 
 ```
@@ -101,6 +121,11 @@ SubTitleExtractor/
 │   │       ├── api.ts           # Axios + WS helpers
 │   │       └── animation.tsx    # Animations dùng chung
 │   └── package.json
+├── capcut-tts-api/             # CapCut TTS service (port 8100)
+├── ds2api/                     # DeepSeek → OpenAI/Claude/Gemini proxy (port 5001)
+│   ├── config.json             # Account DeepSeek + client keys (adminkey mặc định: test-admin)
+│   └── cmd/ds2api/             # Entry Go
+├── dev.sh                      # Start tất cả services cùng lúc
 ├── AGENTS.md                  # Project instructions
 └── PLAN.md                    # Kiến trúc & plan
 ```

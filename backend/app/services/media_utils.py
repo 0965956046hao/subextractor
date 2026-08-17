@@ -51,6 +51,33 @@ def _get_video_resolution(video_path: str) -> tuple[int, int]:
         return 1920, 1080
 
 
+def target_dims_min1080(vw: int, vh: int) -> tuple[int, int]:
+    """Upscale so the short edge is at least 1080, preserving aspect ratio.
+
+    Returns even dimensions (required by H.264/yuv420p). Sources already >=1080
+    on the short edge are returned unchanged. Used by every export path so the
+    output video — and anything burned into it (subtitles, logo) — is rendered
+    crisply at 1080p+ instead of being upscaled by the player later.
+    """
+    if vw <= 0 or vh <= 0:
+        return 1920, 1080
+    if min(vw, vh) >= 1080:
+        return vw, vh
+
+    def _even(n: float) -> int:
+        return max(2, int(round(n)) // 2 * 2)
+
+    if vw <= vh:  # portrait / square: width is the short edge
+        tw = 1080
+        th = _even(vh * tw / vw)
+        th = max(th, 1080)
+    else:  # landscape: height is the short edge
+        th = 1080
+        tw = _even(vw * th / vh)
+        tw = max(tw, 1080)
+    return tw, th
+
+
 def _get_audio_duration(path: Path) -> float:
     """Return audio duration in seconds via ffprobe (0.0 on failure)."""
     try:

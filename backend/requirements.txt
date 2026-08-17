@@ -14,4 +14,4 @@ google-genai>=1.0.0
 google-cloud-texttospeech>=2.16.0
 fal-client>=0.6.0
 demucs
-fal-client 
+yt-dlp>=2025.0.0

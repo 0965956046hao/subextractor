@@ -5,7 +5,7 @@ import shlex
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from app.config import settings
@@ -110,6 +110,13 @@ async def update_srt(video_id: str, body: UpdateSrtRequest):
 async def start_risk_check(video_id: str, request: Request):
     _srt_path(video_id)
 
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    lang = str(body.get("lang", "vi") or "vi")
+
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
@@ -124,6 +131,7 @@ async def start_risk_check(video_id: str, request: Request):
         "progress": 0,
         "error": None,
         "cancelled": False,
+        "lang": lang,
     }
     jobs[job_id] = job
     logger.info("risk-check job %s: queued for %s", job_id, video_id)
@@ -487,14 +495,18 @@ async def translate_subtitles(video_id: str, request: Request):
 # ── GET /api/download/translated/{video_id} ──
 
 @router.get("/api/download/translated/{video_id}")
-async def download_translated(video_id: str):
+async def download_translated(video_id: str, lang: str = Query("vi")):
     tr_dir = settings.temp_dir / "translated" / video_id
     if not tr_dir.exists():
         raise HTTPException(404, "Translated SRT not found. Run translate first.")
-    files = list(tr_dir.glob("*.srt"))
-    if not files:
-        raise HTTPException(404, "Translated SRT not found. Run translate first.")
-    path = files[0]
+    # Prefer the language-specific file; fall back to the only remaining .srt
+    # (legacy files named subtitles_vi.srt / input.srt) for backward compat.
+    path = tr_dir / f"subtitles_{lang}.srt"
+    if not path.exists():
+        files = list(tr_dir.glob("*.srt"))
+        if not files:
+            raise HTTPException(404, "Translated SRT not found. Run translate first.")
+        path = files[0]
     return FileResponse(str(path), media_type="application/x-subrip", filename=path.name)
 
 
