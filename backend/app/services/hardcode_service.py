@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.srt_utils import parse_srt
-from app.services.media_utils import _get_duration, _get_video_resolution
+from app.services.media_utils import _get_duration, _get_video_resolution, target_dims_min1080
 from app.services.job_utils import JobCancelled, notify_ws_sync
 from app.routers.config_router import get_subtitle_style
 
@@ -480,8 +480,15 @@ def burn_subtitles_pillow(
     style: dict | None = None,
     fixed_size: bool = False,
     watermark: dict | None = None,
+    target_size: tuple[int, int] | None = None,
 ):
-    """Burn subtitles using OpenCV + Pillow (no libass required)."""
+    """Burn subtitles using OpenCV + Pillow (no libass required).
+
+    Frames are upscaled to ``target_size`` (>=1080 short edge) BEFORE the
+    subtitle/watermark are drawn, so text and logo are rendered crisply at the
+    final resolution instead of being upscaled afterwards. Frames are piped
+    straight into FFmpeg (single H.264 pass) — no lossy MPEG-4 intermediate.
+    """
     import cv2
 
     content = Path(srt_path_str).read_text(encoding="utf-8")
@@ -504,12 +511,29 @@ def burn_subtitles_pillow(
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = (total / fps) if fps and total else 0.0
 
-    tmp_path = str(Path(out_path).with_suffix(".burn.mp4"))
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(tmp_path, fourcc, fps, (vw, vh))
-    if not writer.isOpened():
-        cap.release()
-        raise RuntimeError("Cannot open video writer")
+    tw, th = target_size if target_size else target_dims_min1080(vw, vh)
+
+    # Single-pass H.264 encode: raw BGR frames piped into ffmpeg + muxed audio.
+    audio_in = audio_source or video_path_str
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-s", f"{tw}x{th}", "-r", f"{fps}",
+        "-i", "-",
+        "-i", audio_in,
+        "-map", "0:v:0",
+        "-map", "1:a:0?",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-shortest",
+        out_path,
+    ]
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
 
     cache = {}
     wm_cache = {}
@@ -518,6 +542,8 @@ def burn_subtitles_pillow(
         ret, frame = cap.read()
         if not ret:
             break
+        if tw != vw or th != vh:
+            frame = cv2.resize(frame, (tw, th), interpolation=cv2.INTER_LANCZOS4)
         ts = idx / fps
         active = [e for e in entries if e.start <= ts < e.end]
         if active:
@@ -527,46 +553,31 @@ def burn_subtitles_pillow(
             e = max(active, key=lambda x: (x.start, x.end))
             text = e.text
             if text not in cache:
-                cache[text] = _render_subtitle(text, vw, vh, font_path, style, fixed_size)
+                cache[text] = _render_subtitle(text, tw, th, font_path, style, fixed_size)
             frame = _overlay_subtitle(frame, cache[text])
         if watermark:
             wm_key = f"{int(ts * 10)}"
             if wm_key not in wm_cache:
-                wm_cache[wm_key] = _render_watermark_frame(vw, vh, ts, duration, watermark)
+                wm_cache[wm_key] = _render_watermark_frame(tw, th, ts, duration, watermark)
             wm = wm_cache[wm_key]
             if wm is not None:
                 frame = _overlay_subtitle(frame, wm)
-        writer.write(frame)
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(frame.tobytes())
+        except BrokenPipeError:
+            break
         idx += 1
         if progress_callback and total and idx % 10 == 0:
             progress_callback(min(90, int(idx / total * 90)))
 
     cap.release()
-    writer.release()
-
-    # Mux audio back onto the burned video (dubbed audio if available).
-    # Re-encode to H.264 (mp4v is MPEG-4 Part 2, unplayable in browsers).
-    audio_src = audio_source or video_path_str
-    subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", audio_src,
-            "-i", tmp_path,
-            "-map", "0:a:0",
-            "-map", "1:v:0",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "+faststart",
-            "-shortest",
-            out_path,
-        ],
-        check=True, capture_output=True, timeout=600,
-    )
-    Path(tmp_path).unlink(missing_ok=True)
+    assert proc.stdin is not None
+    proc.stdin.close()
+    err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+    ret = proc.wait()
+    if ret != 0:
+        raise RuntimeError(f"FFmpeg burn encode failed (code {ret}): {err[:1000]}")
 
     if progress_callback:
         progress_callback(100)
@@ -593,6 +604,9 @@ def run_hardcode_sync(
 
     total_dur = _get_duration(video_path_str)
     vw, vh = _get_video_resolution(video_path_str)
+    tw, th = target_dims_min1080(vw, vh)
+    if (tw, th) != (vw, vh):
+        _log(f"Nâng độ phân giải xuất: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
 
     srt_content = Path(srt_path_str).read_text(encoding="utf-8")
     style = get_subtitle_style()
@@ -608,7 +622,8 @@ def run_hardcode_sync(
             "hardcode job %s: manual style → font_size=%s margin_v=%s",
             job_id, style.get("font_size"), style.get("margin_v"),
         )
-    ass_content = srt_to_ass_blackbox(srt_content, vw, vh, style)
+    # ASS PlayRes = target dims so libass renders text crisply at the final size.
+    ass_content = srt_to_ass_blackbox(srt_content, tw, th, style)
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
     _log(f"Đã tạo file ASS phụ đề ({len(parse_srt(srt_content))} dòng) — chuẩn bị encode...")
@@ -633,22 +648,27 @@ def run_hardcode_sync(
         logger.info("hardcode job %s: using dubbed audio (%s)", job_id, audio_src.name)
         _log("Dùng audio đã lồng tiếng Việt (full_audio/dubbed).")
 
-    if not _has_subtitles_filter():
-        # ffmpeg lacks libass — fall back to OpenCV + Pillow burn
-        logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
-        _log("FFmpeg thiếu libass → dùng engine vẽ phụ đề (Pillow) từng khung hình.")
+    # Watermark (logo + scrolling text) is rendered only by the Pillow path, so
+    # when a watermark is configured we use Pillow even if libass is available.
+    has_libass = _has_subtitles_filter()
+    watermark = None
+    if job.get("watermark"):
+        from app.routers.config_router import get_watermark
+        watermark = get_watermark(job.get("watermark_preset"))
+        if watermark.get("text") or watermark.get("logo_path"):
+            logger.info("hardcode job %s: watermark ON (preset=%s, %s)", job_id, watermark.get("preset_id"), "text+logo" if watermark.get("logo_path") else "text")
+            _log(f"Bật watermark: {watermark.get('text') or 'logo'} (bộ: {watermark.get('preset_id') or 'default'}).")
+        else:
+            logger.info("hardcode job %s: watermark requested but no text/logo configured", job_id)
+            watermark = None
 
-        # Watermark (logo + scrolling text) is rendered by the Pillow path.
-        watermark = None
-        if job.get("watermark"):
-            from app.routers.config_router import get_watermark
-            watermark = get_watermark(job.get("watermark_preset"))
-            if watermark.get("text") or watermark.get("logo_path"):
-                logger.info("hardcode job %s: watermark ON (preset=%s, %s)", job_id, watermark.get("preset_id"), "text+logo" if watermark.get("logo_path") else "text")
-                _log(f"Bật watermark: {watermark.get('text') or 'logo'} (bộ: {watermark.get('preset_id') or 'default'}).")
-            else:
-                logger.info("hardcode job %s: watermark requested but no text/logo configured", job_id)
-                watermark = None
+    if not has_libass or watermark is not None:
+        if not has_libass:
+            logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
+            _log("FFmpeg thiếu libass → dùng engine vẽ phụ đề (Pillow) từng khung hình.")
+        elif watermark is not None:
+            logger.info("hardcode job %s: watermark requires Pillow burn", job_id)
+            _log("Có watermark (logo/chữ) → dùng engine vẽ phụ đề (Pillow) từng khung hình.")
 
         def progress_cb(pct: int):
             job["progress"] = pct
@@ -673,6 +693,7 @@ def run_hardcode_sync(
             # auto-fit or manual style must render at the exact size chosen.
             fixed_size=bool(job.get("auto_fit")) or bool(job.get("style")),
             watermark=watermark,
+            target_size=(tw, th),
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
@@ -684,11 +705,12 @@ def run_hardcode_sync(
             "ffmpeg",
             "-i", video_path_str,
             "-i", str(audio_src),
-            "-vf", f"subtitles={ass_filename}",
+            # Scale to >=1080 FIRST, then burn subtitles rendered at that size.
+            "-vf", f"scale={tw}:{th}:flags=lanczos,subtitles={ass_filename}",
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-c:v", "libx264",
-            "-crf", "23",
+            "-crf", "18",
             "-preset", "medium",
             "-c:a", "copy",
             "-shortest",
@@ -699,9 +721,9 @@ def run_hardcode_sync(
         cmd = [
             "ffmpeg",
             "-i", video_path_str,
-            "-vf", f"subtitles={ass_filename}",
+            "-vf", f"scale={tw}:{th}:flags=lanczos,subtitles={ass_filename}",
             "-c:v", "libx264",
-            "-crf", "23",
+            "-crf", "18",
             "-preset", "medium",
             "-c:a", "copy",
             "-y",

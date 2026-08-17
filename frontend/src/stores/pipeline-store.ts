@@ -14,7 +14,7 @@ function sanitizeFilename(name: string): string {
 }
 
 export const STEPS = [
-  { label: "Phân tích link", detail: "Mở link Douyin lấy URL video" },
+  { label: "Phân tích link", detail: "Lấy URL / tải video theo nguồn (Douyin/YouTube)" },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
   { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
   { label: "Chỉnh kích thước & vị trí sub", detail: "Xem trước, chỉnh cỡ chữ và vị trí" },
@@ -131,7 +131,18 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, srcLang?: string) => string;
+  addPipelineFromUpload: (input: {
+    videoId: string;
+    filename: string;
+    srcLang?: string;
+    regionMode?: "manual" | "auto";
+    dub?: Partial<DubOptions>;
+    autoFit?: boolean;
+    watermark?: boolean;
+    watermarkPreset?: string;
+    checkSubs?: boolean;
+  }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
@@ -159,6 +170,7 @@ function newPipeline(
   watermark = false,
   watermarkPreset = "",
   checkSubs = false,
+  srcLang = "",
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -184,8 +196,8 @@ function newPipeline(
     stepSkipped: emptySteps(false),
     failedStep: null,
     ocrEngine: "",
-    ocrLang: "",
-    srcLang: "",
+    ocrLang: srcLang ? detectOcrLang(srcLang) : "",
+    srcLang,
     contextOn: false,
     region: null,
     regionMode,
@@ -207,10 +219,39 @@ export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false) => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, srcLang = "") => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, srcLang)] }));
     runPrep(id);
+    return id;
+  },
+  addPipelineFromUpload: (input) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const p = newPipeline(
+      id,
+      input.filename,
+      input.regionMode ?? "auto",
+      input.dub ?? {},
+      input.autoFit ?? true,
+      input.watermark ?? false,
+      input.watermarkPreset ?? "",
+      input.checkSubs ?? false,
+      input.srcLang ?? "zh",
+    );
+    // Uploaded file is already registered on the backend: skip resolve + merge
+    // and start directly at region selection (step 2).
+    set((s) => ({
+      pipelines: [
+        ...s.pipelines,
+        {
+          ...p,
+          videoId: input.videoId,
+          title: input.filename,
+          originalName: sanitizeFilename(input.filename) || "video",
+        },
+      ],
+    }));
+    runPrep(id, 2);
     return id;
   },
   importActive: (v) => {
@@ -429,6 +470,10 @@ function detectSourceLang(url: string): string {
   if (/douyin\.com/i.test(url)) return "zh";
   if (/tiktok\.com/i.test(url)) return "en";
   return "zh";
+}
+
+function isYouTubeUrl(url: string): boolean {
+  return /(^|\.)youtube\.com|youtu\.be|youtube-nocookie\.com/i.test(url);
 }
 
 function detectOcrLang(sourceLang: string): string {
@@ -850,79 +895,113 @@ async function runPrep(id: string, startStep = 0) {
       const cleaned = extractUrl(rawUrl);
       if (!cleaned) throw new Error("Không tìm thấy link (https://...) trong nội dung đã dán.");
       markStepStart(id, 0);
-      appendLog(id, "Đang phân tích link...");
-      const r = await fetch("/api/video-download/resolve", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ url: cleaned }),
-      });
-      const rd = await r.json();
-      if (!r.ok) throw new Error(rd.detail || "Không thể phân tích link");
-      videoUrl = rd.video_url ?? null;
-      audioUrl = rd.audio_url ?? null;
-      sourceLang = detectSourceLang(cleaned);
-      ocrLang = detectOcrLang(sourceLang);
-      originalName = sanitizeFilename(rd.title || "") || "video";
-      patch(id, {
-        videoUrl,
-        audioUrl,
-        title: rd.title || "",
-        originalName,
-        srcLang: sourceLang,
-        ocrLang,
-        ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
-      });
-      appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
-      markStepEnd(id, 0);
+      if (isYouTubeUrl(cleaned)) {
+        // YouTube: yt-dlp downloads + merges server-side → import directly.
+        appendLog(id, "Đang tải video từ YouTube (yt-dlp)...");
+        const yr = await fetch("/api/video-download/yt-import", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ url: cleaned }),
+        });
+        const yd = await yr.json();
+        if (!yr.ok) throw new Error(yd.detail || "Không thể tải video YouTube");
+        videoId = yd.video_id;
+        sourceLang = cur.srcLang || detectSourceLang(cleaned);
+        ocrLang = detectOcrLang(sourceLang);
+        originalName = sanitizeFilename(yd.title || yd.filename || "") || "youtube";
+        patch(id, {
+          videoId,
+          videoUrl: null,
+          audioUrl: null,
+          title: yd.title || yd.filename || "",
+          originalName,
+          srcLang: sourceLang,
+          ocrLang,
+          ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
+        });
+        appendLog(id, `Đã tải video YouTube: ${yd.title || yd.filename || videoId} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+        markStepEnd(id, 0);
+      } else {
+        appendLog(id, "Đang phân tích link...");
+        const r = await fetch("/api/video-download/resolve", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ url: cleaned }),
+        });
+        const rd = await r.json();
+        if (!r.ok) throw new Error(rd.detail || "Không thể phân tích link");
+        videoUrl = rd.video_url ?? null;
+        audioUrl = rd.audio_url ?? null;
+        sourceLang = detectSourceLang(cleaned);
+        ocrLang = detectOcrLang(sourceLang);
+        originalName = sanitizeFilename(rd.title || "") || "video";
+        patch(id, {
+          videoUrl,
+          audioUrl,
+          title: rd.title || "",
+          originalName,
+          srcLang: sourceLang,
+          ocrLang,
+          ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
+        });
+        appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+        markStepEnd(id, 0);
+      }
     }
 
     // 1. Merge + import (silent)
     if (startStep <= 1) {
-      let mergeId = "";
-      if (audioUrl && videoUrl) {
-        patch(id, { stage: "merging" });
-        markStepStart(id, 1);
-        appendLog(id, "Phát hiện 2 file riêng (video + audio) → merge...");
-        const mr = await fetch("/api/video-merge", {
-          method: "POST",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ video_url: videoUrl, audio_url: audioUrl }),
-        });
-        const md = await mr.json();
-        if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
-        const ms = await pollMerge(md.job_id, tick(1));
-        if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
-        mergeId = (ms.filename || "").replace(/\.mp4$/, "");
-        appendLog(id, "Merge xong.");
-        markStepEnd(id, 1);
-      } else {
+      if (videoId) {
+        // Already imported (YouTube): yt-dlp đã merge sẵn video + audio.
         markStepSkipped(id, 1);
-        appendLog(id, "Chỉ 1 file video (đã có audio).");
-      }
+        appendLog(id, "Video YouTube đã có sẵn audio (yt-dlp gộp sẵn).");
+      } else {
+        let mergeId = "";
+        if (audioUrl && videoUrl) {
+          patch(id, { stage: "merging" });
+          markStepStart(id, 1);
+          appendLog(id, "Phát hiện 2 file riêng (video + audio) → merge...");
+          const mr = await fetch("/api/video-merge", {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ video_url: videoUrl, audio_url: audioUrl }),
+          });
+          const md = await mr.json();
+          if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
+          const ms = await pollMerge(md.job_id, tick(1));
+          if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
+          mergeId = (ms.filename || "").replace(/\.mp4$/, "");
+          appendLog(id, "Merge xong.");
+          markStepEnd(id, 1);
+        } else {
+          markStepSkipped(id, 1);
+          appendLog(id, "Chỉ 1 file video (đã có audio).");
+        }
 
-      appendLog(id, "Đăng ký video vào hệ thống...");
-      const impName = `${originalName || "video"}.mp4`;
-      const impBody = mergeId
-        ? { merge_id: mergeId, filename: impName }
-        : { url: videoUrl, filename: impName };
-      const ir = await fetch("/api/import-video", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify(impBody),
-      });
-      const idata = await ir.json();
-      if (!ir.ok) throw new Error(idata.detail || "Import thất bại");
-      videoId = idata.video_id;
-      patch(id, { videoId });
-      appendLog(id, `Video ID: ${videoId}`);
-      try {
-        await fetch(`/api/context/${videoId}/share-text`, {
+        appendLog(id, "Đăng ký video vào hệ thống...");
+        const impName = `${originalName || "video"}.mp4`;
+        const impBody = mergeId
+          ? { merge_id: mergeId, filename: impName }
+          : { url: videoUrl, filename: impName };
+        const ir = await fetch("/api/import-video", {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ text: rawUrl }),
+          body: JSON.stringify(impBody),
         });
-      } catch {
-        // ignore
+        const idata = await ir.json();
+        if (!ir.ok) throw new Error(idata.detail || "Import thất bại");
+        videoId = idata.video_id;
+        patch(id, { videoId });
+        appendLog(id, `Video ID: ${videoId}`);
+        try {
+          await fetch(`/api/context/${videoId}/share-text`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ text: rawUrl }),
+          });
+        } catch {
+          // ignore
+        }
       }
     }
 

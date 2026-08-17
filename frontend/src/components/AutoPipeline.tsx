@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, uploadVideo, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
@@ -46,7 +46,7 @@ function stepDetail(p: Pipeline): string {
   const idx = p.status === "error" && p.failedStep != null ? p.failedStep : STEP_STAGE[p.stage] ?? -1;
   switch (idx) {
     case 0:
-      return p.srcLang ? `Puppeteer mở link · ngôn ngữ: ${langLabel(p.srcLang)}` : "Puppeteer mở link Douyin lấy URL video";
+      return `Tải video từ link · ngôn ngữ: ${langLabel(p.srcLang || "zh")}`;
     case 1:
       return "FFmpeg gộp 2 file (copy video + audio)";
     case 2:
@@ -85,11 +85,16 @@ function pipelineElapsed(p: Pipeline, now: number): string {
 export default function AutoPipeline() {
   const pipelines = usePipelineStore((s) => s.pipelines);
   const addPipeline = usePipelineStore((s) => s.addPipeline);
+  const addPipelineFromUpload = usePipelineStore((s) => s.addPipelineFromUpload);
   const removePipeline = usePipelineStore((s) => s.removePipeline);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const importDone = usePipelineStore((s) => s.importDone);
 
   const [url, setUrl] = useState("");
+  const [sourceType, setSourceType] = useState<"douyin" | "youtube" | "upload">("douyin");
+  const [srcLang, setSrcLang] = useState<"zh" | "en">("zh");
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
@@ -114,6 +119,7 @@ export default function AutoPipeline() {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const focusNewVideo = useCallback(() => {
     urlInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -304,10 +310,42 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs);
+    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs, sourceType === "youtube" ? srcLang : "");
     setUrl("");
     setSelectedId(id);
     setTab("detail");
+  };
+
+  const handleFile = async (file: File | null) => {
+    if (!file) return;
+    if (!health?.healthy) {
+      checkHealth();
+      return;
+    }
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const videoId = await uploadVideo(file, setUploadProgress);
+      const id = addPipelineFromUpload({
+        videoId,
+        filename: file.name,
+        srcLang,
+        regionMode,
+        dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb },
+        autoFit: autoFitSubs,
+        watermark: watermarkOn,
+        watermarkPreset: watermarkOn ? watermarkPreset : "",
+        checkSubs,
+      });
+      setSelectedId(id);
+      setTab("detail");
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Upload thất bại");
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
@@ -419,11 +457,11 @@ export default function AutoPipeline() {
       <AnimatedBlock delay={100} className="mt-10 mb-10">
         <div className="eyebrow mb-4">Auto Pipeline</div>
         <h1 className="text-[clamp(1.8rem,4.5vw,3.4rem)] font-semibold tracking-tight leading-[1.05] text-ink">
-          Link Douyin → Video có phụ đề Việt
+          Link / Video → Video có phụ đề Việt
         </h1>
         <p className="mt-4 text-sm text-ink-muted max-w-lg leading-relaxed">
-          Dán link, hệ thống tự động: tải → merge audio/video → OCR → ngữ cảnh → dịch Gemini →
-          nhúng phụ đề mới vào video.
+          Dán link Douyin/YouTube hoặc tải video từ máy, hệ thống tự động: tải → merge audio/video →
+          OCR → ngữ cảnh → dịch Gemini → nhúng phụ đề mới vào video.
         </p>
       </AnimatedBlock>
 
@@ -432,8 +470,108 @@ export default function AutoPipeline() {
         <div className="double-bezel mb-6">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-3">
-              1. Dán link video
+              1. Chọn nguồn video
             </p>
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] mb-4 w-fit">
+              {(["douyin", "youtube", "upload"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setSourceType(t)}
+                  className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                    sourceType === t
+                      ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                      : "text-ink-light hover:text-ink"
+                  } cursor-pointer`}
+                >
+                  {t === "douyin" ? "Link Douyin" : t === "youtube" ? "Link YouTube" : "Upload từ máy"}
+                </button>
+              ))}
+            </div>
+            {sourceType !== "upload" ? (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={urlInputRef}
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                  disabled={!health?.healthy}
+                  placeholder={
+                    healthLoading
+                      ? "Đang kiểm tra kết nối..."
+                      : health?.healthy
+                      ? sourceType === "youtube"
+                        ? "Dán link YouTube (https://youtube.com/watch?v=... hoặc https://youtu.be/...)"
+                        : "Dán toàn bộ nội dung chia sẻ (hoặc link https://v.douyin.com/...)"
+                      : "Vào Settings (⚙️) nhập Gemini API key (và Google TTS Service Account nếu chọn Google)"
+                  }
+                  className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <button
+                  onClick={handleAdd}
+                  disabled={!url.trim() || !health?.healthy}
+                  className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <span className="tracking-tight">{sourceType === "youtube" ? "Tải & Xử lý" : "Bắt đầu"}</span>
+                </button>
+              </div>
+            ) : (
+              <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/*,.mp4,.mov,.avi,.mkv,.webm"
+                  className="hidden"
+                  onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!health?.healthy || uploading}
+                  className="w-full rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] px-4 py-6 text-[13px] text-ink-light hover:bg-black/[0.04] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
+                >
+                  {uploading ? (
+                    <>
+                      <IconSpinner className="w-5 h-5 text-blue-600" />
+                      <span>Đang tải lên... {uploadProgress}%</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                      <span>Chọn video từ máy để tải lên</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+            {(sourceType === "youtube" || sourceType === "upload") && (
+              <div className="mt-4 flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                  Ngôn ngữ gốc:
+                </span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+                  {(["zh", "en"] as const).map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setSrcLang(l)}
+                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                        srcLang === l
+                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          : "text-ink-light hover:text-ink"
+                      } cursor-pointer`}
+                    >
+                      {l === "zh" ? "Tiếng Trung" : "Tiếng Anh"}
+                    </button>
+                  ))}
+                </div>
+                <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                  Dùng cho nhận dạng phụ đề (OCR) và dịch Gemini.
+                </p>
+              </div>
+            )}
             {healthLoading ? (
               <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
                 <IconSpinner className="w-4 h-4 text-blue-600" />
@@ -474,31 +612,6 @@ export default function AutoPipeline() {
                 </button>
               </div>
             ) : null}
-            <div className="flex items-center gap-2">
-              <input
-                ref={urlInputRef}
-                type="text"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                disabled={!health?.healthy}
-                placeholder={
-                  healthLoading
-                    ? "Đang kiểm tra kết nối..."
-                    : health?.healthy
-                    ? "Dán toàn bộ nội dung chia sẻ (hoặc link https://v.douyin.com/...)"
-                    : "Vào Settings (⚙️) nhập Gemini API key (và Google TTS Service Account nếu chọn Google)"
-                }
-                className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <button
-                onClick={handleAdd}
-                disabled={!url.trim() || !health?.healthy}
-                className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <span className="tracking-tight">Bắt đầu</span>
-              </button>
-            </div>
             <div className="mt-4 flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                 Vùng quét phụ đề:

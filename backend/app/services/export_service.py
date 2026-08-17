@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from app.config import settings
-from app.services.media_utils import _srt_path, _video_path
+from app.services.media_utils import _srt_path, _video_path, target_dims_min1080
 from app.services.srt_utils import parse_srt
 
 logger = logging.getLogger(__name__)
@@ -86,8 +86,9 @@ def generate_ass(video_id: str, tracks: List[Dict[str, Any]]) -> Path:
 
     video_path = _video_path(video_id)
     vw, vh = _get_video_resolution(video_path)
+    tw, th = target_dims_min1080(vw, vh)
 
-    ass_lines = _build_ass_header(vw, vh).split("\n")
+    ass_lines = _build_ass_header(tw, th).split("\n")
 
     for track in tracks:
         for entry in track.get("entries", []):
@@ -105,7 +106,9 @@ def generate_ass(video_id: str, tracks: List[Dict[str, Any]]) -> Path:
             x_pct = (px / vw) * 100 if vw else 50
             y_pct = (py / vh) * 100 if vh else 90
             font_name = style.get("fontFamily", "Arial")
-            font_size = int(style.get("fontSize", 16) * 3)
+            # Scale font with the canvas so text keeps the same apparent size
+            # once the video is upscaled to 1080p (rendered crisply by libass).
+            font_size = int(style.get("fontSize", 16) * 3 * (th / vh))
             text_color = _rgb_to_ass_bgr(style.get("textColor", "#FFFFFF"))
             bold = -1 if style.get("bold") else 0
             italic = -1 if style.get("italic") else 0
@@ -167,7 +170,16 @@ def build_ffmpeg_export_cmd(
             cmd.extend(["-i", str(af)])
 
     # Build complex filter
-    filter_parts = [f"[0:v]subtitles='{ass_path}':force_style='Fontsize=48'[vout]"]
+    # Upscale to at least 1080p (short edge) BEFORE burning subtitles so low-res
+    # sources (720/480) export crisp: the video is scaled with lanczos first and
+    # the ASS (PlayRes = target size) renders text sharply at the final size.
+    # Sources already >=1080 on the short edge keep their native size.
+    vw, vh = _get_video_resolution(video_path)
+    tw, th = target_dims_min1080(vw, vh)
+    filter_parts = [
+        f"[0:v]scale={tw}:{th}:flags=lanczos,"
+        f"subtitles='{ass_path}':force_style='Fontsize=48'[vout]"
+    ]
 
     # Audio filters: mix original (30%) + TTS clips (100%) at correct timestamps
     audio_mix_parts = []
