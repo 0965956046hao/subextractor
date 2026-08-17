@@ -229,11 +229,11 @@ async def cleanup_video(video_id: str):
         shutil.rmtree(translated_dir, ignore_errors=True)
         removed.append("translated")
 
-    # tts/: keep only dubbed_video.mp4
+    # tts/: keep only dubbed_video.mp4 + full_voice.mp3 (dubbed voice download)
     tts_dir = settings.temp_dir / "tts" / video_id
     if tts_dir.exists():
         for f in tts_dir.iterdir():
-            if f.name == "dubbed_video.mp4":
+            if f.name in ("dubbed_video.mp4", "full_voice.mp3"):
                 continue
             if f.is_dir():
                 shutil.rmtree(f, ignore_errors=True)

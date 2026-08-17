@@ -20,8 +20,8 @@ export const STEPS = [
   { label: "Chỉnh kích thước & vị trí sub", detail: "Xem trước, chỉnh cỡ chữ và vị trí" },
   { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
-  { label: "Dịch Gemini", detail: "Dịch phụ đề sang tiếng Việt" },
-  { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền" },
+  { label: "Dịch Gemini", detail: "Dịch tự động sang Trung / Anh / Việt (có thể tắt)" },
+  { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền (có thể tắt)" },
   { label: "Nhúng SRT vào video", detail: "FFmpeg gộp SRT mới vào MP4" },
 ];
 
@@ -86,6 +86,9 @@ export interface Pipeline {
   ocrEngine: string;
   ocrLang: string;
   srcLang: string;
+  translateOn: boolean;
+  translateTarget: string;
+  dubOn: boolean;
   contextOn: boolean;
   region: Region | null;
   regionMode: "manual" | "auto";
@@ -125,13 +128,13 @@ export interface ImportedDone {
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
   voice: "BV421_vivn_streaming",
-  muteOriginal: true,
-  originalGainDb: 0,
+  muteOriginal: false,
+  originalGainDb: 13,
 };
 
 interface PipelineState {
   pipelines: Pipeline[];
-  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, srcLang?: string) => string;
+  addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, srcLang?: string, translateOn?: boolean, translateTarget?: string, dubOn?: boolean) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
     filename: string;
@@ -142,6 +145,9 @@ interface PipelineState {
     watermark?: boolean;
     watermarkPreset?: string;
     checkSubs?: boolean;
+    translateOn?: boolean;
+    translateTarget?: string;
+    dubOn?: boolean;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -166,11 +172,14 @@ function newPipeline(
   url: string,
   regionMode: "manual" | "auto" = "manual",
   dub: Partial<DubOptions> = {},
-  autoFit = true,
+  autoFit = false,
   watermark = false,
   watermarkPreset = "",
   checkSubs = false,
   srcLang = "",
+  translateOn = true,
+  translateTarget = "vi",
+  dubOn = true,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -198,6 +207,9 @@ function newPipeline(
     ocrEngine: "",
     ocrLang: srcLang ? detectOcrLang(srcLang) : "",
     srcLang,
+    translateOn,
+    translateTarget,
+    dubOn,
     contextOn: false,
     region: null,
     regionMode,
@@ -219,9 +231,9 @@ export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
   pipelines: [],
-  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, srcLang = "") => {
+  addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, srcLang = "", translateOn = true, translateTarget = "vi", dubOn = true) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, srcLang)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, srcLang, translateOn, translateTarget, dubOn)] }));
     runPrep(id);
     return id;
   },
@@ -237,6 +249,9 @@ export const usePipelineStore = create<PipelineState>()(
       input.watermarkPreset ?? "",
       input.checkSubs ?? false,
       input.srcLang ?? "zh",
+      input.translateOn ?? true,
+      input.translateTarget ?? "vi",
+      input.dubOn ?? true,
     );
     // Uploaded file is already registered on the backend: skip resolve + merge
     // and start directly at region selection (step 2).
@@ -1150,6 +1165,12 @@ async function runPipeline(id: string, startStep = 4) {
 
     // 5. Context
     if (startStep <= 5) {
+      const translateSkipped =
+        cur.translateOn === false || sourceLang === (cur.translateTarget || "vi");
+      if (translateSkipped) {
+        appendLog(id, "Bỏ qua phân tích ngữ cảnh (không dùng dịch tự động).");
+        markStepSkipped(id, 5);
+      } else {
       patch(id, { stage: "context" });
       markStepStart(id, 5);
       // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
@@ -1183,84 +1204,99 @@ async function runPipeline(id: string, startStep = 4) {
         }
       }
       markStepEnd(id, 5);
+      }
     }
 
     // 6. Translate + save
     if (startStep <= 6) {
       patch(id, { stage: "translating" });
       markStepStart(id, 6);
-      // Resume: nếu bản dịch đã tồn tại thì bỏ qua POST translate, dùng thẳng kết quả.
-      let translatedExists = false;
-      try {
-        const trCheck = await fetch(`/api/download/translated/${videoId}`);
-        translatedExists = trCheck.ok;
-      } catch {
-        // ignore
-      }
-      if (!translatedExists) {
-        appendLog(id, `Dịch Gemini (${sourceLang} → vi)...`);
-        const tr = await fetch(`/api/translate/${videoId}`, {
-          method: "POST",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ source_lang: sourceLang, target_lang: "vi" }),
-        });
-        const td = await tr.json();
-        if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-        const ts = await pollJob(td.job_id, tick(6));
-        if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
-        appendLog(id, "Dịch xong.");
+      const translateTarget = cur.translateTarget || "vi";
+
+      if (cur.translateOn === false) {
+        appendLog(id, "Đã tắt dịch tự động — giữ nguyên phụ đề gốc.");
+        markStepSkipped(id, 6);
+      } else if (sourceLang === translateTarget) {
+        appendLog(id, `Ngôn ngữ đích (${langLabel(translateTarget)}) trùng ngôn ngữ gốc — giữ nguyên phụ đề gốc.`);
+        markStepSkipped(id, 6);
       } else {
-        appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
-      }
-
-      patch(id, { stage: "saving" });
-      appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
-      const srtRes = await fetch(`/api/download/translated/${videoId}`);
-      const srtText = await srtRes.text();
-      await fetch(`/api/srt/${videoId}`, {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ content: srtText }),
-      });
-
-      // Optional: always pause for the user to review the translated SRT in the
-      // timeline-check popup (only when checkSubs is on). No auto-skip.
-      if (cur.checkSubs && videoId) {
-        appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
+        // Resume: nếu bản dịch đúng ngôn ngữ đích đã tồn tại thì dùng thẳng kết quả.
+        let translatedExists = false;
         try {
-          const checkRes = await fetch(`/api/srt/${videoId}/validate`);
-          const checkData = await checkRes.json();
-          const issues: TimelineIssue[] = checkData.issues ?? [];
-          patch(id, {
-            timelineCheck: { waiting: true, open: false, issues, fixing: false },
-          });
-          appendLog(
-            id,
-            issues.length > 0
-              ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
-              : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
-          );
-          patch(id, { resumeStep: 7 });
-          const choice = await waitForTimelineCheck(id);
-          if (choice === "fix") {
-            appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
-          } else {
-            appendLog(id, "Bỏ qua — giữ nguyên timeline hiện tại.");
-          }
-        } catch (e) {
-          appendLog(id, `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`);
-        } finally {
-          patch(id, { timelineCheck: null });
+          const trCheck = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+          translatedExists = trCheck.ok;
+        } catch {
+          // ignore
         }
-      }
+        if (!translatedExists) {
+          appendLog(id, `Dịch Gemini (${langLabel(sourceLang)} → ${langLabel(translateTarget)})...`);
+          const tr = await fetch(`/api/translate/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ source_lang: sourceLang, target_lang: translateTarget }),
+          });
+          const td = await tr.json();
+          if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
+          const ts = await pollJob(td.job_id, tick(6));
+          if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
+          appendLog(id, "Dịch xong.");
+        } else {
+          appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
+        }
 
-      markStepEnd(id, 6);
+        patch(id, { stage: "saving" });
+        appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
+        const srtRes = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+        const srtText = await srtRes.text();
+        await fetch(`/api/srt/${videoId}`, {
+          method: "PUT",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ content: srtText }),
+        });
+
+        // Optional: always pause for the user to review the translated SRT in the
+        // timeline-check popup (only when checkSubs is on). No auto-skip.
+        if (cur.checkSubs && videoId) {
+          appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
+          try {
+            const checkRes = await fetch(`/api/srt/${videoId}/validate`);
+            const checkData = await checkRes.json();
+            const issues: TimelineIssue[] = checkData.issues ?? [];
+            patch(id, {
+              timelineCheck: { waiting: true, open: false, issues, fixing: false },
+            });
+            appendLog(
+              id,
+              issues.length > 0
+                ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
+                : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
+            );
+            patch(id, { resumeStep: 7 });
+            const choice = await waitForTimelineCheck(id);
+            if (choice === "fix") {
+              appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
+            } else {
+              appendLog(id, "Bỏ qua — giữ nguyên timeline hiện tại.");
+            }
+          } catch (e) {
+            appendLog(id, `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`);
+          } finally {
+            patch(id, { timelineCheck: null });
+          }
+        }
+
+        markStepEnd(id, 6);
+      }
     }
 
     // 7. Dub
     if (startStep <= 7) {
       patch(id, { stage: "dub" });
       markStepStart(id, 7);
+      if (cur.dubOn === false) {
+        appendLog(id, "Đã tắt lồng tiếng tự động — bỏ qua bước lồng tiếng.");
+        markStepSkipped(id, 7);
+      } else {
       // Resume: nếu video lồng tiếng đã tồn tại thì bỏ qua.
       let dubbedExists = false;
       try {
@@ -1315,6 +1351,7 @@ async function runPipeline(id: string, startStep = 4) {
       }
       markStepEnd(id, 7);
       }
+    }
     }
 
     // 8. Hardcode

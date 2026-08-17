@@ -221,8 +221,8 @@ export type SubtitleRiskProblem =
   | "TIMELINE_OVERLAP"
   | "ADJACENT_SIMILAR";
 
-export async function startSrtRiskCheck(videoId: string): Promise<{ job_id: string }> {
-  const res = await api.post<{ job_id: string }>(`/srt/${videoId}/risk-check`);
+export async function startSrtRiskCheck(videoId: string, lang = "vi"): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>(`/srt/${videoId}/risk-check`, { lang });
   return res.data;
 }
 
@@ -274,6 +274,10 @@ export async function ttsSubtitles(videoId: string): Promise<JobStatus> {
 
 export function getDubbedDownloadUrl(videoId: string): string {
   return `/api/download/dubbed/${videoId}`;
+}
+
+export function getDubbedVoiceDownloadUrl(videoId: string): string {
+  return `/api/tts-audio/${videoId}/full_voice.mp3`;
 }
 
 export interface HealthCheckResult {

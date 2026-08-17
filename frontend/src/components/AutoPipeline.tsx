@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, uploadVideo, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, uploadVideo, getDownloadUrl, getDubbedVoiceDownloadUrl, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
@@ -42,6 +42,13 @@ const STATUS_META: Record<string, { label: string; cls: string; dot: string }> =
   error: { label: "Lỗi", cls: "bg-red-500/10 text-red-700 ring-red-500/20", dot: "bg-red-500" },
 };
 
+function fmtBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function stepDetail(p: Pipeline): string {
   const idx = p.status === "error" && p.failedStep != null ? p.failedStep : STEP_STAGE[p.stage] ?? -1;
   switch (idx) {
@@ -64,7 +71,11 @@ function stepDetail(p: Pipeline): string {
     case 5:
       return `Gemini Vision · ${p.contextOn ? "đã bật" : "chưa bật"}`;
     case 6:
-      return p.srcLang ? `Gemini · ${langLabel(p.srcLang)} → Tiếng Việt` : "Gemini dịch phụ đề sang tiếng Việt";
+      return p.translateOn !== false
+        ? p.srcLang
+          ? `Gemini dịch ${langLabel(p.srcLang)} → ${langLabel(p.translateTarget || "vi")}`
+          : `Gemini dịch sang ${langLabel(p.translateTarget || "vi")}`
+        : "Đã tắt dịch — giữ phụ đề gốc";
     case 7:
       return "Demucs tách giọng + TTS Việt (giữ nhạc nền)";
     case 8:
@@ -92,15 +103,21 @@ export default function AutoPipeline() {
 
   const [url, setUrl] = useState("");
   const [sourceType, setSourceType] = useState<"douyin" | "youtube" | "upload">("douyin");
-  const [srcLang, setSrcLang] = useState<"zh" | "en">("zh");
+  const [srcLang, setSrcLang] = useState<"zh" | "en" | "vi">("zh");
+  const [translateOn, setTranslateOn] = useState(true);
+  const [translateTarget, setTranslateTarget] = useState<"zh" | "en" | "vi">("vi");
+  const [dubOn, setDubOn] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploaded, setUploaded] = useState<{ videoId: string; name: string; size: number } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
+  const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
-  const [muteOriginal, setMuteOriginal] = useState(true);
-  const [originalGainDb, setOriginalGainDb] = useState(6);
-  const [autoFitSubs, setAutoFitSubs] = useState(true);
+  const [muteOriginal, setMuteOriginal] = useState(false);
+  const [originalGainDb, setOriginalGainDb] = useState(13);
+  const [autoFitSubs, setAutoFitSubs] = useState(false);
   const [watermarkOn, setWatermarkOn] = useState(false);
   const [watermarkPreset, setWatermarkPreset] = useState("");
   const [checkSubs, setCheckSubs] = useState(false);
@@ -194,7 +211,7 @@ export default function AutoPipeline() {
     let mounted = true;
     if (dubEngine === "capcut") {
       setVoicesLoading(true);
-      getCapCutVoices("vi-VN")
+      getCapCutVoices(voiceLang)
         .then((vs) => {
           if (mounted) {
             setCapcutVoices(vs);
@@ -209,7 +226,7 @@ export default function AutoPipeline() {
         });
     } else {
       setVoicesLoading(true);
-      getGoogleTtsVoices("vi-VN")
+      getGoogleTtsVoices(voiceLang)
         .then((vs) => {
           if (mounted) {
             setGoogleVoices(vs);
@@ -226,7 +243,7 @@ export default function AutoPipeline() {
     return () => {
       mounted = false;
     };
-  }, [dubEngine]);
+  }, [dubEngine, voiceLang]);
 
   const switchDubEngine = async (engine: "google" | "capcut") => {
     setDubEngine(engine);
@@ -234,16 +251,16 @@ export default function AutoPipeline() {
     setPreviewError(false);
     if (engine === "google") {
       if (googleVoices.length > 0) {
-        setDubVoice((v) => (googleVoices.some((x) => x.voice_type === v) ? v : googleVoices[0]?.voice_type ?? "vi-VN-Standard-B"));
+        setDubVoice((v) => (googleVoices.some((x) => x.voice_type === v) ? v : googleVoices[0]?.voice_type ?? v));
       } else {
         // Google voices differ from CapCut (BV/AV*) — reset so a CapCut voice is
         // never sent to Google TTS. Effect below will populate googleVoices.
-        setDubVoice("vi-VN-Standard-B");
+        setDubVoice(voiceLang === "vi-VN" ? "vi-VN-Standard-B" : "en-US-Standard-B");
       }
     } else if (capcutVoices.length === 0) {
       setVoicesLoading(true);
       try {
-        const vs = await getCapCutVoices("vi-VN");
+        const vs = await getCapCutVoices(voiceLang);
         setCapcutVoices(vs);
         if (vs.length > 0) setDubVoice(vs[0].voice_type);
       } catch {
@@ -277,11 +294,11 @@ export default function AutoPipeline() {
     setVoicesLoading(true);
     try {
       if (dubEngine === "google") {
-        const vs = await getGoogleTtsVoices("vi-VN");
+        const vs = await getGoogleTtsVoices(voiceLang);
         setGoogleVoices(vs);
         if (vs.length > 0) setDubVoice(vs[0].voice_type);
       } else {
-        const vs = await getCapCutVoices("vi-VN");
+        const vs = await getCapCutVoices(voiceLang);
         setCapcutVoices(vs);
         if (vs.length > 0) setDubVoice(vs[0].voice_type);
       }
@@ -310,7 +327,7 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs, sourceType === "youtube" ? srcLang : "");
+    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs, srcLang, translateOn, translateTarget, dubOn);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
@@ -324,28 +341,39 @@ export default function AutoPipeline() {
     }
     setUploading(true);
     setUploadProgress(0);
+    setUploadError(null);
     try {
       const videoId = await uploadVideo(file, setUploadProgress);
-      const id = addPipelineFromUpload({
-        videoId,
-        filename: file.name,
-        srcLang,
-        regionMode,
-        dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb },
-        autoFit: autoFitSubs,
-        watermark: watermarkOn,
-        watermarkPreset: watermarkOn ? watermarkPreset : "",
-        checkSubs,
-      });
-      setSelectedId(id);
-      setTab("detail");
+      setUploaded({ videoId, name: file.name, size: file.size });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Upload thất bại");
+      setUploadError(e instanceof Error ? e.message : "Upload thất bại");
+      setUploaded(null);
     } finally {
       setUploading(false);
       setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleStartUpload = () => {
+    if (!uploaded) return;
+    const id = addPipelineFromUpload({
+      videoId: uploaded.videoId,
+      filename: uploaded.name,
+      srcLang,
+      regionMode,
+      dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb },
+      autoFit: autoFitSubs,
+      watermark: watermarkOn,
+      watermarkPreset: watermarkOn ? watermarkPreset : "",
+      checkSubs,
+      translateOn,
+      translateTarget,
+      dubOn,
+    });
+    setUploaded(null);
+    setSelectedId(id);
+    setTab("detail");
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
@@ -472,6 +500,46 @@ export default function AutoPipeline() {
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-3">
               1. Chọn nguồn video
             </p>
+            {healthLoading ? (
+              <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
+                <IconSpinner className="w-4 h-4 text-blue-600" />
+                <span className="text-[12px] text-ink-muted">Đang kiểm tra Gemini API + engine lồng tiếng...</span>
+              </div>
+            ) : health && !health.healthy ? (
+              <div className="mb-4 rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-[12px] font-medium text-amber-800">
+                    ⚠️ Cần cấu hình trước khi xử lý: Gemini API phải hoạt động và cần ít nhất 1 engine lồng tiếng (Google TTS hoặc CapCut service).
+                  </p>
+                  <button
+                    onClick={checkHealth}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors cursor-pointer"
+                  >
+                    Kiểm tra lại
+                  </button>
+                </div>
+                <ul className="mt-2 space-y-1">
+                  {health.checks.map((c) => (
+                    <li key={c.service} className="flex items-start gap-2 text-[12px] text-amber-800/80">
+                      <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${c.healthy ? "bg-emerald-500" : "bg-amber-500"}`} />
+                      <span className="font-mono">{c.service}:</span>
+                      <span className="flex-1">{c.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : health?.healthy ? (
+              <div className="flex items-center gap-2 mb-4 rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 px-4 py-2.5">
+                <IconCheck className="w-4 h-4 text-emerald-600" />
+                <span className="text-[12px] text-emerald-800">Gemini API đã sẵn sàng. Engine lồng tiếng: {health.dub_engines?.google ? "Google TTS" : ""}{health.dub_engines?.google && health.dub_engines?.capcut ? " + " : ""}{health.dub_engines?.capcut ? "CapCut" : ""}{!health.dub_engines?.google && !health.dub_engines?.capcut ? "chưa sẵn sàng" : " sẵn sàng"}.</span>
+                <button
+                  onClick={checkHealth}
+                  className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-emerald-600/15 text-emerald-800 ring-1 ring-emerald-500/20 hover:bg-emerald-600/25 transition-colors cursor-pointer"
+                >
+                  Kiểm tra lại
+                </button>
+              </div>
+            ) : null}
             <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] mb-4 w-fit">
               {(["douyin", "youtube", "upload"] as const).map((t) => (
                 <button
@@ -524,36 +592,70 @@ export default function AutoPipeline() {
                   className="hidden"
                   onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
                 />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={!health?.healthy || uploading}
-                  className="w-full rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] px-4 py-6 text-[13px] text-ink-light hover:bg-black/[0.04] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
-                >
-                  {uploading ? (
-                    <>
-                      <IconSpinner className="w-5 h-5 text-blue-600" />
-                      <span>Đang tải lên... {uploadProgress}%</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="17 8 12 3 7 8" />
-                        <line x1="12" y1="3" x2="12" y2="15" />
-                      </svg>
-                      <span>Chọn video từ máy để tải lên</span>
-                    </>
-                  )}
-                </button>
+                {uploading ? (
+                  <div className="w-full rounded-xl border border-dashed border-blue-500/30 bg-blue-500/5 px-4 py-6 text-[13px] text-ink-muted flex flex-col items-center gap-2">
+                    <IconSpinner className="w-5 h-5 text-blue-600" />
+                    <span>Đang tải lên... {uploadProgress}%</span>
+                  </div>
+                ) : uploaded ? (
+                  <div className="w-full rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-4">
+                    <div className="flex items-center gap-2">
+                      <IconCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <p className="text-[13px] font-medium text-emerald-800 truncate">
+                        Đã tải lên thành công: {uploaded.name}
+                      </p>
+                    </div>
+                    <p className="text-[11px] text-emerald-800/70 mt-1">
+                      {fmtBytes(uploaded.size)} — bấm Bắt đầu để xử lý video.
+                    </p>
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={handleStartUpload}
+                        className="btn-island-primary group text-sm !px-5 !py-2.5"
+                      >
+                        <span className="tracking-tight">Bắt đầu xử lý</span>
+                      </button>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:text-ink transition-colors cursor-pointer"
+                      >
+                        Đổi video khác
+                      </button>
+                    </div>
+                  </div>
+                ) : uploadError ? (
+                  <div className="w-full rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-4">
+                    <p className="text-[13px] font-medium text-red-700">⚠️ Upload thất bại</p>
+                    <p className="text-[11px] text-red-700/80 mt-1">{uploadError}</p>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="mt-3 px-4 py-2 rounded-full text-[11px] font-medium bg-red-600/15 text-red-700 ring-1 ring-red-500/20 hover:bg-red-600/25 transition-colors cursor-pointer"
+                    >
+                      Thử lại
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!health?.healthy}
+                    className="w-full rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] px-4 py-6 text-[13px] text-ink-light hover:bg-black/[0.04] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
+                  >
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="17 8 12 3 7 8" />
+                      <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                    <span>Chọn video từ máy để tải lên</span>
+                  </button>
+                )}
               </div>
             )}
-            {(sourceType === "youtube" || sourceType === "upload") && (
-              <div className="mt-4 flex items-center gap-2 flex-wrap">
+            <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   Ngôn ngữ gốc:
                 </span>
                 <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
-                  {(["zh", "en"] as const).map((l) => (
+                  {(["zh", "en", "vi"] as const).map((l) => (
                     <button
                       key={l}
                       onClick={() => setSrcLang(l)}
@@ -563,7 +665,7 @@ export default function AutoPipeline() {
                           : "text-ink-light hover:text-ink"
                       } cursor-pointer`}
                     >
-                      {l === "zh" ? "Tiếng Trung" : "Tiếng Anh"}
+                      {l === "zh" ? "Tiếng Trung" : l === "en" ? "Tiếng Anh" : "Tiếng Việt"}
                     </button>
                   ))}
                 </div>
@@ -571,47 +673,6 @@ export default function AutoPipeline() {
                   Dùng cho nhận dạng phụ đề (OCR) và dịch Gemini.
                 </p>
               </div>
-            )}
-            {healthLoading ? (
-              <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
-                <IconSpinner className="w-4 h-4 text-blue-600" />
-                <span className="text-[12px] text-ink-muted">Đang kiểm tra Gemini API + engine lồng tiếng...</span>
-              </div>
-            ) : health && !health.healthy ? (
-              <div className="mb-4 rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20 px-4 py-3">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <p className="text-[12px] font-medium text-amber-800">
-                    ⚠️ Cần cấu hình trước khi xử lý: Gemini API phải hoạt động và cần ít nhất 1 engine lồng tiếng (Google TTS hoặc CapCut service).
-                  </p>
-                  <button
-                    onClick={checkHealth}
-                    className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors cursor-pointer"
-                  >
-                    Kiểm tra lại
-                  </button>
-                </div>
-                <ul className="mt-2 space-y-1">
-                  {health.checks.map((c) => (
-                    <li key={c.service} className="flex items-start gap-2 text-[12px] text-amber-800/80">
-                      <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${c.healthy ? "bg-emerald-500" : "bg-amber-500"}`} />
-                      <span className="font-mono">{c.service}:</span>
-                      <span className="flex-1">{c.message}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : health?.healthy ? (
-              <div className="flex items-center gap-2 mb-4 rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 px-4 py-2.5">
-                <IconCheck className="w-4 h-4 text-emerald-600" />
-                <span className="text-[12px] text-emerald-800">Gemini API đã sẵn sàng. Engine lồng tiếng: {health.dub_engines?.google ? "Google TTS" : ""}{health.dub_engines?.google && health.dub_engines?.capcut ? " + " : ""}{health.dub_engines?.capcut ? "CapCut" : ""}{!health.dub_engines?.google && !health.dub_engines?.capcut ? "chưa sẵn sàng" : " sẵn sàng"}.</span>
-                <button
-                  onClick={checkHealth}
-                  className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-emerald-600/15 text-emerald-800 ring-1 ring-emerald-500/20 hover:bg-emerald-600/25 transition-colors cursor-pointer"
-                >
-                  Kiểm tra lại
-                </button>
-              </div>
-            ) : null}
             <div className="mt-4 flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                 Vùng quét phụ đề:
@@ -651,6 +712,27 @@ export default function AutoPipeline() {
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   Lồng tiếng:
                 </span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+                  {(["vi-VN", "en-US"] as const).map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => {
+                        if (l === voiceLang) return;
+                        setVoiceLang(l);
+                        setPreviewUrl(null);
+                        setPreviewError(false);
+                        setDubVoice(l === "vi-VN" ? "BV421_vivn_streaming" : "");
+                      }}
+                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                        voiceLang === l
+                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          : "text-ink-light hover:text-ink"
+                      } cursor-pointer`}
+                    >
+                      {l === "vi-VN" ? "Tiếng Việt" : "Tiếng Anh"}
+                    </button>
+                  ))}
+                </div>
                 <div className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}>
                   <button
                     onClick={() => switchDubEngine("google")}
@@ -822,6 +904,88 @@ export default function AutoPipeline() {
                     ? "Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video."
                     : "Thêm bước xem trước trong pipeline để bạn chỉnh cỡ chữ và vị trí phụ đề trước khi nhúng."}
                 </p>
+              </div>
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Dịch sub tự động
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Bật để pipeline dịch phụ đề sang ngôn ngữ bạn chọn; tắt để giữ nguyên phụ đề gốc (không dịch).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTranslateOn(!translateOn)}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                      translateOn ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        translateOn ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+                {translateOn && (
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Dịch sang:
+                    </span>
+                    <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+                      {(["zh", "en", "vi"] as const).map((l) => (
+                        <button
+                          key={l}
+                          onClick={() => setTranslateTarget(l)}
+                          className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                            translateTarget === l
+                              ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                              : "text-ink-light hover:text-ink"
+                          } cursor-pointer`}
+                        >
+                          {l === "zh" ? "Tiếng Trung" : l === "en" ? "Tiếng Anh" : "Tiếng Việt"}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                      Nếu ngôn ngữ đích trùng ngôn ngữ gốc, pipeline sẽ giữ nguyên phụ đề gốc.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Tự động lồng tiếng
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Bật để pipeline tách giọng gốc và lồng tiếng Việt vào video; tắt để bỏ qua bước lồng tiếng.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDubOn(!dubOn)}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                      dubOn ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        dubOn ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+                {dubOn && (
+                  <p className="mt-3 text-[11px] text-ink-light leading-relaxed">
+                    Giọng đọc dùng cấu hình mục "Lồng tiếng" phía trên (CapCut/Google TTS + giọng đã chọn).
+                  </p>
+                )}
               </div>
 
               <div className="mt-4 border-t border-black/[0.05] pt-4">
@@ -1623,19 +1787,29 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
           <div className="mt-4">
             <div className="flex items-center gap-2 flex-wrap mb-3">
               <a href={p.resultUrl} download className="btn-island-primary group text-sm !px-5 !py-2.5">
-                <span className="tracking-tight">{p.dubbedUrl ? "Tải video (phụ đề + lồng tiếng)" : "Tải video (phụ đề)"}</span>
+                <span className="tracking-tight">Tải video hoàn thiện</span>
                 <span className="btn-island-icon">
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
                 </span>
               </a>
-              {p.dubbedUrl && (
-                <a href={p.dubbedUrl} download className="btn-island-primary group text-sm !px-5 !py-2.5">
-                  <span className="tracking-tight">Tải video lồng tiếng</span>
+              {p.dubbedUrl && p.videoId && (
+                <a href={getDubbedVoiceDownloadUrl(p.videoId)} download className="btn-island-primary group text-sm !px-5 !py-2.5">
+                  <span className="tracking-tight">Tải voice lồng tiếng</span>
                   <span className="btn-island-icon">
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                      <path d="M11 5L6 9H2v6h4l5 4V5z" /><path d="M15.54 8.46a5 5 0 010 7.07" />
+                    </svg>
+                  </span>
+                </a>
+              )}
+              {p.videoId && (
+                <a href={getDownloadUrl(p.videoId, "srt")} download className="btn-island-primary group text-sm !px-5 !py-2.5">
+                  <span className="tracking-tight">Tải SRT phụ đề</span>
+                  <span className="btn-island-icon">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 4h16v16H4z" /><path d="M9 8h6" /><path d="M9 12h6" /><path d="M9 16h4" />
                     </svg>
                   </span>
                 </a>
@@ -1763,6 +1937,7 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
         <TimelineCheckModal
           videoId={p.videoId}
           initialIssues={p.timelineCheck.issues}
+          targetLang={p.translateTarget || "vi"}
           onResolve={() => resolveTimelineCheck(p.id, "continue")}
         />
       )}

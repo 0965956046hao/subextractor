@@ -84,6 +84,7 @@ interface TimelineCheckModalProps {
   videoId: string;
   initialIssues: TimelineIssue[];
   onResolve: (action: "continue") => void;
+  targetLang?: string;
 }
 
 type DragMode = "move" | "resize-start" | "resize-end" | null;
@@ -91,16 +92,16 @@ type DragMode = "move" | "resize-start" | "resize-end" | null;
 interface DragState {
   index: number;
   mode: Exclude<DragMode, null>;
-  startX: number;
   origStart: number;
   origEnd: number;
-  origScrollLeft: number;
+  grabOffset: number;
 }
 
 export default function TimelineCheckModal({
   videoId,
   initialIssues,
   onResolve,
+  targetLang = "vi",
 }: TimelineCheckModalProps) {
   const [entries, setEntries] = useState<SrtEntry[]>([]);
   const [loadError, setLoadError] = useState("");
@@ -278,17 +279,22 @@ export default function TimelineCheckModal({
       e.preventDefault();
       const entry = entries.find((en) => en.index === index);
       if (!entry) return;
+      const track = trackRef.current;
+      const origScrollLeft = track?.scrollLeft ?? 0;
+      const rect = track?.getBoundingClientRect();
+      const grabX = rect ? e.clientX - rect.left + origScrollLeft : 0;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       dragRef.current = {
         index,
         mode,
-        startX: e.clientX,
         origStart: entry.start,
         origEnd: entry.end,
-        origScrollLeft: trackRef.current?.scrollLeft ?? 0,
+        // Time offset between the pointer grab point and the block's start so
+        // the block keeps its grab point while dragging.
+        grabOffset: mode === "move" ? entry.start - grabX / pps : 0,
       };
     },
-    [entries]
+    [entries, pps]
   );
 
   const handleBlockPointerMove = useCallback(
@@ -296,38 +302,33 @@ export default function TimelineCheckModal({
       const drag = dragRef.current;
       if (!drag) return;
       const track = trackRef.current;
+      if (!track) return;
+      const rect = track.getBoundingClientRect();
       // Auto-scroll horizontally when the pointer nears the visible edge of the
       // timeline track so you can drag a block beyond the viewport.
-      let scrollDelta = 0;
-      if (track) {
-        const rect = track.getBoundingClientRect();
-        const EDGE = 48;
-        if (e.clientX > rect.right - EDGE) {
-          scrollDelta = Math.max(8, (e.clientX - (rect.right - EDGE)) * 1.5);
-          track.scrollLeft += scrollDelta;
-        } else if (e.clientX < rect.left + EDGE) {
-          scrollDelta = -Math.max(8, (rect.left + EDGE - e.clientX) * 1.5);
-          track.scrollLeft += scrollDelta;
-        }
+      const EDGE = 48;
+      if (e.clientX > rect.right - EDGE) {
+        track.scrollLeft += Math.max(8, (e.clientX - (rect.right - EDGE)) * 1.5);
+      } else if (e.clientX < rect.left + EDGE) {
+        track.scrollLeft -= Math.max(8, (rect.left + EDGE - e.clientX) * 1.5);
       }
-      // Account for the scroll offset so the block tracks the cursor precisely.
-      const effectiveX = e.clientX - (track?.scrollLeft ?? 0) + drag.origScrollLeft;
-      const dt = (effectiveX - drag.startX) / pps;
+      // Time currently under the cursor, mapped onto the (auto-scrolled)
+      // content. Positioning the block from the cursor directly keeps it glued
+      // to the pointer even while the track auto-scrolls.
+      const timeAtCursor = (e.clientX - rect.left + track.scrollLeft) / pps;
       const entry = entries.find((en) => en.index === drag.index);
       if (!entry) return;
       const total = effectiveDuration || entry.end + 1;
       if (drag.mode === "move") {
-        const newStart = Math.max(0, Math.min(drag.origStart + dt, total - MIN_DURATION));
+        const newStart = Math.max(0, Math.min(timeAtCursor + drag.grabOffset, total - MIN_DURATION));
         const newEnd = Math.min(newStart + (drag.origEnd - drag.origStart), total);
         patchEntry(drag.index, { start: newStart, end: newEnd });
       } else if (drag.mode === "resize-start") {
-        const newStart = Math.max(0, Math.min(drag.origStart + dt, drag.origEnd - MIN_DURATION));
+        const newStart = Math.max(0, Math.min(timeAtCursor, drag.origEnd - MIN_DURATION));
         patchEntry(drag.index, { start: newStart });
       } else {
-        const newEnd = Math.min(drag.origEnd + dt, total);
-        if (newEnd - drag.origStart >= MIN_DURATION) {
-          patchEntry(drag.index, { end: newEnd });
-        }
+        const newEnd = Math.min(Math.max(timeAtCursor, drag.origStart + MIN_DURATION), total);
+        patchEntry(drag.index, { end: newEnd });
       }
     },
     [entries, patchEntry, pps, effectiveDuration]
@@ -338,7 +339,7 @@ export default function TimelineCheckModal({
   }, []);
 
   const performRiskCheck = useCallback(async () => {
-    const { job_id } = await startSrtRiskCheck(videoId);
+    const { job_id } = await startSrtRiskCheck(videoId, targetLang);
     for (let i = 0; i < 600; i++) {
       await new Promise((r) => setTimeout(r, 1000));
       const st = await getJobStatus(job_id);
@@ -348,7 +349,7 @@ export default function TimelineCheckModal({
     }
     const result = await getSrtRiskResult(videoId);
     setRisks(result.risks ?? []);
-  }, [videoId]);
+  }, [videoId, targetLang]);
 
   const runRiskCheck = useCallback(async () => {
     setChecking(true);
@@ -670,7 +671,7 @@ export default function TimelineCheckModal({
                   {fmtClock(currentTime)} / {fmtClock(effectiveDuration)}
                 </p>
               </div>
-              <div className="overflow-x-auto" ref={trackRef}>
+              <div className="overflow-x-auto scrollbar-thin" ref={trackRef}>
                 <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }}>
                   {/* ruler */}
                   <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-black/[0.06]">

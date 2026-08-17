@@ -1,8 +1,9 @@
 """Subtitle risk-check service.
 
 Reads the current SRT, splits entries into batches and asks Gemini to flag
-risky lines (check only — never edits the file). Risky categories:
-- NOT_TRANSLATED: text still contains Chinese / non-Vietnamese content
+risky lines (check only — never edits the file). The review language is set by
+the caller (`lang`), e.g. the pipeline's translate target. Risky categories:
+- NOT_TRANSLATED: text is not in the expected language (still foreign content)
 - TIMELINE_OVERLAP: line's time range overlaps the previous line
 - ADJACENT_SIMILAR: content is still >80% similar to the adjacent line
   (should have been merged)
@@ -28,7 +29,7 @@ from app.services.retry_utils import (
 logger = logging.getLogger(__name__)
 
 
-RISK_CHECK_PROMPT = """You are a Vietnamese subtitle quality reviewer. You review an SRT subtitle file that was machine-translated to Vietnamese.
+RISK_CHECK_PROMPT_VI = """You are a Vietnamese subtitle quality reviewer. You review an SRT subtitle file that was machine-translated to Vietnamese.
 
 For EACH subtitle line, check for these problems:
 1. NOT_TRANSLATED — the text is NOT Vietnamese: it still contains Chinese characters, or is in another language that should have been translated to Vietnamese.
@@ -39,6 +40,43 @@ Output ONLY a JSON array (no markdown, no explanations). One object per risky li
 [{"index": <line index>, "problems": ["NOT_TRANSLATED"], "note": "<ngắn gọn bằng tiếng Việt>"}]
 Use the problems list with zero or more of the three keys above. If a line has no problem, do NOT include it. If no line has problems, output only [].
 """
+
+RISK_CHECK_PROMPT_GENERIC = """You are a {lang_name} subtitle quality reviewer. You review an SRT subtitle file that was machine-translated to {lang_name}.
+
+For EACH subtitle line, check for these problems:
+1. NOT_TRANSLATED — the text is NOT {lang_name}: it still contains Chinese/other-language characters or foreign content that should have been translated to {lang_name}.
+2. TIMELINE_OVERLAP — the line's time range overlaps the PREVIOUS line (its start time is BEFORE the previous line's end time).
+3. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
+
+Output ONLY a JSON array (no markdown, no explanations). One object per risky line:
+[{{"index": <line index>, "problems": ["NOT_TRANSLATED"], "note": "<short note in {lang_name}>"}}]
+Use the problems list with zero or more of the three keys above. If a line has no problem, do NOT include it. If no line has problems, output only [].
+"""
+
+RISK_LANG_NAMES = {
+    "zh": "Chinese (Simplified, 简体中文)",
+    "en": "English",
+    "vi": "Vietnamese",
+}
+
+
+def _build_risk_check_prompt(lang: str) -> tuple[str, str]:
+    """Return (prompt, system_instruction) for the given subtitle language.
+
+    Defaults to Vietnamese when `lang` is unknown, matching legacy behaviour.
+    """
+    lang = (lang or "vi").lower()
+    lang_name = RISK_LANG_NAMES.get(lang, RISK_LANG_NAMES["vi"])
+    if lang == "vi":
+        return RISK_CHECK_PROMPT_VI, (
+            "You review Vietnamese subtitles and only flag risky lines. "
+            "Always output a JSON array."
+        )
+    return RISK_CHECK_PROMPT_GENERIC.format(lang_name=lang_name), (
+        f"You review {lang_name} subtitles and only flag risky lines. "
+        "Always output a JSON array."
+    )
+
 
 BATCH_SIZE = 50
 # Number of trailing lines of the previous batch reused as context in the next
@@ -71,8 +109,11 @@ def _parse_json_array(text: str) -> list[dict]:
     return out
 
 
-def check_subtitle_risks(video_id: str, log_fn=None) -> list[dict]:
+def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[dict]:
     """Run the Gemini risk check over the current SRT of `video_id`.
+
+    `lang` is the language the subtitles are in (zh / en / vi); the prompt is
+    built accordingly so the "NOT_TRANSLATED" rule matches that language.
 
     Returns a list of risky lines: {index, text, problems, note}.
     """
@@ -90,6 +131,8 @@ def check_subtitle_risks(video_id: str, log_fn=None) -> list[dict]:
     total_batches = (len(entries) + STEP - 1) // STEP
     risks: list[dict] = []
     seen_indexes: set[int] = set()
+
+    prompt, system_instruction = _build_risk_check_prompt(lang)
 
     def _call_gemini(contents, config: dict):
         return gemini_call_rotating(
@@ -115,12 +158,9 @@ def check_subtitle_risks(video_id: str, log_fn=None) -> list[dict]:
 
         try:
             response = _call_gemini(
-                RISK_CHECK_PROMPT + "\n\n" + batch_srt,
+                prompt + "\n\n" + batch_srt,
                 {
-                    "system_instruction": (
-                        "You review Vietnamese subtitles and only flag risky lines. "
-                        "Always output a JSON array."
-                    ),
+                    "system_instruction": system_instruction,
                     "temperature": 0.1,
                 },
             )
@@ -161,7 +201,7 @@ def check_subtitle_risks(video_id: str, log_fn=None) -> list[dict]:
     return risks
 
 
-def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
+def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str, lang: str = "vi"):
     """Run risk check in background, saving the result and notifying via WS."""
     job = jobs[job_id]
     job["status"] = "processing"
@@ -176,7 +216,7 @@ def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_i
         def _log(msg: str, level: str = "info"):
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
-        risks = check_subtitle_risks(video_id, log_fn=_log)
+        risks = check_subtitle_risks(video_id, lang=lang, log_fn=_log)
 
         out_dir = settings.temp_dir / "risk_check"
         out_dir.mkdir(parents=True, exist_ok=True)
