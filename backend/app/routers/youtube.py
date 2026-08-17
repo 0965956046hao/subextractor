@@ -109,7 +109,6 @@ async def generate_meta(body: GenerateMetaRequest, request: Request):
 
 {{
   "title": "Vietnamese title here",
-  "ctr_title": "Giật tít hấp dẫn bấm vào để xem",
   "description": "Full Vietnamese description with \\n line breaks",
   "tags": ["tag1", "tag2", ...],
   "hashtags": ["#Hashtag1", "#Hashtag2", ...],
@@ -120,7 +119,6 @@ async def generate_meta(body: GenerateMetaRequest, request: Request):
 
 Rules:
 - title: catchy Vietnamese title, include episode number if provided
-- ctr_title: 3-5 đề xuất tiêu đề giật tít (clickbait) bằng tiếng Việt để tăng CTR, tách nhau bởi " | ". Mỗi tiêu đề ngắn gọn, kích thích tò mò, gây sốc nhẹ nhưng KHÔNG bịa nội dung không có trong video
 - description: detailed Vietnamese description with paragraphs separated by \\n\\n, include info about genre, episode number, series name
 - tags: 10-15 relevant search keywords in Vietnamese and original language
 - hashtags: 8-10 hashtags with # prefix, no spaces (CamelCase format)
@@ -162,7 +160,7 @@ Original description: {body.original_description or "unknown"}
 
     # Ensure all required fields
     meta.setdefault("title", body.title)
-    meta.setdefault("ctr_title", body.ctr_title)
+    meta["ctr_title"] = meta.get("title", "")
     meta.setdefault("description", body.description)
     meta.setdefault("tags", body.tags or [])
     meta.setdefault("hashtags", body.hashtags or [])
@@ -294,8 +292,11 @@ def _process_thumbnail(thumb_path: Path) -> Path:
 
     logger.info("Thumbnail %s is %s, resizing to 1280x720", thumb_path.name, dims or "unknown")
 
-    # Output as .jpg next to original
-    out_path = thumb_path.with_suffix(".jpg")
+    # Resize to a temp PNG next to the source dir, never a .jpg beside the
+    # original thumbnail.png (keeps the FAL output folder to a single PNG).
+    out_dir = settings.temp_dir / "upload_thumb"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{thumb_path.stem}_1280x720.png"
     cmd = [
         magick, str(thumb_path),
         "-resize", "1280x720^",
@@ -361,6 +362,12 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
 
     logger.info("Running youtubeuploader: %s", " ".join(cmd))
 
+    # A temp resized thumbnail (in temp/upload_thumb/) must be removed once the
+    # upload no longer needs it.
+    temp_thumb = None
+    if "thumb" in locals() and thumb.exists() and thumb.name.endswith("_1280x720.png"):
+        temp_thumb = thumb
+
     def _run():
         import re
         try:
@@ -401,6 +408,13 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
         except Exception as e:
             job["status"] = "error"
             job["error"] = str(e)
+        finally:
+            if temp_thumb:
+                try:
+                    temp_thumb.unlink(missing_ok=True)
+                    logger.info("Cleaned temp thumbnail %s", temp_thumb)
+                except Exception as e:
+                    logger.warning("Failed to clean temp thumbnail %s: %s", temp_thumb, e)
 
     threading.Thread(target=_run, daemon=True).start()
     return {"job_id": job_id, "status": "uploading"}

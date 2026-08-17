@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     capcut_tts_default_rate: str = "1.0"
     capcut_tts_timeout: int = 600
 
+    # Parallel Range download (video/audio merge)
+    parallel_download_enabled: bool = True
+    parallel_download_min_size: int = 50 * 1024 * 1024  # 50MB
+    parallel_download_connections: int = 4
+
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
 

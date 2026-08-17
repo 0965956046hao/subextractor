@@ -94,6 +94,11 @@ def srt_to_ass_blackbox(
     back_col = _hex_to_ass_color(s.get("box_color", "#000000"))
     # ASS BorderStyle: 1=outline+shadow, 3=opaque box
     border_style = 3 if box_on else 1
+    # libass quirk: with BorderStyle=3 but Outline=0 AND Shadow=0, the opaque
+    # box is not drawn at all (zero border extent). Force a 1px border so the
+    # black background box actually renders.
+    if box_on and outline_w < 1:
+        outline_w = 1
     back_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
     # margin_h is a 1920px reference (positive = right); shift the horizontal
     # margins so the black box moves with the user's drag offset.

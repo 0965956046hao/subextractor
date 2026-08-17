@@ -10,7 +10,7 @@ from app.services.srt_utils import parse_srt
 from app.services.media_utils import _srt_path, _video_path, _get_audio_duration
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
-from app.services.translation_service import load_voice_map
+from app.services.translation_service import load_voice_map, generate_voice_map
 
 logger = logging.getLogger(__name__)
 
@@ -217,8 +217,15 @@ def build_full_audio(
         if multi_voice:
             voice_map = load_voice_map(video_id)
             if not voice_map:
+                # Bước dịch có thể đã bị bỏ qua (resume-skip khi SRT đã tồn tại)
+                # hoặc chạy lại từ bước dub — nên chủ động tạo voice_map tại đây.
                 if log_fn:
-                    log_fn("Không tìm thấy voice_map.json — bỏ qua nhiều giọng, dùng giọng mặc định.", level="warning")
+                    log_fn("Chưa có voice_map.json — đang tạo ngay tại bước lồng tiếng...")
+                generate_voice_map(video_id, entries, log_fn=log_fn)
+                voice_map = load_voice_map(video_id)
+            if not voice_map:
+                if log_fn:
+                    log_fn("Không tạo được voice_map.json — bỏ qua nhiều giọng, dùng giọng mặc định.", level="warning")
                 audio_files = synthesize_srt_capcut(
                     video_id,
                     progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,

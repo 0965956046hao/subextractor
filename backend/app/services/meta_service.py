@@ -13,7 +13,6 @@ PROMPT = """Parse the following video metadata into a valid JSON object with thi
 
 {{
   "title": "Vietnamese title here",
-  "ctr_title": "Giật tít hấp dẫn bấm vào để xem",
   "description": "Full Vietnamese description with \\n line breaks",
   "tags": ["tag1", "tag2", ...],
   "hashtags": ["#Hashtag1", "#Hashtag2", ...],
@@ -23,7 +22,6 @@ PROMPT = """Parse the following video metadata into a valid JSON object with thi
 }}
 
 - title: catchy Vietnamese title, include episode number if provided
-- ctr_title: 3-5 đề xuất tiêu đề giật tít (clickbait) bằng tiếng Việt để tăng CTR, tách nhau bởi " | ". Mỗi tiêu đề ngắn gọn, kích thích tò mò, gây sốc nhẹ nhưng KHÔNG bịa nội dung không có trong video
 - description: detailed Vietnamese description with paragraphs separated by \\n\\n, include info about genre, episode number, series name
 - tags: 10-15 relevant search keywords in Vietnamese and original language
 - hashtags: 8-10 hashtags with # prefix, no spaces (CamelCase format)
@@ -86,7 +84,7 @@ def generate_video_meta(video_id: str) -> dict:
     meta = json.loads(raw)
 
     meta.setdefault("title", "")
-    meta.setdefault("ctr_title", "")
+    meta["ctr_title"] = meta.get("title", "")
     meta.setdefault("description", "")
     meta.setdefault("tags", [])
     meta.setdefault("hashtags", [])

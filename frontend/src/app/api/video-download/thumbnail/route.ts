@@ -19,14 +19,18 @@ export async function POST(req: NextRequest) {
   }
 
   const url = (body.url || "").trim();
-  if (!url) return NextResponse.json({ detail: "URL is required" }, { status: 400 });
+  if (!url)
+    return NextResponse.json({ detail: "URL is required" }, { status: 400 });
 
   let handle: BrowserHandle;
   try {
     handle = await openBrowser();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ detail: `Không mở được Chrome: ${msg}` }, { status: 500 });
+    return NextResponse.json(
+      { detail: `Không mở được Chrome: ${msg}` },
+      { status: 500 },
+    );
   }
 
   let thumbnail: string | null = null;
@@ -53,7 +57,7 @@ export async function POST(req: NextRequest) {
     if (userId && videoId) {
       await page.goto(
         `https://www.douyin.com/user/${userId}?modal_id=${videoId}`,
-        { waitUntil: "domcontentloaded", timeout: 45000 }
+        { waitUntil: "domcontentloaded", timeout: 45000 },
       );
       await new Promise((r) => setTimeout(r, 1500));
 
@@ -62,7 +66,7 @@ export async function POST(req: NextRequest) {
         const clicked = await page.evaluate(() => {
           const buttons = Array.from(document.querySelectorAll("button"));
           const target = buttons.find((b) =>
-            (b.textContent || "").includes("我知道了")
+            (b.textContent || "").includes("我知道了"),
           );
           if (target) {
             (target as HTMLButtonElement).click();
@@ -78,12 +82,12 @@ export async function POST(req: NextRequest) {
       try {
         await page.waitForSelector(
           'div.account-name.userAccountTextHover[data-e2e="feed-video-nickname"]',
-          { timeout: 10000 }
+          { timeout: 10000 },
         );
         await page.click(
-          'div.account-name.userAccountTextHover[data-e2e="feed-video-nickname"]'
+          'div.account-name.userAccountTextHover[data-e2e="feed-video-nickname"]',
         );
-        await new Promise((r) => setTimeout(r, 4000));
+        await new Promise((r) => setTimeout(r, 10000));
       } catch {
         // account-name có thể không cần click
       }
@@ -99,16 +103,19 @@ export async function POST(req: NextRequest) {
 
       thumbnail = await extractThumbnail();
 
-      // Nếu chưa lấy được thì chờ thêm 4s và retry 1 lần nữa
+      // Nếu chưa lấy được thì chờ thêm 10s và retry 1 lần nữa
       if (!thumbnail) {
-        await new Promise((r) => setTimeout(r, 4000));
+        await new Promise((r) => setTimeout(r, 10000));
         thumbnail = await extractThumbnail();
       }
     }
   } catch (err) {
     await closeBrowser(handle).catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ detail: `Không thể mở link: ${msg}` }, { status: 500 });
+    return NextResponse.json(
+      { detail: `Không thể mở link: ${msg}` },
+      { status: 500 },
+    );
   }
 
   await closeBrowser(handle).catch(() => {});

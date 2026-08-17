@@ -35,8 +35,12 @@ def _download(url: str, dest: Path) -> None:
         url,
         headers={"User-Agent": _USER_AGENT, "Referer": "https://www.douyin.com/"},
     )
-    with urllib.request.urlopen(req, timeout=120, context=ctx) as resp, open(dest, "wb") as f:
+    # Write to a temp file then rename — so a concurrent reader (status poll +
+    # serve) never sees a partially-written dest.
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    with urllib.request.urlopen(req, timeout=120, context=ctx) as resp, open(tmp, "wb") as f:
         shutil.copyfileobj(resp, f)
+    os.replace(tmp, dest)
 
 
 def _load_meta_title(video_id: str) -> str:
@@ -108,8 +112,14 @@ def update_thumbnail(video_id: str) -> Path:
     prompt = _build_prompt(context, title)
     logger.info("fal.ai gpt-image-2 edit for %s (16:9)", video_id)
 
-    image_url = fal_client.upload_file(str(input_path))
-    reference_urls = [image_url]
+    try:
+        image_url = fal_client.upload_file(str(input_path))
+        reference_urls = [image_url]
+    finally:
+        # The downloaded input is only needed for the fal edit call — don't
+        # leave a stray .jpg next to the generated thumbnail.png.
+        input_path.unlink(missing_ok=True)
+
 
     # snapshots_dir = settings.temp_dir / "frames" / video_id / "ocr_snapshots"
     # snapshot_files = sorted(snapshots_dir.glob("*.jpg")) if snapshots_dir.exists() else []

@@ -78,10 +78,130 @@ def import_video(body: ImportRequest):
     return {"video_id": video_id}
 
 
-_READ_CHUNK = 1024 * 256
+_READ_CHUNK = 4 * 1024 * 1024
 _CONNECT_TIMEOUT = 30
 _READ_TIMEOUT = 60
 _MAX_RETRIES = 3
+
+
+def _probe_range(url: str, ctx) -> tuple[int, bool]:
+    """Probe the CDN: does it honor Range? Returns (total_bytes, supports_range)."""
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Referer": "https://www.douyin.com/",
+            "Accept": "*/*",
+            "Range": "bytes=0-0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT, context=ctx) as resp:
+            status = getattr(resp, "status", 200)
+            crange = resp.headers.get("Content-Range", "")
+            if status == 206 and "/" in crange:
+                total = int(crange.rsplit("/", 1)[-1])
+                logger.info("range supported for %s: total=%d", url[:80], total)
+                return total, True
+            total = int(resp.headers.get("Content-Length") or 0)
+            logger.info("range NOT supported for %s (status=%s)", url[:80], status)
+            return total, False
+    except Exception as e:
+        logger.warning("range probe failed for %s: %s", url[:80], e)
+        return 0, False
+
+
+def _download_range_part(url: str, start: int, end: int, dest: Path, ctx) -> int:
+    """Download one byte-range into `dest`. Returns bytes written."""
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Referer": "https://www.douyin.com/",
+        "Accept": "*/*",
+        "Range": f"bytes={start}-{end}",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT, context=ctx) as resp:
+        status = getattr(resp, "status", 200)
+        if status != 206:
+            raise RuntimeError(f"Expected 206, got {status}")
+        crange = resp.headers.get("Content-Range", "")
+        if not crange.startswith(f"bytes {start}-"):
+            raise RuntimeError(f"Unexpected Content-Range: {crange}")
+        try:
+            resp.fp.raw._sock.settimeout(_READ_TIMEOUT)
+        except Exception:
+            pass
+        count = 0
+        with open(dest, "wb") as f:
+            while True:
+                chunk = resp.read(_READ_CHUNK)
+                if not chunk:
+                    break
+                f.write(chunk)
+                count += len(chunk)
+        return count
+
+
+def _download_range(url: str, dest: Path, total: int, ctx, on_progress=None) -> None:
+    """Download `url` in parallel Range requests into `dest`."""
+    n_parts = max(1, settings.parallel_download_connections)
+    chunk = (total + n_parts - 1) // n_parts
+    ranges = [(i * chunk, min((i + 1) * chunk - 1, total - 1)) for i in range(n_parts)]
+    ranges = [r for r in ranges if r[0] <= r[1]]
+
+    part_paths: dict[int, Path] = {}
+    results: dict[int, int] = {}
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    def _worker(idx: int, start: int, end: int):
+        part_path = dest.parent / f"{dest.name}.part{idx}"
+        part_paths[idx] = part_path
+        last_err: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                part_path.unlink(missing_ok=True)
+                written = _download_range_part(url, start, end, part_path, ctx)
+                with lock:
+                    results[idx] = written
+                    done = sum(results.values())
+                    if on_progress and total:
+                        on_progress(min(99, int(done * 100 / total)))
+                return
+            except (TimeoutError, ConnectionError, OSError, RuntimeError) as e:
+                last_err = e
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(2 * (attempt + 1))
+        with lock:
+            errors.append(last_err or RuntimeError(f"part {idx} failed"))
+
+    threads = [
+        threading.Thread(target=_worker, args=(i, s, e))
+        for i, (s, e) in enumerate(ranges)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    if errors:
+        for p in part_paths.values():
+            p.unlink(missing_ok=True)
+        raise RuntimeError(f"Parallel download failed: {errors[0]}")
+
+    if sum(results.values()) != total:
+        for p in part_paths.values():
+            p.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Range download size mismatch: got {sum(results.values())}, expected {total}"
+        )
+
+    with open(dest, "wb") as out:
+        for i in range(len(ranges)):
+            with open(part_paths[i], "rb") as f:
+                shutil.copyfileobj(f, out)
+    for p in part_paths.values():
+        p.unlink(missing_ok=True)
 
 
 def _download(url: str, dest: Path, on_progress=None) -> None:
@@ -90,6 +210,19 @@ def _download(url: str, dest: Path, on_progress=None) -> None:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+
+    if settings.parallel_download_enabled:
+        total, supports_range = _probe_range(url, ctx)
+        if supports_range and total >= settings.parallel_download_min_size:
+            try:
+                logger.info("parallel range download %d bytes via %d connections", total, settings.parallel_download_connections)
+                _download_range(url, dest, total, ctx, on_progress)
+                return
+            except Exception as e:
+                logger.warning("parallel range download failed (%s), falling back to sequential", e)
+                for p in dest.parent.glob(f"{dest.name}.part*"):
+                    p.unlink(missing_ok=True)
+                dest.unlink(missing_ok=True)
 
     retryable = (TimeoutError, ConnectionError, OSError)
     last_err: Exception | None = None
@@ -173,17 +306,27 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
     try:
         _set("Đang tải video...", 0)
         logger.info("Downloading video track: %s", video_url[:120])
+        _t_video_start = time.time()
         _download(
             video_url, video_path,
             on_progress=lambda p: _set("Đang tải video...", int(p * 0.5), "Đang tải video..."),
         )
+        _t_video = time.time() - _t_video_start
+        msg = f"Đã tải video xong trong {_t_video:.1f}s."
+        logger.info("video download done for %s in %.1fs", merge_id, _t_video)
+        _set("Đang tải video...", 50, msg)
 
         _set("Đang tải audio...", 50, "Đang tải audio...")
         logger.info("Downloading audio track: %s", audio_url[:120])
+        _t_audio_start = time.time()
         _download(
             audio_url, audio_path,
             on_progress=lambda p: _set("Đang tải audio...", 50 + int(p * 0.4)),
         )
+        _t_audio = time.time() - _t_audio_start
+        msg = f"Đã tải audio xong trong {_t_audio:.1f}s."
+        logger.info("audio download done for %s in %.1fs", merge_id, _t_audio)
+        _set("Đang tải audio...", 90, msg)
 
         _set("Đang merge video + audio...", 90, "Đang merge video + audio (FFmpeg)...")
 
@@ -203,17 +346,23 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
         ]
         logger.info("Merging %s + %s → %s", video_path.name, audio_path.name, out_path.name)
 
+        _t_merge_start = time.time()
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if proc.returncode != 0:
             err = proc.stderr[-400:] if proc.stderr else "unknown error"
             raise RuntimeError(f"FFmpeg merge failed: {err}")
+        _t_merge = time.time() - _t_merge_start
+        msg = f"Đã merge video + audio xong trong {_t_merge:.1f}s."
+        logger.info("merge done for %s in %.1fs", merge_id, _t_merge)
+        _set("Đang merge video + audio...", 100, msg)
 
         _cleanup()
         job["status"] = "done"
         job["stage"] = "Hoàn tất"
         job["progress"] = 100
         job.setdefault("logs", []).append({
-            "message": "Merge hoàn tất.", "ts": time.time(), "level": "success",
+            "message": f"Merge hoàn tất — tải video {_t_video:.1f}s, tải audio {_t_audio:.1f}s, merge {_t_merge:.1f}s.",
+            "ts": time.time(), "level": "success",
         })
         job["url"] = f"/api/download/merged/{merge_id}"
         job["filename"] = f"{merge_id}.mp4"
