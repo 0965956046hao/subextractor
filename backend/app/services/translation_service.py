@@ -1,8 +1,5 @@
 import logging
 import json
-import os
-from pathlib import Path
-from typing import Optional
 
 from app.config import settings
 from app.services.media_utils import _srt_path, _video_path
@@ -14,7 +11,11 @@ from app.services.context_service import (
     _load_capcut_voice_catalog,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync
-from app.services.retry_utils import gemini_retry
+from app.services.retry_utils import (
+    gemini_call_rotating,
+    configured_gemini_keys,
+    genai_generate_content_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,9 @@ Rules:
 7. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
 8. Never use "mày" / "tao" (informal disrespectful pronouns). Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context
 9. You may ONLY merge adjacent lines whose content is identical (see rule 6). NEVER merge lines with different content. ALWAYS keep the original timeline (start/end times) unchanged — do not alter timestamps except when merging identical adjacent lines
-10. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
-11. Output ONLY the translated SRT — no explanations, no markdown, no code fences
+10. IMPORTANT — MERGE RULE: You may ONLY merge segments that are IMMEDIATELY NEXT TO EACH OTHER (adjacent, back-to-back in time) AND have IDENTICAL content. NEVER merge identical-looking content that is separated by other lines in between — if identical text reappears later after different content in between, it must stay as a separate subtitle line with its OWN timeline. ABSOLUTELY NEVER merge across a gap or over different content
+11. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
+12. Output ONLY the translated SRT — no explanations, no markdown, no code fences
 
 SRT to translate from Chinese to Vietnamese:
 
@@ -70,17 +72,18 @@ SRT to translate from Chinese to Vietnamese:
 GENERIC_TRANSLATE_PROMPT = """You are a professional subtitle translator. Translate the following SRT subtitles from {source_lang_name} to {target_lang_name}.
 
 Rules:
-1. Read the FULL context first before translating
-2. Use natural sentence structure, not word-for-word translation
-3. Keep the original SRT format: index, timestamps, and translated text
-4. Keep each translated line roughly the same length
-5. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
-6. Never use "mày" / "tao" (informal disrespectful pronouns). Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context
-7. Merge adjacent lines whose content is identical into one line with the earliest start time and latest end time. NEVER merge lines with different content. ALWAYS keep the original timeline (start/end times) unchanged
-8. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
-9. DO NOT add any explanation or notes
-10. Output ONLY the translated SRT content in valid SRT format
-
+1. Read the full context of all lines before translating.
+2. Use natural Vietnamese; avoid mechanical, word-for-word translation.
+3. Adapt cultural terms appropriately (e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency").
+4. Maintain the SRT format: sequence number, timestamps, and translated Vietnamese content.
+5. Keep line lengths balanced to ensure proper subtitle display timing.
+6. Merge consecutive duplicate lines: if two or more adjacent lines share over 80% identical content, merge them into a single line spanning from the start time of the first duplicate to the end time of the last duplicate.
+7. Remove all hyphens/dashes ("-", "--", "---") from the translated text.
+8. Strictly avoid "mày" or "tao" (disrespectful/crude pronouns). Use polite alternatives such as "ta," "ngươi," "anh," "cô," or "tôi" depending on the context.
+9. ONLY merge adjacent lines with identical content (see Rule 6). NEVER merge lines with different content. ALWAYS preserve original timestamps (start/end times)—do not alter them unless merging identical adjacent lines.
+10. IMPORTANT — MERGING RULE: ONLY merge lines that are IMMEDIATELY ADJACENT (consecutive line numbers) AND have IDENTICAL content. DO NOT merge identical content if it is separated by intervening lines—if the exact same content reappears after different content, it must remain a separate subtitle line with its own timestamp. DO NOT merge across gaps or different content.
+11. Remove extraneous or irrelevant characters that are not part of the subtitle content: redundant punctuation, repeated symbols (e.g., "。。", "。。。", "!!!", "~"), noise indicators, or filler characters.
+12. Output only the translated SRT content—no explanations, no Markdown formatting, and no code blocks.
 Here is the SRT to translate:
 
 """
@@ -103,14 +106,15 @@ Translated patch:
 """
 
 
-def _build_patch_context_note(model, translated_batch, source_lang: str, target_lang: str) -> str:
+def _build_patch_context_note(translated_batch, source_lang: str, target_lang: str) -> str:
     """Ask Gemini to summarize a translated patch into a reusable context note."""
     sn = LANG_NAMES.get(source_lang, source_lang)
     tn = LANG_NAMES.get(target_lang, target_lang)
     prompt = PATCH_CONTEXT_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
     patch_srt = entries_to_srt(translated_batch)
     try:
-        response = gemini_retry(model.models.generate_content)(
+        response = gemini_call_rotating(
+            genai_generate_content_factory,
             model=settings.gemini_model,
             contents=prompt + patch_srt,
             config={
@@ -122,22 +126,6 @@ def _build_patch_context_note(model, translated_batch, source_lang: str, target_
     except Exception as e:
         logger.warning("Patch context note failed: %s", e)
         return ""
-
-
-def _get_gemini_client():
-    """Lazy-load Gemini client when needed."""
-    try:
-        from google import genai
-    except ImportError:
-        raise ImportError(
-            "google-genai not installed. Run: pip install google-genai"
-        )
-
-    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "") or _read_user_config().get("gemini_api_key", "")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
-
-    return genai.Client(api_key=api_key)
 
 
 LANG_NAMES = {
@@ -268,7 +256,17 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     if log_fn:
         log_fn(f"Đọc được {len(entries)} dòng phụ đề, bắt đầu dịch {source_lang} → {target_lang}...")
 
-    model = _get_gemini_client()
+    # Validate at least one Gemini key is configured (keeps friendly error).
+    if not configured_gemini_keys():
+        raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
+
+    def _call_gemini(contents, config: dict):
+        return gemini_call_rotating(
+            genai_generate_content_factory,
+            model=settings.gemini_model,
+            contents=contents,
+            config=config,
+        )
 
     # Build prompt based on language pair
     if source_lang == "zh" and target_lang == "vi":
@@ -314,14 +312,10 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             log_fn(f"Dịch batch {bi + 1}/{total_batches} ({len(batch)} dòng: {batch_start + 1}–{min(batch_start + batch_size, len(entries))})...")
 
         try:
-            response = gemini_retry(model.models.generate_content)(
-                model=settings.gemini_model,
-                contents=prompt,
-                config={
-                    "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
-                    "temperature": 0.3,
-                },
-            )
+            response = _call_gemini(prompt, {
+                "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+                "temperature": 0.3,
+            })
             response_text = response.text.strip()
         except Exception as e:
             logger.error("Gemini API error: %s", e)
@@ -358,14 +352,10 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 + batch_srt
             )
             try:
-                response2 = gemini_retry(model.models.generate_content)(
-                    model=settings.gemini_model,
-                    contents=retry_prompt,
-                    config={
-                        "system_instruction": "You are a subtitle translator. You must translate ALL text. Never echo the input.",
-                        "temperature": 0.7,
-                    },
-                )
+                response2 = _call_gemini(retry_prompt, {
+                    "system_instruction": "You are a subtitle translator. You must translate ALL text. Never echo the input.",
+                    "temperature": 0.7,
+                })
                 response_text2 = _clean_gemini_response(response2.text.strip())
                 translated_batch = parse_srt(response_text2)
             except Exception:
@@ -389,7 +379,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
 
         # Build a context note from this patch and append it so the NEXT patch
         # keeps names, honorifics, terminology and tone consistent.
-        note = _build_patch_context_note(model, translated_batch, source_lang, target_lang)
+        note = _build_patch_context_note(translated_batch, source_lang, target_lang)
         if note:
             patch_context = (patch_context + "\n\n" + note) if patch_context else note
             append_translation_context(video_id, note)

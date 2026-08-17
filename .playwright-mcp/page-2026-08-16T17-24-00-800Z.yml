@@ -1,0 +1,47 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: SubTitle Extractor
+      - link "New Extractor" [ref=e10] [cursor=pointer]:
+        - /url: /extract
+      - link "Auto Pipeline" [ref=e14] [cursor=pointer]:
+        - /url: /auto
+      - link "YouTube Upload" [ref=e19] [cursor=pointer]:
+        - /url: /youtube
+      - link "Tải video" [ref=e25] [cursor=pointer]:
+        - /url: /download
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=e31] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e35]:
+      - generic [ref=e36]: Extracted Library
+      - heading "Your subtitles, ready to relive" [level=1] [ref=e39]: Your subtitles,ready to relive
+      - paragraph [ref=e41]: Every video you’ve extracted lives here — open one to watch, read the transcript, and download clean SRT text.
+      - link "Start a new extractor" [ref=e44] [cursor=pointer]:
+        - /url: /extract
+      - generic [ref=e50]:
+        - generic [ref=e51]: 1 videos
+        - generic [ref=e52]: 0 subtitle lines
+        - generic [ref=e53]: latest Aug 17, 2026
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e56]: 1 video
+        - generic [ref=e57]:
+          - button "Xem dạng lưới" [ref=e58] [cursor=pointer]
+          - button "Xem dạng danh sách" [ref=e64] [cursor=pointer]
+      - 'link "山海经异兽美女和姬子阿姨的机甲，你选哪个？#姬甲无限流ai征集 #崩坏星穹铁道 #山海经 #机甲 - 抖音.mp4 Delete 山海经异兽美女和姬子阿姨的机甲，你选哪个？#姬甲无限流ai征集 #崩坏星穹铁道 #山海经 #机甲 - 抖音.mp4 Đang xử lý… 0% Hủy xử lý Latest extraction" [ref=e67] [cursor=pointer]':
+        - /url: /video/67c805544642
+        - generic [ref=e69]:
+          - generic [ref=e70]:
+            - 'img "山海经异兽美女和姬子阿姨的机甲，你选哪个？#姬甲无限流ai征集 #崩坏星穹铁道 #山海经 #机甲 - 抖音.mp4" [ref=e71]'
+            - button "Delete" [ref=e81]
+          - generic [ref=e84]:
+            - generic [ref=e85]:
+              - 'heading "山海经异兽美女和姬子阿姨的机甲，你选哪个？#姬甲无限流ai征集 #崩坏星穹铁道 #山海经 #机甲 - 抖音.mp4" [level=3] [ref=e86]'
+              - generic [ref=e87]:
+                - generic [ref=e88]:
+                  - generic [ref=e89]: Đang xử lý…
+                  - generic [ref=e91]: 0%
+                - button "Hủy xử lý" [ref=e94]
+            - generic [ref=e98]: Latest extraction
+    - paragraph [ref=e102]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=e103]

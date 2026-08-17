@@ -12,12 +12,15 @@ CAPCUT="$ROOT/capcut-tts-api"
 # Kill tất cả process khi Ctrl+C
 BACKEND_PID=""
 CAPCUT_PID=""
+CAFFEINATE_PID=""
 cleanup() {
   echo ""
   echo "Stopping backend (${BACKEND_PID:-?})..."
   [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null || true
   echo "Stopping capcut service (${CAPCUT_PID:-?})..."
   [ -n "$CAPCUT_PID" ] && kill "$CAPCUT_PID" 2>/dev/null || true
+  echo "Stopping caffeinate (${CAFFEINATE_PID:-?})..."
+  [ -n "$CAFFEINATE_PID" ] && kill "$CAFFEINATE_PID" 2>/dev/null || true
   wait 2>/dev/null || true
   echo "All stopped."
 }
@@ -30,6 +33,12 @@ CAPCUT_PID=$!
 echo "==> Starting backend  http://localhost:8000"
 (cd "$BACKEND" && exec .venv/bin/uvicorn app.main:app --reload --port 8000) &
 BACKEND_PID=$!
+
+# Chặn macOS ngủ hệ thống khi màn hình tắt, để job OCR/dub xử lý qua đêm không bị treo.
+# -i: chặn idle system sleep (battery + AC), -s: chặn system sleep (AC),
+# -w: tự thoát khi backend dừng. Display vẫn được phép tắt để tiết kiệm pin.
+caffeinate -i -s -w "$BACKEND_PID" &
+CAFFEINATE_PID=$!
 
 echo "==> Starting frontend http://localhost:3000"
 (cd "$FRONTEND" && exec npm run dev)

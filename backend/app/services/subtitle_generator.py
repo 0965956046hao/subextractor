@@ -33,6 +33,9 @@ LEADING_ARTIFACT_RE = re.compile(
 # Any real letter/CJK char (a text made of digits/punct only is OCR junk).
 HAS_LETTER_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ\u00c0-\u024f\u4e00-\u9fff]")
 
+# Ngưỡng gộp sub liền kề (hardcode): 2 sub giống nhau ≥ 80% thì gộp lại.
+MERGE_THRESHOLD = 0.8
+
 
 def sec_to_srt(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -56,7 +59,16 @@ def clean_text(text: str) -> str:
 def texts_similar(a: str, b: str) -> bool:
     if not a or not b:
         return False
-    return fuzz.ratio(a, b) / 100.0 >= settings.merge_similarity
+    return fuzz.ratio(a, b) / 100.0 >= MERGE_THRESHOLD
+
+
+def _adjacent(prev_end: float, start: float, tol: float = 0.05) -> bool:
+    """True when `start` follows `prev_end` immediately (no gap in the timeline).
+
+    Only adjacent subtitles may be merged; identical text that reappears at a
+    later point must stay as a separate entry.
+    """
+    return abs(start - prev_end) <= tol
 
 
 # ── Post-processing (hậu kiểm): strip stray chars, then merge once more ──
@@ -138,18 +150,12 @@ def postprocess_entries(
 
     merged: list[tuple[float, float, str]] = []
     for start, end, text in cleaned:
-        if merged and _mergeable(merged[-1][2], text):
-            prev_start, _prev_end, prev_text = merged[-1]
-            merged[-1] = (prev_start, end, prev_text if len(prev_text) >= len(text) else text)
-            continue
         if (
-            len(merged) >= 2
-            and end - merged[-1][0] < settings.subtitle_flash_seconds
-            and _mergeable(merged[-2][2], text)
+            merged
+            and _adjacent(merged[-1][1], start)
+            and _mergeable(merged[-1][2], text)
         ):
-            # A-B-A with a short middle: absorb the blip and merge A's.
-            prev_start, _prev_end, prev_text = merged[-2]
-            merged = merged[:-1]
+            prev_start, _prev_end, prev_text = merged[-1]
             merged[-1] = (prev_start, end, prev_text if len(prev_text) >= len(text) else text)
             continue
         merged.append((start, end, text))
@@ -210,24 +216,6 @@ def generate_srt(
         if similarity < settings.similarity_threshold:
             if prev_text.strip() and stable_count >= min_stable:
                 boundary = (prev_ts + timestamp) / 2.0
-                flash_duration = boundary - start_time
-                if (
-                    text.strip()
-                    and entries
-                    and flash_duration < settings.subtitle_flash_seconds
-                    and texts_similar(text, entries[-1][2])
-                ):
-                    # Short flash (e.g. OCR blip) between two identical
-                    # segments — absorb it back into the open entry.
-                    entries[-1] = (entries[-1][0], boundary, entries[-1][2])
-                    if text_callback:
-                        text_callback(entries[-1][0], boundary, entries[-1][2])
-                    prev_text = text
-                    prev_ts = timestamp
-                    stable_count = 1
-                    if progress_callback:
-                        progress_callback(i, total_frames or i + 1)
-                    continue
                 entries.append((start_time, boundary, prev_text.strip()))
                 if text_callback:
                     text_callback(start_time, boundary, prev_text.strip())
@@ -253,8 +241,13 @@ def generate_srt(
     ocr_engine.log_stats()
 
     if prev_text.strip():
-        if entries and texts_similar(prev_text, entries[-1][2]):
-            entries[-1] = (entries[-1][0], prev_ts, entries[-1][2])
+        if (
+            entries
+            and _adjacent(entries[-1][1], start_time)
+            and texts_similar(prev_text, entries[-1][2])
+        ):
+            prev = entries[-1][2]
+            entries[-1] = (entries[-1][0], prev_ts, prev if len(prev) >= len(prev_text) else prev_text)
         else:
             entries.append((start_time, prev_ts, prev_text.strip()))
         if text_callback:
@@ -267,8 +260,13 @@ def generate_srt(
 
     merged = []
     for start, end, text in entries:
-        if merged and texts_similar(merged[-1][2], text):
-            merged[-1] = (merged[-1][0], end, merged[-1][2])
+        if (
+            merged
+            and _adjacent(merged[-1][1], start)
+            and texts_similar(merged[-1][2], text)
+        ):
+            prev = merged[-1][2]
+            merged[-1] = (merged[-1][0], end, prev if len(prev) >= len(text) else text)
         else:
             merged.append((start, end, text))
 

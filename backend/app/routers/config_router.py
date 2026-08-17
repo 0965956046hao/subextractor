@@ -1,6 +1,7 @@
 import json
 import logging
 import shutil
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -26,6 +27,11 @@ def _read_config() -> dict:
         except Exception:
             return {}
     return {}
+
+
+def _write_config(cfg: dict):
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 DEFAULT_SUBTITLE_STYLE = {
@@ -67,6 +73,7 @@ def get_subtitle_style() -> dict:
 
 class SaveConfigRequest(BaseModel):
     gemini_api_key: str = ""
+    gemini_api_keys: list[str] | None = None
     google_tts_json: str = ""
     fal_key: str = ""
     auto_context_enabled: bool | None = None
@@ -74,26 +81,98 @@ class SaveConfigRequest(BaseModel):
     watermark_text: str | None = None
 
 
-def _logo_path() -> Path | None:
-    """Return the current logo file path, or None if not uploaded yet."""
-    cfg = _read_config()
-    name = cfg.get("watermark_logo") or ""
-    if not name:
+class WatermarkPresetCreate(BaseModel):
+    name: str = ""
+    text: str = ""
+
+
+class WatermarkPresetUpdate(BaseModel):
+    name: str | None = None
+    text: str | None = None
+
+
+# ── Watermark presets (mỗi bộ = 1 cặp text + logo) ──
+
+DEFAULT_PRESET_NAME = "Bộ mặc định"
+
+
+def _migrate_presets(cfg: dict) -> dict:
+    """Upgrade old single watermark (watermark_text/watermark_logo) to presets."""
+    if not cfg.get("watermark_presets"):
+        legacy_text = (cfg.get("watermark_text") or "").strip()
+        legacy_logo = cfg.get("watermark_logo") or ""
+        preset = {
+            "id": "default",
+            "name": DEFAULT_PRESET_NAME,
+            "text": legacy_text,
+            "logo_file": legacy_logo,
+        }
+        cfg["watermark_presets"] = [preset]
+        cfg["active_watermark_preset"] = "default"
+        for k in ("watermark_text", "watermark_logo"):
+            cfg.pop(k, None)
+        _write_config(cfg)
+    elif not cfg.get("active_watermark_preset") and cfg.get("watermark_presets"):
+        cfg["active_watermark_preset"] = cfg["watermark_presets"][0]["id"]
+        _write_config(cfg)
+    return cfg
+
+
+def _presets() -> list[dict]:
+    cfg = _migrate_presets(_read_config())
+    return cfg.get("watermark_presets") or []
+
+
+def _preset(preset_id: str) -> dict | None:
+    return next((p for p in _presets() if p.get("id") == preset_id), None)
+
+
+def _active_preset_id(cfg: dict | None = None) -> str:
+    cfg = cfg or _migrate_presets(_read_config())
+    active = cfg.get("active_watermark_preset")
+    if active and _preset(active):
+        return active
+    presets = cfg.get("watermark_presets") or []
+    return presets[0]["id"] if presets else ""
+
+
+def _preset_logo_path(preset_id: str) -> Path | None:
+    p = _preset(preset_id)
+    if not p or not p.get("logo_file"):
         return None
-    p = LOGO_DIR / name
-    return p if p.exists() else None
+    path = LOGO_DIR / p["logo_file"]
+    return path if path.exists() else None
 
 
-def _has_logo() -> bool:
-    return _logo_path() is not None
+def _gemini_keys(cfg: dict | None = None) -> list[str]:
+    """All configured Gemini API keys (legacy single + list, deduped)."""
+    cfg = cfg if cfg is not None else _read_config()
+    keys: list[str] = []
+    for k in (cfg.get("gemini_api_keys") or []):
+        if isinstance(k, str) and k.strip():
+            keys.append(k.strip())
+    legacy = (cfg.get("gemini_api_key") or "").strip()
+    if legacy and legacy not in keys:
+        keys.append(legacy)
+    return keys
 
 
-def get_watermark() -> dict:
-    """Return the watermark config for burning: {text, logo_path}."""
-    cfg = _read_config()
-    text = (cfg.get("watermark_text") or "").strip()
-    logo = _logo_path()
-    return {"text": text, "logo_path": str(logo) if logo else None}
+def get_watermark(preset_id: str | None = None) -> dict:
+    """Return the watermark config for burning: {text, logo_path, preset_id}.
+
+    If preset_id is omitted, the active watermark preset is used.
+    """
+    cfg = _migrate_presets(_read_config())
+    pid = preset_id or _active_preset_id(cfg)
+    p = _preset(pid)
+    if not p:
+        return {"text": "", "logo_path": None, "preset_id": pid}
+    logo = _preset_logo_path(pid)
+    return {
+        "text": (p.get("text") or "").strip(),
+        "logo_path": str(logo) if logo else None,
+        "preset_id": pid,
+    }
 
 
 @router.get("/api/config")
@@ -101,7 +180,8 @@ async def get_config():
     """Get current user config."""
     cfg = _read_config()
 
-    gemini_key = cfg.get("gemini_api_key", "") or ""
+    gemini_keys = _gemini_keys(cfg)
+    gemini_key = gemini_keys[0] if gemini_keys else ""
     has_gemini = bool(gemini_key)
 
     tts_raw = cfg.get("google_tts_credentials", "") or ""
@@ -117,18 +197,32 @@ async def get_config():
         except Exception:
             tts_json = tts_raw if isinstance(tts_raw, str) else ""
 
+    presets = _presets()
     return {
         "has_gemini_key": has_gemini,
         "gemini_api_key": gemini_key,
+        "gemini_api_keys": gemini_keys,
         "has_tts_credentials": has_tts,
         "google_tts_credentials": tts_json,
         "tts_credentials_info": tts_info,
         "has_fal_key": bool(cfg.get("fal_key")),
         "auto_context_enabled": cfg.get("auto_context_enabled", True),
         "subtitle_style": get_subtitle_style(),
-        "watermark_text": cfg.get("watermark_text", ""),
-        "has_watermark_logo": _has_logo(),
-        "watermark_logo_name": (cfg.get("watermark_logo") or "") if _has_logo() else "",
+        "watermark_text": get_watermark().get("text", ""),
+        "has_watermark_logo": bool(_preset_logo_path(_active_preset_id(cfg))),
+        "watermark_logo_name": (_preset(_active_preset_id(cfg)) or {}).get("logo_file", ""),
+        "watermark_presets": [
+            {
+                "id": p["id"],
+                "name": p.get("name") or DEFAULT_PRESET_NAME,
+                "text": p.get("text") or "",
+                "has_logo": bool(_preset_logo_path(p["id"])),
+                "logo_name": p.get("logo_file") or "",
+                "active": p["id"] == _active_preset_id(cfg),
+            }
+            for p in presets
+        ],
+        "active_watermark_preset": _active_preset_id(cfg),
     }
 
 
@@ -137,8 +231,22 @@ async def save_config(body: SaveConfigRequest):
     """Save Gemini API key, Google TTS credentials and/or subtitle style."""
     cfg = _read_config()
 
-    if body.gemini_api_key:
+    if body.gemini_api_keys is not None:
+        keys = [k.strip() for k in body.gemini_api_keys if isinstance(k, str) and k.strip()]
+        if keys:
+            cfg["gemini_api_keys"] = keys
+            cfg["gemini_api_key"] = keys[0]
+        else:
+            # Clear all keys.
+            cfg["gemini_api_keys"] = []
+            cfg["gemini_api_key"] = ""
+    elif body.gemini_api_key:
+        keys = _gemini_keys(cfg)
         cfg["gemini_api_key"] = body.gemini_api_key
+        if body.gemini_api_key not in keys:
+            cfg["gemini_api_keys"] = [body.gemini_api_key] + [k for k in keys if k != body.gemini_api_key]
+        else:
+            cfg["gemini_api_keys"] = keys
 
     if body.fal_key:
         cfg["fal_key"] = body.fal_key.strip()
@@ -157,22 +265,89 @@ async def save_config(body: SaveConfigRequest):
         cfg["auto_context_enabled"] = body.auto_context_enabled
 
     if body.watermark_text is not None:
-        cfg["watermark_text"] = body.watermark_text.strip()
+        cfg = _migrate_presets(cfg)
+        active_id = _active_preset_id(cfg)
+        for p in cfg.get("watermark_presets") or []:
+            if p["id"] == active_id:
+                p["text"] = body.watermark_text.strip()
+                break
 
     if body.subtitle_style is not None:
         merged = get_subtitle_style()
         merged.update(body.subtitle_style)
         cfg["subtitle_style"] = merged
 
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_config(cfg)
     logger.info("User config saved to %s", CONFIG_FILE)
     return {"status": "ok", "saved": list(cfg.keys())}
 
 
-@router.post("/api/config/logo")
-async def upload_logo(file: UploadFile = File(...)):
-    """Upload a watermark logo image. Stored under temp/logo/, not wiped by temp clear."""
+@router.post("/api/config/watermark/presets")
+async def create_watermark_preset(body: WatermarkPresetCreate):
+    """Create a new watermark preset (a text+logo pair)."""
+    cfg = _migrate_presets(_read_config())
+    preset_id = f"wm_{uuid.uuid4().hex[:8]}"
+    presets = cfg.setdefault("watermark_presets", [])
+    presets.append({
+        "id": preset_id,
+        "name": (body.name or "").strip() or f"Bộ {len(presets) + 1}",
+        "text": (body.text or "").strip(),
+        "logo_file": "",
+    })
+    _write_config(cfg)
+    return {"status": "ok", "preset_id": preset_id}
+
+
+@router.put("/api/config/watermark/presets/{preset_id}")
+async def update_watermark_preset(preset_id: str, body: WatermarkPresetUpdate):
+    """Update a watermark preset's name and/or text."""
+    cfg = _migrate_presets(_read_config())
+    for p in cfg.get("watermark_presets") or []:
+        if p["id"] == preset_id:
+            if body.name is not None:
+                p["name"] = body.name.strip() or p.get("name") or DEFAULT_PRESET_NAME
+            if body.text is not None:
+                p["text"] = body.text.strip()
+            _write_config(cfg)
+            return {"status": "ok"}
+    raise HTTPException(404, "Preset not found")
+
+
+@router.delete("/api/config/watermark/presets/{preset_id}")
+async def delete_watermark_preset(preset_id: str):
+    """Delete a watermark preset and its logo file."""
+    cfg = _migrate_presets(_read_config())
+    presets = cfg.get("watermark_presets") or []
+    p = next((x for x in presets if x["id"] == preset_id), None)
+    if not p:
+        raise HTTPException(404, "Preset not found")
+    if p.get("logo_file"):
+        (LOGO_DIR / p["logo_file"]).unlink(missing_ok=True)
+    cfg["watermark_presets"] = [x for x in presets if x["id"] != preset_id]
+    if cfg.get("active_watermark_preset") == preset_id:
+        remaining = cfg["watermark_presets"]
+        cfg["active_watermark_preset"] = remaining[0]["id"] if remaining else ""
+    _write_config(cfg)
+    return {"status": "ok", "removed": True}
+
+
+@router.post("/api/config/watermark/active")
+async def set_active_watermark_preset(body: dict):
+    """Set which watermark preset is used by default."""
+    preset_id = (body or {}).get("preset_id") or ""
+    if not _preset(preset_id):
+        raise HTTPException(404, "Preset not found")
+    cfg = _migrate_presets(_read_config())
+    cfg["active_watermark_preset"] = preset_id
+    _write_config(cfg)
+    return {"status": "ok", "active_watermark_preset": preset_id}
+
+
+@router.post("/api/config/watermark/presets/{preset_id}/logo")
+async def upload_preset_logo(preset_id: str, file: UploadFile = File(...)):
+    """Upload a watermark logo for a specific preset."""
+    if not _preset(preset_id):
+        raise HTTPException(404, "Preset not found")
     if not file.filename:
         raise HTTPException(400, "No file provided")
 
@@ -180,48 +355,79 @@ async def upload_logo(file: UploadFile = File(...)):
     if ext not in ALLOWED_LOGO_EXTS:
         raise HTTPException(400, f"Unsupported image type: {ext or '(none)'}")
 
-    # Remove any previous logo, then save the new one under a stable name.
-    cfg = _read_config()
-    old_name = cfg.get("watermark_logo") or ""
-    if old_name:
-        (LOGO_DIR / old_name).unlink(missing_ok=True)
+    cfg = _migrate_presets(_read_config())
+    for p in cfg.get("watermark_presets") or []:
+        if p["id"] != preset_id:
+            continue
+        old_name = p.get("logo_file") or ""
+        if old_name:
+            (LOGO_DIR / old_name).unlink(missing_ok=True)
+        LOGO_DIR.mkdir(parents=True, exist_ok=True)
+        new_name = f"{LOGO_FILENAME}_{preset_id}{ext}"
+        dest = LOGO_DIR / new_name
+        try:
+            with open(dest, "wb") as f:
+                while chunk := await file.read(64 * 1024):
+                    f.write(chunk)
+        except Exception as e:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(500, f"Logo upload failed: {e}")
+        p["logo_file"] = new_name
+        _write_config(cfg)
+        logger.info("Watermark logo uploaded for preset %s → %s", preset_id, dest)
+        return {"status": "ok", "watermark_logo_name": new_name}
+    raise HTTPException(404, "Preset not found")
 
-    LOGO_DIR.mkdir(parents=True, exist_ok=True)
-    new_name = f"{LOGO_FILENAME}{ext}"
-    dest = LOGO_DIR / new_name
 
-    try:
-        with open(dest, "wb") as f:
-            while chunk := await file.read(64 * 1024):
-                f.write(chunk)
-    except Exception as e:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(500, f"Logo upload failed: {e}")
-
-    cfg["watermark_logo"] = new_name
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("Watermark logo uploaded to %s", dest)
-    return {"status": "ok", "watermark_logo_name": new_name}
-
-
-@router.get("/api/config/logo")
-async def get_logo():
-    """Serve the uploaded watermark logo image."""
-    path = _logo_path()
+@router.get("/api/config/watermark/presets/{preset_id}/logo")
+async def get_preset_logo(preset_id: str):
+    """Serve a watermark preset's logo image."""
+    path = _preset_logo_path(preset_id)
     if not path:
         raise HTTPException(404, "No logo uploaded")
     return FileResponse(path)
 
 
+@router.delete("/api/config/watermark/presets/{preset_id}/logo")
+async def delete_preset_logo(preset_id: str):
+    """Remove a watermark preset's logo."""
+    cfg = _migrate_presets(_read_config())
+    for p in cfg.get("watermark_presets") or []:
+        if p["id"] == preset_id:
+            if p.get("logo_file"):
+                (LOGO_DIR / p["logo_file"]).unlink(missing_ok=True)
+            p["logo_file"] = ""
+            _write_config(cfg)
+            return {"status": "ok", "removed": True}
+    raise HTTPException(404, "Preset not found")
+
+
+# Legacy single-logo endpoints — operate on the active preset (backward compat).
+@router.post("/api/config/logo")
+async def upload_logo(file: UploadFile = File(...)):
+    """Upload a watermark logo for the active preset (legacy wrapper)."""
+    cfg = _migrate_presets(_read_config())
+    active_id = _active_preset_id(cfg)
+    if not active_id:
+        raise HTTPException(400, "No watermark preset available")
+    return await upload_preset_logo(active_id, file)
+
+
+@router.get("/api/config/logo")
+async def get_logo():
+    """Serve the active preset's watermark logo (legacy wrapper)."""
+    cfg = _migrate_presets(_read_config())
+    active_id = _active_preset_id(cfg)
+    if not active_id:
+        raise HTTPException(404, "No logo uploaded")
+    return await get_preset_logo(active_id)
+
+
 @router.delete("/api/config/logo")
 async def delete_logo():
-    """Remove the uploaded watermark logo."""
-    cfg = _read_config()
-    old_name = cfg.get("watermark_logo") or ""
-    if old_name:
-        (LOGO_DIR / old_name).unlink(missing_ok=True)
-    cfg.pop("watermark_logo", None)
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"status": "ok", "removed": True}
+    """Remove the active preset's watermark logo (legacy wrapper)."""
+    cfg = _migrate_presets(_read_config())
+    active_id = _active_preset_id(cfg)
+    if not active_id:
+        raise HTTPException(404, "No logo uploaded")
+    return await delete_preset_logo(active_id)

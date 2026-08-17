@@ -210,15 +210,32 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         log_fn(f"TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name}...")
 
     synth_ok = 0
+    reused = 0
     for i, entry in enumerate(entries):
         if progress_callback:
             progress_callback(i, total)
 
+        out_path = out_dir / f"{i + 1:04d}.mp3"
+        if out_path.exists() and out_path.stat().st_size > 0:
+            audio_files.append(out_path)
+            synth_ok += 1
+            reused += 1
+            if log_fn:
+                log_fn(f"  ✓ Dòng {i + 1}/{total}: đã có (tái sử dụng)", level="success")
+            continue
+
         # Retry with increasing delay until success — no silent placeholder.
-        path = _synthesize_with_retry(client, entry, out_dir, i + 1, voice_name=voice_name, log_fn=log_fn)
+        try:
+            path = _synthesize_with_retry(client, entry, out_dir, i + 1, voice_name=voice_name, log_fn=log_fn)
+        except Exception as e:
+            if log_fn:
+                log_fn(f"  ✗ Dòng {i + 1}/{total}: thất bại ({e})", level="error")
+            raise
         if path:
             audio_files.append(path)
             synth_ok += 1
+            if log_fn:
+                log_fn(f"  ✓ Dòng {i + 1}/{total}: thành công", level="success")
 
     if progress_callback:
         progress_callback(total, total)
@@ -226,6 +243,8 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
     logger.info("TTS complete: %d audio files in %s", len(audio_files), out_dir)
     if log_fn:
         ok_note = f"TTS xong: {synth_ok} file giọng nói."
+        if reused:
+            ok_note += f" ({reused} dòng đã có sẵn, không gọi API.)"
         log_fn(ok_note, level="success")
     return audio_files
 
@@ -260,26 +279,48 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
     if not entries:
         raise ValueError("No subtitle entries found")
 
-    texts = [e.text.strip() for e in entries]
     total = len(entries)
 
     logger.info("CapCut TTS: synthesizing %d entries (voice=%s)", total, voice_name)
     if log_fn:
         log_fn(f"CapCut TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name}...")
 
-    def cb(done: int, total: int):
-        if progress_callback:
-            progress_callback(done, total)
+    # Resume: only submit lines whose MP3 is not yet on disk. Already-generated
+    # files are reused as-is, so a retry continues from where it left off.
+    missing_indices: List[int] = []
+    missing_texts: List[str] = []
+    for i, entry in enumerate(entries):
+        idx = i + 1
+        target = out_dir / f"{idx:04d}.mp3"
+        if not entry.text.strip():
+            continue
+        if target.exists() and target.stat().st_size > 0:
+            continue
+        missing_indices.append(idx)
+        missing_texts.append(entry.text.strip())
 
-    written = generate_segments_to_dir(
-        texts,
-        out_dir,
-        voice=voice_name,
-        rate=rate,
-        prefix="segment",
-        progress_callback=cb,
-    )
-    written_names = {p.name for p in written}
+    written_names = set()
+    if missing_texts:
+        if log_fn:
+            log_fn(f"  Còn {len(missing_texts)} dòng cần tổng hợp ({total - len(missing_texts)} dòng đã có sẵn)...")
+
+        def cb(done: int, total_: int):
+            if progress_callback:
+                progress_callback(done, total_)
+
+        written = generate_segments_to_dir(
+            missing_texts,
+            out_dir,
+            voice=voice_name,
+            rate=rate,
+            prefix="segment",
+            progress_callback=cb,
+            log_fn=log_fn,
+            indices=missing_indices,
+        )
+        written_names = {p.name for p in written}
+    elif log_fn:
+        log_fn(f"  Tất cả {total} dòng đã có sẵn — bỏ qua gen voice.", level="success")
 
     audio_files: List[Path] = []
     synth_ok = 0
@@ -289,10 +330,14 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         target = out_dir / f"{idx:04d}.mp3"
         if not entry.text.strip():
             audio_files.append(None)
+            if log_fn:
+                log_fn(f"  ⏭ Dòng {idx}/{total}: bỏ qua (phụ đề rỗng)")
             continue
-        if target.exists():
+        if target.exists() and target.stat().st_size > 0:
             audio_files.append(target)
             synth_ok += 1
+            if log_fn:
+                log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
             continue
         # Try the service-named file (segment_0001.mp3) if present
         seg = out_dir / f"segment_{idx:04d}.mp3"
@@ -300,9 +345,13 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
             seg.rename(target)
             audio_files.append(target)
             synth_ok += 1
+            if log_fn:
+                log_fn(f"  ✓ Dòng {idx}/{total}: thành công", level="success")
             continue
         logger.warning("CapCut TTS failed for entry %d: %s", idx, entry.text[:50])
         synth_fail += 1
+        if log_fn:
+            log_fn(f"  ✗ Dòng {idx}/{total}: thất bại (chèn khoảng lặng)", level="warning")
         silent_path = out_dir / f"{idx:04d}.mp3"
         _create_silence(silent_path, max(entry.end - entry.start, 0.5))
         audio_files.append(silent_path)
@@ -499,11 +548,15 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
                     "phase": "tts",
                 })
 
+        def log_per_line(msg: str, level: str = "info"):
+            job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
+
         audio_files = synthesize_srt(
             video_id,
             progress_callback=progress,
             use_custom_srt=job.get("use_custom_srt", False),
             voice_name=job.get("tts_voice", "vi-VN-Standard-A"),
+            log_fn=log_per_line,
         )
 
         # Build list of audio file URLs for FE (use relative paths from out_dir)

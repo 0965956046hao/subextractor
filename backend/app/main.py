@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI):
     app.state.jobs: dict = {}
     app.state.ws_clients: dict = {}
     app.state.job_queue: asyncio.Queue = asyncio.Queue()
+    # Frontend AutoPipeline step progress, keyed by video_id. Tab 1 (the one
+    # driving the pipeline) reports its step_progress here; list_videos merges
+    # it into rows so any other tab mirrors the exact same stage/%/steps.
+    app.state.pipeline_states: dict = {}
 
     worker = asyncio.create_task(
         worker_loop(app.state.jobs, app.state.ws_clients, ocr_engines, app.state.job_queue)

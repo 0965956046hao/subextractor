@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getAppConfig, saveAppConfig, getPipelineHealth, uploadWatermarkLogo, deleteWatermarkLogo, watermarkLogoUrl } from "@/lib/api";
-import type { SubtitleStyle } from "@/lib/api";
+import { getAppConfig, saveAppConfig, getPipelineHealth, createWatermarkPreset, updateWatermarkPreset, deleteWatermarkPreset, setActiveWatermarkPreset, uploadPresetLogo, deletePresetLogo, presetLogoUrl } from "@/lib/api";
+import type { SubtitleStyle, WatermarkPreset } from "@/lib/api";
 import type { PipelineHealth } from "@/lib/api";
 
 const FONT_OPTIONS = ["Arial", "Helvetica", "Verdana", "Times New Roman", "Courier New", "Georgia"];
@@ -180,7 +180,8 @@ function hexToRgb(hex: string): string {
 }
 
 export default function SettingsPage() {
-  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiKeys, setGeminiKeys] = useState<string[]>([]);
+  const [geminiKeyInput, setGeminiKeyInput] = useState("");
   const [ttsJson, setTtsJson] = useState("");
   const [style, setStyle] = useState<SubtitleStyle>(DEFAULTS);
   const [hasGemini, setHasGemini] = useState(false);
@@ -191,9 +192,12 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [ttsInfo, setTtsInfo] = useState("");
   const [watermarkText, setWatermarkText] = useState("");
-  const [hasLogo, setHasLogo] = useState(false);
-  const [logoUrl, setLogoUrl] = useState("");
-  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [presets, setPresets] = useState<WatermarkPreset[]>([]);
+  const [activePreset, setActivePreset] = useState("");
+  const [newPresetName, setNewPresetName] = useState("");
+  const [newPresetText, setNewPresetText] = useState("");
+  const [editingPreset, setEditingPreset] = useState<string | null>(null);
+  const [presetBusy, setPresetBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -201,12 +205,13 @@ export default function SettingsPage() {
         const [cfg, h] = await Promise.all([getAppConfig(), getPipelineHealth()]);
         setHasGemini(cfg.has_gemini_key);
         setHasTts(cfg.has_tts_credentials);
-        setGeminiKey(cfg.gemini_api_key || "");
+        setGeminiKeys(cfg.gemini_api_keys?.length ? cfg.gemini_api_keys : cfg.gemini_api_key ? [cfg.gemini_api_key] : []);
         setTtsJson(cfg.google_tts_credentials || "");
         setTtsInfo(cfg.tts_credentials_info || "");
         setStyle({ ...DEFAULTS, ...cfg.subtitle_style });
         setWatermarkText(cfg.watermark_text || "");
-        setHasLogo(cfg.has_watermark_logo);
+        setPresets(cfg.watermark_presets || []);
+        setActivePreset(cfg.active_watermark_preset || "");
         setHealth(h);
       } catch {
         setError("Không kết nối được backend.");
@@ -223,7 +228,7 @@ export default function SettingsPage() {
     setError("");
     try {
       const res = await saveAppConfig({
-        gemini_api_key: geminiKey || undefined,
+        gemini_api_keys: geminiKeys,
         google_tts_json: ttsJson || undefined,
         subtitle_style: style,
         watermark_text: watermarkText,
@@ -237,11 +242,12 @@ export default function SettingsPage() {
       const cfg = await getAppConfig();
       setHasGemini(cfg.has_gemini_key);
       setHasTts(cfg.has_tts_credentials);
-      setGeminiKey(cfg.gemini_api_key || "");
+      setGeminiKeys(cfg.gemini_api_keys?.length ? cfg.gemini_api_keys : cfg.gemini_api_key ? [cfg.gemini_api_key] : []);
       setTtsJson(cfg.google_tts_credentials || "");
       setTtsInfo(cfg.tts_credentials_info || "");
       setWatermarkText(cfg.watermark_text || "");
-      setHasLogo(cfg.has_watermark_logo);
+      setPresets(cfg.watermark_presets || []);
+      setActivePreset(cfg.active_watermark_preset || "");
       setTimeout(() => setStatus(""), 2500);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
@@ -249,30 +255,88 @@ export default function SettingsPage() {
     }
   };
 
-  const handleLogoUpload = async (file: File) => {
+  const reloadPresets = async () => {
+    const cfg = await getAppConfig();
+    setPresets(cfg.watermark_presets || []);
+    setActivePreset(cfg.active_watermark_preset || "");
+    setWatermarkText(cfg.watermark_text || "");
+  };
+
+  const handleAddPreset = async () => {
     setError("");
-    setUploadingLogo(true);
+    setPresetBusy(true);
     try {
-      const res = await uploadWatermarkLogo(file);
-      if (res.status !== "ok") {
-        setError("Tải logo thất bại.");
-        return;
-      }
-      setHasLogo(true);
-      setLogoUrl(`${watermarkLogoUrl()}?t=${Date.now()}`);
+      await createWatermarkPreset({
+        name: newPresetName.trim() || "Bộ watermark mới",
+        text: newPresetText.trim(),
+      });
+      setNewPresetName("");
+      setNewPresetText("");
+      await reloadPresets();
+      setStatus("Đã thêm bộ watermark.");
+      setTimeout(() => setStatus(""), 2500);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Lỗi tải logo.");
+      setError(e instanceof Error ? e.message : "Lỗi thêm bộ watermark.");
     } finally {
-      setUploadingLogo(false);
+      setPresetBusy(false);
     }
   };
 
-  const handleLogoDelete = async () => {
+  const handleRenamePreset = async (id: string, name: string, text: string) => {
     setError("");
     try {
-      await deleteWatermarkLogo();
-      setHasLogo(false);
-      setLogoUrl("");
+      await updateWatermarkPreset(id, { name: name.trim() || undefined, text: text.trim() });
+      setEditingPreset(null);
+      await reloadPresets();
+      setStatus("Đã cập nhật bộ watermark.");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi cập nhật bộ watermark.");
+    }
+  };
+
+  const handleRemovePreset = async (id: string) => {
+    setError("");
+    if (presets.length <= 1) {
+      setError("Không thể xoá bộ cuối cùng.");
+      return;
+    }
+    try {
+      await deleteWatermarkPreset(id);
+      await reloadPresets();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi xoá bộ watermark.");
+    }
+  };
+
+  const handleSetActive = async (id: string) => {
+    setError("");
+    try {
+      await setActiveWatermarkPreset(id);
+      await reloadPresets();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi đặt bộ mặc định.");
+    }
+  };
+
+  const handlePresetLogoUpload = async (id: string, file: File) => {
+    setError("");
+    setPresetBusy(true);
+    try {
+      await uploadPresetLogo(id, file);
+      await reloadPresets();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi tải logo.");
+    } finally {
+      setPresetBusy(false);
+    }
+  };
+
+  const handlePresetLogoDelete = async (id: string) => {
+    setError("");
+    try {
+      await deletePresetLogo(id);
+      await reloadPresets();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi xoá logo.");
     }
@@ -317,25 +381,73 @@ export default function SettingsPage() {
       <AnimatedBlock delay={150}>
         <div className="double-bezel mb-6">
           <div className="double-bezel-inner p-5 sm:p-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
-              1. Gemini API key
-            </p>
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                1. Gemini API keys
+              </p>
+              <span className="tag">
+                {geminiKeys.length > 0 ? `${geminiKeys.length} key` : "Chưa có key"}
+              </span>
+            </div>
             <p className="text-[11px] text-ink-light mb-4">
               {hasGemini ? (
-                <>
-                  Đã cấu hình ✓ <span className="text-ink-light">(thay đổi key tại ô bên dưới rồi bấm Lưu)</span>
-                </>
+                <>Đã cấu hình ✓</>
               ) : (
                 "Chưa cấu hình"
-              )}
+              )}{" "}
+              <span className="text-ink-light">
+                Thêm nhiều key — khi 1 key báo hết quota/limit, hệ thống tự xoay vòng sang key khác và thử lại.
+              </span>
             </p>
-            <input
-              type="password"
-              value={geminiKey}
-              onChange={(e) => setGeminiKey(e.target.value)}
-              placeholder="Paste Gemini API key..."
-              className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
-            />
+
+            {geminiKeys.length > 0 && (
+              <div className="mb-3 space-y-1.5">
+                {geminiKeys.map((k, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2"
+                  >
+                    <span className="font-mono text-[12px] text-ink-light truncate">
+                      {k.length > 32 ? `${k.slice(0, 6)}…${k.slice(-4)}` : k}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGeminiKeys(geminiKeys.filter((_, j) => j !== i));
+                        setStatus("");
+                      }}
+                      className="text-[11px] text-red-500 hover:text-red-600 flex-shrink-0 cursor-pointer"
+                    >
+                      Xoá
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={geminiKeyInput}
+                onChange={(e) => setGeminiKeyInput(e.target.value)}
+                placeholder="Paste Gemini API key..."
+                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const k = geminiKeyInput.trim();
+                  if (!k) return;
+                  if (!geminiKeys.includes(k)) {
+                    setGeminiKeys([...geminiKeys, k]);
+                  }
+                  setGeminiKeyInput("");
+                }}
+                className="btn-island-secondary whitespace-nowrap cursor-pointer"
+              >
+                Thêm
+              </button>
+            </div>
           </div>
         </div>
       </AnimatedBlock>
@@ -436,58 +548,149 @@ export default function SettingsPage() {
               4. Watermark (logo + chữ)
             </p>
             <p className="text-[11px] text-ink-light mb-5">
-              Logo và dòng chữ hiển thị dưới dạng watermark trên video output. Bấm Lưu cấu hình để áp dụng nội dung chữ.
+              Tạo nhiều bộ watermark — mỗi bộ gồm một cặp dòng chữ + logo. Khi bật watermark trong pipeline, bạn chọn bộ nào sẽ được sử dụng.
             </p>
 
-            <div className="mb-5">
-              <p className="text-[12px] text-ink-muted mb-2">Nội dung watermark (dạng chữ)</p>
-              <input
-                type="text"
-                value={watermarkText}
-                onChange={(e) => setWatermarkText(e.target.value)}
-                placeholder="Nhập nội dung watermark..."
-                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
-              />
-            </div>
+            {presets.map((p) => {
+              const isActive = p.id === activePreset;
+              return (
+                <div key={p.id} className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-blue-500/40 bg-blue-500/[0.03]" : "ring-black/[0.06] bg-white/50"}`}>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isActive && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-600 text-white shrink-0">
+                          Đang dùng
+                        </span>
+                      )}
+                      <span className="text-[13px] font-medium text-ink truncate">{p.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => setEditingPreset(editingPreset === p.id ? null : p.id)}
+                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
+                      >
+                        {editingPreset === p.id ? "Đóng" : "Sửa"}
+                      </button>
+                      {!isActive && (
+                        <button
+                          onClick={() => handleSetActive(p.id)}
+                          className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
+                        >
+                          Dùng bộ này
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleRemovePreset(p.id)}
+                        disabled={presets.length <= 1}
+                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-red-500/15 text-red-600 hover:bg-red-500/5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Xoá
+                      </button>
+                    </div>
+                  </div>
 
-            <div>
-              <p className="text-[12px] text-ink-muted mb-2">Logo watermark</p>
-              <div className="flex items-center gap-4">
-                {hasLogo ? (
-                  <div className="relative w-20 h-20 rounded-xl overflow-hidden border border-black/[0.08] bg-white flex items-center justify-center shrink-0">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={logoUrl || `${watermarkLogoUrl()}?t=${Date.now()}`} alt="Logo" className="max-w-full max-h-full object-contain" />
-                  </div>
-                ) : (
-                  <div className="w-20 h-20 rounded-xl border border-dashed border-black/15 bg-white/60 flex items-center justify-center shrink-0">
-                    <span className="text-[10px] text-ink-light px-2 text-center leading-tight">Chưa có logo</span>
-                  </div>
-                )}
-                <div className="flex flex-col gap-2">
-                  <label className="btn-island-secondary group !px-4 !py-2 text-[12px] cursor-pointer">
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp,image/gif"
-                      className="hidden"
-                      disabled={uploadingLogo}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) handleLogoUpload(f);
-                        e.target.value = "";
-                      }}
-                    />
-                    <span className="tracking-tight">{uploadingLogo ? "Đang tải..." : hasLogo ? "Thay logo" : "Tải logo lên"}</span>
-                  </label>
-                  {hasLogo && (
-                    <button
-                      onClick={handleLogoDelete}
-                      className="text-[12px] text-red-600 hover:text-red-700 text-left px-2 py-1"
-                    >
-                      Xoá logo
-                    </button>
+                  {editingPreset === p.id && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <p className="text-[11px] text-ink-muted mb-1.5">Tên bộ</p>
+                        <input
+                          type="text"
+                          defaultValue={p.name}
+                          id={`preset-name-${p.id}`}
+                          placeholder="Tên bộ watermark..."
+                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                        />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-ink-muted mb-1.5">Dòng chữ</p>
+                        <input
+                          type="text"
+                          defaultValue={p.text}
+                          id={`preset-text-${p.id}`}
+                          placeholder="Nhập nội dung watermark..."
+                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                        />
+                      </div>
+                    </div>
                   )}
+
+                  <div className="flex items-center gap-4">
+                    {p.has_logo ? (
+                      <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-black/[0.08] bg-white flex items-center justify-center shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={`${presetLogoUrl(p.id)}?t=${Date.now()}`} alt="Logo" className="max-w-full max-h-full object-contain" />
+                      </div>
+                    ) : (
+                      <div className="w-16 h-16 rounded-lg border border-dashed border-black/15 bg-white/60 flex items-center justify-center shrink-0">
+                        <span className="text-[9px] text-ink-light px-2 text-center leading-tight">Chưa có logo</span>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="btn-island-secondary group !px-3 !py-1.5 text-[11px] cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          disabled={presetBusy}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handlePresetLogoUpload(p.id, f);
+                            e.target.value = "";
+                          }}
+                        />
+                        <span className="tracking-tight">{p.has_logo ? "Thay logo" : "Tải logo"}</span>
+                      </label>
+                      {p.has_logo && (
+                        <button
+                          onClick={() => handlePresetLogoDelete(p.id)}
+                          className="text-[11px] text-red-600 hover:text-red-700 text-left px-2 py-0.5 cursor-pointer"
+                        >
+                          Xoá logo
+                        </button>
+                      )}
+                    </div>
+                    {editingPreset === p.id && (
+                      <button
+                        onClick={() => {
+                          const nameEl = document.getElementById(`preset-name-${p.id}`) as HTMLInputElement | null;
+                          const textEl = document.getElementById(`preset-text-${p.id}`) as HTMLInputElement | null;
+                          handleRenamePreset(p.id, nameEl?.value ?? p.name, textEl?.value ?? p.text);
+                        }}
+                        className="btn-island-primary group !px-4 !py-1.5 text-[12px] ml-auto"
+                      >
+                        <span className="tracking-tight">Lưu</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
+              );
+            })}
+
+            <div className="mt-5 pt-4 border-t border-black/[0.06]">
+              <p className="text-[12px] text-ink-muted mb-2">Thêm bộ watermark mới</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  value={newPresetName}
+                  onChange={(e) => setNewPresetName(e.target.value)}
+                  placeholder="Tên bộ (ví dụ: Kênh A)"
+                  className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                />
+                <input
+                  type="text"
+                  value={newPresetText}
+                  onChange={(e) => setNewPresetText(e.target.value)}
+                  placeholder="Dòng chữ (ví dụ: @kênh_a)"
+                  className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                />
               </div>
+              <button
+                onClick={handleAddPreset}
+                disabled={presetBusy}
+                className="btn-island-primary group text-[12px] !px-5 !py-2 mt-3 disabled:opacity-50"
+              >
+                <span className="tracking-tight">{presetBusy ? "Đang xử lý..." : "+ Thêm bộ watermark"}</span>
+              </button>
             </div>
           </div>
         </div>

@@ -55,7 +55,11 @@ async def notify_ws(ws_clients: dict, job_id: str, data: dict):
     clients = ws_clients.get(job_id, set())
     for ws in clients.copy():
         try:
-            await ws.send_json(data)
+            # A slow / backgrounded client that isn't reading its socket would
+            # otherwise block the event loop on send_json, freezing /api/status,
+            # /api/frame and everything else (→ "socket hang up" in the proxy).
+            # Bound the send so one stuck client can never stall the loop.
+            await asyncio.wait_for(ws.send_json(data), timeout=2)
         except Exception:
             clients.discard(ws)
 
@@ -314,6 +318,25 @@ async def run_hardcode_job(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = str(out_dir / f"{Path(video_path).stem}_hardcoded.mp4")
 
+        if (
+            not job.get("watermark")
+            and Path(out_path).exists()
+            and Path(out_path).stat().st_size > 0
+        ):
+            job["status"] = "done"
+            job["progress"] = 100
+            job["output_path"] = out_path
+            size_mb = Path(out_path).stat().st_size / (1024 * 1024)
+            await job_log_async(
+                job, ws_clients,
+                f"Video đã có phụ đề cứng từ lần chạy trước ({size_mb:.1f} MB) — bỏ qua encode.",
+                "success",
+            )
+            await notify_ws(ws_clients, job_id, {
+                "type": "done", "video_id": video_id, "filename": Path(out_path).name,
+            })
+            return
+
         loop = asyncio.get_event_loop()
 
         fn = functools.partial(
@@ -324,7 +347,7 @@ async def run_hardcode_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -387,7 +410,7 @@ async def run_align_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -446,7 +469,7 @@ async def run_translate_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -501,7 +524,7 @@ async def run_tts_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -556,7 +579,7 @@ async def run_dub_job(
 
         await asyncio.wait_for(
             loop.run_in_executor(_executor, fn),
-            timeout=settings.job_timeout,
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
         job["status"] = "done"
@@ -583,6 +606,61 @@ async def run_dub_job(
         await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
+async def run_export_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        from app.services.export_service import run_export
+
+        job["status"] = "processing"
+        job["phase"] = "export"
+        await job_log_async(job, ws_clients, "Bắt đầu xuất video...")
+        await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "export"})
+
+        loop = asyncio.get_event_loop()
+        tracks = job.get("tracks", [])
+        tts_clips = job.get("tts_clips", [])
+
+        def progress_cb(pct, msg):
+            job["progress"] = pct
+            if msg:
+                _notify_sync(loop, ws_clients, job_id, {
+                    "type": "log", "message": msg, "ts": time.time(), "level": "info",
+                })
+            _notify_sync(loop, ws_clients, job_id, {
+                "type": "progress", "progress": pct, "phase": "export",
+            })
+
+        fn = functools.partial(
+            run_export,
+            job["video_id"], tracks, tts_clips, progress_cb,
+        )
+
+        out_path = await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, "Xuất video hoàn tất!", "success")
+
+    except JobCancelled:
+        job["status"] = "cancelled"
+        await job_log_async(job, ws_clients, "Đã huỷ xuất video.", "warn")
+    except Exception as e:
+        logger.exception("export job %s: FAILED", job_id)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Lỗi xuất: {e}", "error")
+
+
 async def _auto_context(video_id: str, generate_fn, loop):
     """Fire-and-forget context generation after OCR completes."""
     try:
@@ -590,6 +668,55 @@ async def _auto_context(video_id: str, generate_fn, loop):
         logger.info("Auto context generated for %s", video_id)
     except Exception:
         logger.warning("Auto context generation failed (non-critical)", exc_info=True)
+
+
+async def run_risk_check_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        from app.services.risk_check_service import run_risk_check_sync
+
+        job["status"] = "processing"
+        job["phase"] = "risk_check"
+        await job_log_async(job, ws_clients, "Bắt đầu kiểm tra rủi ro file sub bằng Gemini…")
+        await notify_ws(ws_clients, job_id, {
+            "type": "progress", "progress": 0, "phase": "risk_check",
+        })
+
+        loop = asyncio.get_event_loop()
+
+        fn = functools.partial(
+            run_risk_check_sync,
+            loop, job_id, jobs, ws_clients, job["video_id"],
+        )
+
+        await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
+        )
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, "Kiểm tra rủi ro hoàn tất.", "success")
+
+    except asyncio.TimeoutError:
+        logger.error("risk_check job %s: TIMEOUT", job_id)
+        job["status"] = "error"
+        job["error"] = f"Job timed out after {settings.job_timeout}s"
+        await job_log_async(job, ws_clients, f"Quá thời gian xử lý ({settings.job_timeout}s).", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": "Job timed out"})
+    except Exception as e:
+        logger.exception("risk_check job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Có lỗi khi kiểm tra rủi ro: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
 async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
@@ -651,6 +778,8 @@ async def worker_loop(
                     await run_dub_job(jobs, ws_clients, job_id)
                 elif job_type == "context":
                     await run_context_job(jobs, ws_clients, job_id)
+                elif job_type == "risk_check":
+                    await run_risk_check_job(jobs, ws_clients, job_id)
                 else:
                     await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:

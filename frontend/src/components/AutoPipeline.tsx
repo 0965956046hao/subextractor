@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, type PipelineHealth, type CapCutVoice, type VideoMeta } from "@/lib/api";
+import { getPipelineHealth, clearTempData, getCapCutVoices, capCutPreview, getGoogleTtsVoices, googleTtsPreview, getFrameUrl, listVideos, deleteVideo, getAppConfig, type PipelineHealth, type CapCutVoice, type VideoMeta, type WatermarkPreset } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
+import TimelineCheckModal from "@/components/TimelineCheckModal";
 import {
   usePipelineStore,
   STEPS,
@@ -42,7 +43,7 @@ const STATUS_META: Record<string, { label: string; cls: string; dot: string }> =
 };
 
 function stepDetail(p: Pipeline): string {
-  const idx = STEP_STAGE[p.stage] ?? -1;
+  const idx = p.status === "error" && p.failedStep != null ? p.failedStep : STEP_STAGE[p.stage] ?? -1;
   switch (idx) {
     case 0:
       return p.srcLang ? `Puppeteer mở link · ngôn ngữ: ${langLabel(p.srcLang)}` : "Puppeteer mở link Douyin lấy URL video";
@@ -91,7 +92,7 @@ export default function AutoPipeline() {
   const pipelines = usePipelineStore((s) => s.pipelines);
   const addPipeline = usePipelineStore((s) => s.addPipeline);
   const removePipeline = usePipelineStore((s) => s.removePipeline);
-  const clearFinished = usePipelineStore((s) => s.clearFinished);
+  const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const importDone = usePipelineStore((s) => s.importDone);
 
   const [url, setUrl] = useState("");
@@ -103,8 +104,11 @@ export default function AutoPipeline() {
   const [multiVoice, setMultiVoice] = useState(false);
   const [autoFitSubs, setAutoFitSubs] = useState(true);
   const [watermarkOn, setWatermarkOn] = useState(false);
-  const [useFalThumbnail, setUseFalThumbnail] = useState(true);
+const [useFalThumbnail, setUseFalThumbnail] = useState(true);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
+  const [watermarkPreset, setWatermarkPreset] = useState("");
+  const [checkSubs, setCheckSubs] = useState(false);
+  const [presets, setPresets] = useState<WatermarkPreset[]>([]);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
@@ -186,13 +190,40 @@ export default function AutoPipeline() {
     return () => clearInterval(t);
   }, []);
 
+  // Load watermark presets so the pipeline can pick which pair (text+logo) to use.
+  useEffect(() => {
+    let mounted = true;
+    getAppConfig()
+      .then((cfg) => {
+        if (!mounted) return;
+        setPresets(cfg.watermark_presets || []);
+        setWatermarkPreset(cfg.active_watermark_preset || "");
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // Load previously-completed videos from the backend so the "Đã xử lý" tab
-  // survives page reloads (the pipeline store is in-memory only).
+  // survives page reloads (the pipeline store is in-memory only). Also re-attach
+  // in-flight backend jobs so the "Đang xử lý" tab is visible from any device.
   useEffect(() => {
     let mounted = true;
     listVideos()
       .then((videos) => {
         if (mounted) setHistoryVideos(videos);
+        const active = videos.filter(
+          (v) =>
+            (v.job_id && (v.status === "queued" || v.status === "processing" || v.status === "error" || v.status === "cancelled")) ||
+            (v.pipeline && (v.pipeline.status === "running" || v.pipeline.status === "queued"))
+        );
+        for (const v of active) {
+          usePipelineStore.getState().importActive(v);
+        }
+        // Resume pipelines persisted to localStorage (page reload): re-attach
+        // in-flight backend jobs and re-register interactive waits.
+        usePipelineStore.getState().restorePaused();
       })
       .catch(() => {
         // ignore — no history available
@@ -344,16 +375,20 @@ export default function AutoPipeline() {
       voice: dubVoice,
       muteOriginal,
       originalGainDb,
-      multiVoice: multiVoice && dubEngine === "capcut",
-    }, autoFitSubs, watermarkOn, autoUploadYoutube, useFalThumbnail);
+multiVoice: multiVoice && dubEngine === "capcut",
+    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs, autoUploadYoutube, useFalThumbnail);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
   };
 
   const activeCount = pipelines.filter((p) => p.status === "queued" || p.status === "running").length;
-  const activePipelines = pipelines.filter((p) => p.status === "queued" || p.status === "running");
-  const donePipelines = pipelines.filter((p) => p.status === "done" || p.status === "error");
+  const activePipelines = pipelines
+    .filter((p) => p.status === "queued" || p.status === "running")
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  const donePipelines = pipelines
+    .filter((p) => p.status === "done" || p.status === "error")
+    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
   // Persisted completed videos from the backend (survive page reloads), minus
   // any that are already represented by an in-memory pipeline (matched by videoId).
   const sessionVideoIds = new Set(pipelines.map((p) => p.videoId).filter(Boolean));
@@ -376,6 +411,44 @@ export default function AutoPipeline() {
     }
   };
 
+  // Delete a pipeline row completely: for running/queued jobs abort the backend
+  // first, and whenever the pipeline owns a video also delete the backend files
+  // (SRT, frames, TTS, hardcoded…) and drop it from the persisted history list.
+  // Otherwise the video reappears as a HistoryRow on the next listVideos().
+  const removePipelineEntry = async (p: Pipeline) => {
+    if (p.status === "running" || p.status === "queued") {
+      await cancelPipeline(p.id);
+    } else {
+      removePipeline(p.id);
+    }
+    if (selectedId === p.id) setSelectedId(null);
+    if (p.videoId) {
+      try {
+        await deleteVideo(p.videoId);
+      } catch {
+        // ignore
+      }
+      setHistoryVideos((prev) => prev.filter((v) => v.video_id !== p.videoId));
+    }
+  };
+
+  // "Xoá job đã xong": same as removePipelineEntry, but for every finished
+  // pipeline (and matching history rows) so nothing lingers on the backend.
+  const handleClearFinished = async () => {
+    for (const p of pipelines.filter((x) => x.status === "done" || x.status === "error")) {
+      if (p.videoId) {
+        try {
+          await deleteVideo(p.videoId);
+        } catch {
+          // ignore
+        }
+      }
+      removePipeline(p.id);
+    }
+    if (selectedId != null && !pipelines.some((x) => x.id === selectedId)) setSelectedId(null);
+    setHistoryVideos((prev) => prev.filter((v) => v.status !== "done"));
+  };
+
   return (
     <>
     <main className="min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
@@ -391,7 +464,7 @@ export default function AutoPipeline() {
           </Link>
           {hasFinished && (
             <button
-              onClick={clearFinished}
+              onClick={handleClearFinished}
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
             >
               Xoá job đã xong
@@ -751,7 +824,7 @@ export default function AutoPipeline() {
                       Logo + Watermark
                     </p>
                     <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                      Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (dùng logo & nội dung trong Settings ⚙️).
+                      Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo bộ text + logo trong Settings ⚙️).
                     </p>
                   </div>
                   <button
@@ -764,6 +837,54 @@ export default function AutoPipeline() {
                     <span
                       className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
                         watermarkOn ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+                {watermarkOn && (
+                  <div className="mt-3">
+                    <label className="block">
+                      <span className="text-[11px] text-ink-muted mb-1.5 block">Bộ watermark sử dụng</span>
+                      <select
+                        value={watermarkPreset || presets[0]?.id || ""}
+                        onChange={(e) => setWatermarkPreset(e.target.value)}
+                        className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+                      >
+                        {presets.length === 0 ? (
+                          <option value="">Chưa có bộ nào — tạo trong Settings ⚙️</option>
+                        ) : (
+                          presets.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} {p.has_logo ? "(logo + chữ)" : "(chỉ chữ)"}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      Kiểm tra timeline phụ đề
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Sau khi dịch xong, pipeline dừng lại để kiểm tra timeline vô lý (end ≤ start, chồng lấn) và hiển thị popup cho bạn duyệt trước khi tiếp tục.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCheckSubs(!checkSubs)}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                      checkSubs ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        checkSubs ? "left-[22px]" : "left-0.5"
                       }`}
                     />
                   </button>
@@ -888,8 +1009,7 @@ export default function AutoPipeline() {
                         setTab("detail");
                       }}
                       onRemove={() => {
-                        removePipeline(p.id);
-                        if (selectedId === p.id) setSelectedId(null);
+                        removePipelineEntry(p);
                       }}
                     />
                   ))}
@@ -916,8 +1036,7 @@ export default function AutoPipeline() {
                         setTab("detail");
                       }}
                       onRemove={() => {
-                        removePipeline(p.id);
-                        if (selectedId === p.id) setSelectedId(null);
+                        removePipelineEntry(p);
                       }}
                     />
                   ))}
@@ -954,7 +1073,7 @@ export default function AutoPipeline() {
           <DetailView
             pipeline={selected}
             now={now}
-            onRemove={() => removePipeline(selected.id)}
+            onRemove={() => removePipelineEntry(selected)}
             onStartNext={focusNewVideo}
           />
         </AnimatedBlock>
@@ -1080,6 +1199,9 @@ function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; o
   const meta = STATUS_META[p.status] ?? STATUS_META.queued;
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
+    if (p.status === "error" && p.failedStep != null) {
+      return `Lỗi ở bước ${p.failedStep + 1}/9 · ${STEPS[p.failedStep]?.label ?? p.stage}`;
+    }
     if (p.status !== "running") return null;
     const idx = STEP_STAGE[p.stage];
     return idx != null ? `Bước ${idx + 1}/12 · ${STEPS[idx]?.label ?? p.stage}` : p.stage;
@@ -1147,8 +1269,8 @@ function PipelineRow({ p, now, onOpen, onRemove }: { p: Pipeline; now: number; o
           )}
         </div>
         {stepLabel && (
-          <p className="text-[11px] text-blue-600/80 mt-1 truncate">
-            {stepLabel} · {p.progress}%
+          <p className={`text-[11px] mt-1 truncate ${p.status === "error" ? "text-red-600/80" : "text-blue-600/80"}`}>
+            {stepLabel}{p.status === "running" ? ` · ${p.progress}%` : ""}
           </p>
         )}
       </div>
@@ -1345,11 +1467,19 @@ function HistoryRow({ v, onOpen, onDelete }: { v: VideoMeta; onOpen: () => void;
 }
 
 function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pipeline; now: number; onRemove: () => void; onStartNext?: () => void }) {
-  const activeStep = p.status === "done" ? STEPS.length : STEP_STAGE[p.stage] ?? 0;
+  const failedStep = p.status === "error" ? p.failedStep : null;
+  const activeStep =
+    p.status === "done"
+      ? STEPS.length
+      : failedStep != null
+      ? failedStep
+      : STEP_STAGE[p.stage] ?? 0;
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
+  const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
+  const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
 
@@ -1382,6 +1512,15 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                 <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 ring-1 ring-blue-500/25 text-blue-700 flex items-center gap-1">
                   <IconSpinner className="w-3 h-3" />
                   Đang xử lý
+                </span>
+              )}
+              {p.status === "error" && (
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-red-500/10 ring-1 ring-red-500/25 text-red-700 flex items-center gap-1">
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                  Lỗi ở bước {failedStep != null ? failedStep + 1 : "?"}
                 </span>
               )}
             </div>
@@ -1445,11 +1584,12 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
         <div className="space-y-2">
           {STEPS.map((s, i) => {
             const done = i < activeStep || p.status === "done";
-            const active = i === activeStep && p.status !== "done";
+            const isFailed = p.status === "error" && failedStep != null && i === failedStep;
+            const active = i === activeStep && p.status !== "done" && !isFailed;
             const start = p.stepStarts[i];
             const end = p.stepEnds[i];
             const skipped = p.stepSkipped[i];
-            const stepPct = p.stepProgress[i] ?? (done ? 100 : 0);
+            const stepPct = p.stepProgress[i] ?? (done || isFailed ? 100 : 0);
             let stepTime: string | null = null;
             if (skipped) stepTime = "Bỏ qua";
             else if (start != null && end != null) stepTime = fmtElapsed(end - start);
@@ -1461,6 +1601,8 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                   className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
                     skipped
                       ? "bg-black/[0.04] text-ink-light"
+                      : isFailed
+                      ? "bg-red-500/15 text-red-600"
                       : done
                       ? "bg-emerald-500/15 text-emerald-600"
                       : active
@@ -1470,6 +1612,11 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                 >
                   {skipped ? (
                     <span className="text-[11px]">–</span>
+                  ) : isFailed ? (
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
                   ) : done ? (
                     <IconCheck className="w-3.5 h-3.5" />
                   ) : active ? (
@@ -1480,18 +1627,20 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <p className={`text-[13px] font-medium ${done || active ? "text-ink" : "text-ink-light"}`}>
+                    <p className={`text-[13px] font-medium ${isFailed ? "text-red-600" : done || active ? "text-ink" : "text-ink-light"}`}>
                       {s.label}
                     </p>
                     <span
                       className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${
-                        skipped ? "text-ink-light" : done ? "text-emerald-600" : active ? "text-blue-600" : "text-ink-light"
+                        skipped ? "text-ink-light" : isFailed ? "text-red-600" : done ? "text-emerald-600" : active ? "text-blue-600" : "text-ink-light"
                       }`}
                     >
-                      {skipped ? "—" : `${stepPct}%`}
+                      {skipped ? "—" : isFailed ? "Lỗi" : `${stepPct}%`}
                     </span>
                   </div>
-                  <p className="text-[11px] text-ink-light">{stepDetail(p)}</p>
+                  <p className="text-[11px] text-ink-light">
+                    {isFailed || active ? stepDetail(p) : s.detail}
+                  </p>
                   {(active || done) && !skipped && (
                     <div className="mt-1.5 h-1 rounded-full bg-black/[0.06] overflow-hidden">
                       <div
@@ -1510,13 +1659,13 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
                   {stepTime && (
                     <span
                       className={`text-[11px] font-mono tabular-nums ${
-                        skipped ? "text-ink-light" : active ? "text-blue-600" : "text-emerald-600"
+                        skipped ? "text-ink-light" : isFailed ? "text-red-600" : active ? "text-blue-600" : "text-emerald-600"
                       }`}
                     >
                       {stepTime}
                     </span>
                   )}
-                  {canRerun && (
+{canRerun && (i >= 4 || Boolean(p.url)) && (
                     <button
                       onClick={() => rerunPipeline(p.id, i)}
                       title={`Chạy lại từ "${s.label}"`}
@@ -1680,6 +1829,63 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
             </div>
           </div>
         </div>
+      )}
+
+      {p.timelineCheck?.waiting && !p.timelineCheck.open && p.videoId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards" }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-amber-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-ink">Kiểm tra timeline phụ đề</p>
+                  <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
+                    {p.timelineCheck.issues.length > 0
+                      ? `Phát hiện ${p.timelineCheck.issues.length} lỗi timeline vô lý trong phụ đề đã dịch.`
+                      : "Phụ đề đã dịch xong. Bạn có thể kiểm tra timeline trước khi tiếp tục."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 mt-5">
+                <button
+                  onClick={() => resolveTimelineCheck(p.id, "continue")}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                >
+                  Tiếp tục xử lý
+                </button>
+                <button
+                  onClick={() => openTimelineCheck(p.id)}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  Hiện popup kiểm tra
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {p.timelineCheck?.waiting && p.timelineCheck.open && p.videoId && (
+        <TimelineCheckModal
+          videoId={p.videoId}
+          initialIssues={p.timelineCheck.issues}
+          onResolve={() => resolveTimelineCheck(p.id, "continue")}
+        />
       )}
     </div>
   );

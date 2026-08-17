@@ -26,3 +26,7 @@ def get_ws_clients(request: Request) -> dict:
 
 def get_job_queue(request: Request) -> asyncio.Queue:
     return request.app.state.job_queue
+
+
+def get_pipeline_states(request: Request) -> dict:
+    return request.app.state.pipeline_states

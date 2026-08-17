@@ -14,6 +14,8 @@ from app.services.translation_service import load_voice_map
 
 logger = logging.getLogger(__name__)
 
+MAX_TEMPO = 1.6
+
 
 def extract_audio(video_path: Path, out_dir: Path) -> Path:
     """Extract mono audio from the video to a wav file."""
@@ -74,7 +76,7 @@ def combine_tts_mp3(
         mp3_dur = _get_audio_duration(af)
         tempo = ""
         if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
-            speed = mp3_dur / srt_dur
+            speed = min(mp3_dur / srt_dur, MAX_TEMPO)
             chain = []
             while speed > 2.0:
                 chain.append("atempo=2.0")
@@ -184,17 +186,24 @@ def build_full_audio(
     if mute_original:
         if log_fn:
             log_fn("Tách giọng khỏi nhạc nền (Demucs)...")
-        try:
-            instrumental = separate_instrumental(video_path, out_dir)
+        no_vocals = out_dir / "separated" / "htdemucs" / "audio" / "no_vocals.wav"
+        if no_vocals.exists() and no_vocals.stat().st_size > 0:
+            instrumental = no_vocals
             background_volume = 1.0
             if log_fn:
-                log_fn("Đã tách giọng xong, giữ lại nhạc nền.")
-        except Exception as e:
-            logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
-            instrumental = extract_audio(video_path, out_dir)
-            background_volume = 0.3
-            if log_fn:
-                log_fn(f"Demucs lỗi ({e}) — dùng audio gốc làm nền (âm lượng 30%).", level="warning")
+                log_fn("Đã có nhạc nền từ lần chạy trước — tái sử dụng (bỏ qua Demucs).")
+        else:
+            try:
+                instrumental = separate_instrumental(video_path, out_dir)
+                background_volume = 1.0
+                if log_fn:
+                    log_fn("Đã tách giọng xong, giữ lại nhạc nền.")
+            except Exception as e:
+                logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
+                instrumental = extract_audio(video_path, out_dir)
+                background_volume = 0.3
+                if log_fn:
+                    log_fn(f"Demucs lỗi ({e}) — dùng audio gốc làm nền (âm lượng 30%).", level="warning")
     else:
         if log_fn:
             log_fn(f"Giữ nguyên audio gốc, giảm giọng nền {original_gain_db:g} dB...")
@@ -246,19 +255,36 @@ def build_full_audio(
     cb(75)
 
     full_voice = out_dir / "full_voice.mp3"
-    if log_fn:
-        log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
-    combine_tts_mp3(audio_files, entries, full_voice)
-    if log_fn:
-        log_fn("Đã gộp giọng nói hoàn chỉnh (full_voice.mp3).")
+    newest_mp3 = max(
+        (p.stat().st_mtime for p in audio_files if p and p.exists()),
+        default=0.0,
+    )
+    if full_voice.exists() and full_voice.stat().st_size > 0 and full_voice.stat().st_mtime >= newest_mp3:
+        if log_fn:
+            log_fn("Đã có full_voice.mp3 từ lần chạy trước — tái sử dụng (bỏ qua gộp).")
+    else:
+        if log_fn:
+            log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
+        combine_tts_mp3(audio_files, entries, full_voice)
+        if log_fn:
+            log_fn("Đã gộp giọng nói hoàn chỉnh (full_voice.mp3).")
     cb(85)
 
     full_audio = out_dir / "full_audio.m4a"
-    if log_fn:
-        log_fn("Trộn nhạc nền + giọng nói → full_audio.m4a...")
-    _mix_background_with_voice(instrumental, full_voice, background_volume, full_audio)
-    if log_fn:
-        log_fn("Đã trộn xong audio lồng tiếng.")
+    instrumental_mtime = instrumental.stat().st_mtime if instrumental.exists() else 0.0
+    if (
+        full_audio.exists() and full_audio.stat().st_size > 0
+        and full_audio.stat().st_mtime >= full_voice.stat().st_mtime
+        and full_audio.stat().st_mtime >= instrumental_mtime
+    ):
+        if log_fn:
+            log_fn("Đã có full_audio.m4a từ lần chạy trước — tái sử dụng (bỏ qua trộn nhạc).")
+    else:
+        if log_fn:
+            log_fn("Trộn nhạc nền + giọng nói → full_audio.m4a...")
+        _mix_background_with_voice(instrumental, full_voice, background_volume, full_audio)
+        if log_fn:
+            log_fn("Đã trộn xong audio lồng tiếng.")
     cb(100)
     return full_audio
 
@@ -287,6 +313,13 @@ def dub_video_with_tts(
     )
 
     out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+    if (
+        out_path.exists() and out_path.stat().st_size > 0
+        and out_path.stat().st_mtime >= full_audio.stat().st_mtime
+    ):
+        if log_fn:
+            log_fn("Đã có video lồng tiếng từ lần chạy trước — tái sử dụng (bỏ qua mux).")
+        return out_path
     if log_fn:
         log_fn("Mux audio lồng tiếng vào video (FFmpeg)...")
     subprocess.run(

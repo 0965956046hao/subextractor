@@ -87,9 +87,16 @@ def poll_job(
     job_id: str,
     timeout: Optional[float] = None,
     poll_interval: float = 1.0,
+    log_fn=None,
 ) -> dict:
-    """Poll a TTS job until done/error/cancelled; returns the final job dict."""
+    """Poll a TTS job until done/error/cancelled; returns the final job dict.
+
+    If ``log_fn`` is provided, per-segment logs emitted by the service (stored
+    in ``job["logs"]``) are forwarded to it as soon as they appear, so the
+    caller can stream progress to the UI while the batch is still generating.
+    """
     deadline = time.time() + (timeout if timeout is not None else settings.capcut_tts_timeout)
+    seen_logs = 0
     while time.time() < deadline:
         try:
             r = httpx.get(f"{_base_url()}/api/tts/{job_id}", timeout=15)
@@ -99,6 +106,14 @@ def poll_job(
             time.sleep(poll_interval)
             continue
         job = r.json()
+        if log_fn:
+            logs = job.get("logs") or []
+            for entry in logs[seen_logs:]:
+                log_fn(
+                    entry.get("message", ""),
+                    level=entry.get("level", "info"),
+                )
+            seen_logs = len(logs)
         status = job.get("status", "")
         if status in ("done", "error", "cancelled"):
             return job
@@ -126,12 +141,21 @@ def generate_segments_to_dir(
     rate: str = "1.0",
     prefix: str = "segment",
     progress_callback=None,
+    log_fn=None,
+    indices: Optional[List[int]] = None,
 ) -> List[Path]:
     """Submit one batch job for all texts, then download each MP3 into out_dir.
 
     Files are written as ``{out_dir}/{prefix}_{i:04d}.mp3`` (1-based index) to
     match the convention expected by `combine_tts_mp3`. Failures are skipped and
-    a progress_callback(done, total) is invoked after each download.
+    a progress_callback(done, total) is invoked after each download. If
+    ``log_fn`` is provided, per-segment service logs are streamed to it.
+
+    ``indices`` (optional, same length as ``texts``) maps the k-th submitted
+    text to its original 1-based line index, so downloaded files are named
+    ``{prefix}_{indices[k]:04d}.mp3`` instead of by submission position. This
+    lets a resume run submit only the still-missing lines while keeping the
+    line numbering stable on disk.
     """
     segments = [{"text": t, "start": 0.0, "end": 0.0} for t in texts]
     job_id = submit_job(segments, voice, rate, prefix)
@@ -140,7 +164,7 @@ def generate_segments_to_dir(
     # First-time voice synthesis is slow (~3s/segment); scale the poll timeout
     # with the segment count so long videos don't hit the default ceiling.
     timeout = max(settings.capcut_tts_timeout, len(segments) * 10 + 120)
-    job = poll_job(job_id, timeout=timeout)
+    job = poll_job(job_id, timeout=timeout, log_fn=log_fn)
     status = job.get("status")
     if status != "done":
         raise CapCutTTSError(f"Job TTS CapCut {job_id} kết thúc với status={status}: {job.get('error', '')}")
@@ -150,7 +174,8 @@ def generate_segments_to_dir(
     for path_str in audio_files:
         filename = Path(path_str).name
         i = _index_from_filename(filename, prefix)
-        target = out_dir / (f"{prefix}_{i:04d}.mp3" if prefix else f"{i:04d}.mp3")
+        orig_idx = indices[i - 1] if indices and 1 <= i <= len(indices) else i
+        target = out_dir / (f"{prefix}_{orig_idx:04d}.mp3" if prefix else f"{orig_idx:04d}.mp3")
         try:
             download_audio(job_id, filename, target)
             written.append(target)

@@ -116,7 +116,7 @@ Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bol
     # When using BorderStyle=3, apply box border colour as the outline colour so the
     # box edge is visible even if text outline is off.
     lines = [header.rstrip("\n")]
-    for e in parse_srt(srt_content):
+    for e in _resolve_overlaps(parse_srt(srt_content)):
         text = e.text.replace("{", "\\{").replace("}", "\\}")
         lines.append(
             f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},SubStyle,,0,0,0,,{text}"
@@ -178,8 +178,27 @@ def auto_fit_style(
 
     # _render_subtitle scales font_size + margin_v by vh/1080, so store 1080p refs.
     s["font_size"] = max(18, int(font_px * 1080 / vh))
-    s["margin_v"] = max(0, int((1 - y2) * 1080 - 40))
+    s["margin_v"] = max(0, int((1 - y2) * 1080))
     return s
+
+
+def _resolve_overlaps(entries):
+    """Clip overlapping subtitle entries so they never stack or concatenate.
+
+    When two entries overlap in time, the LATER one (the one that started last)
+    wins the overlap region: the earlier entry is trimmed to end exactly when
+    the later one starts. Returns a new list with non-overlapping timeline.
+    """
+    if not entries:
+        return []
+    ordered = sorted(entries, key=lambda e: (e.start, e.end))
+    resolved = [ordered[0]]
+    for e in ordered[1:]:
+        prev = resolved[-1]
+        if e.start < prev.end:
+            resolved[-1] = prev.model_copy(update={"end": e.start})
+        resolved.append(e)
+    return resolved
 
 
 def _has_subtitles_filter() -> bool:
@@ -326,7 +345,7 @@ def _render_subtitle(
     box_w = tw + pad_x * 2 + outline_w * 2
     box_h = th + pad_y * 2 + outline_w * 2
     bx = (vw - box_w) // 2 + margin_h
-    by = vh - box_h - margin_v - 40
+    by = vh - box_h - margin_v
 
     # draw rounded background box
     if box_on:
@@ -402,7 +421,7 @@ def _render_watermark_frame(
             logo = Image.open(logo_path).convert("RGBA")
             logo_h = max(36, int(vh / 7))
             logo_w = int(logo.width * logo_h / logo.height)
-            margin = logo_h // 2.5
+            margin = int(logo_h // 2.5)
             logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
             img.paste(logo, (margin, margin), logo)
         except Exception:
@@ -466,7 +485,7 @@ def burn_subtitles_pillow(
     import cv2
 
     content = Path(srt_path_str).read_text(encoding="utf-8")
-    entries = parse_srt(content)
+    entries = _resolve_overlaps(parse_srt(content))
     if not entries:
         raise RuntimeError("No subtitle entries")
 
@@ -502,7 +521,11 @@ def burn_subtitles_pillow(
         ts = idx / fps
         active = [e for e in entries if e.start <= ts < e.end]
         if active:
-            text = " ".join(e.text for e in active)
+            # Overlapping subtitles: never concatenate. Prioritize the one that
+            # started LAST (the "later" subtitle wins), so a new line taking
+            # over mid-scene replaces the previous one instead of merging text.
+            e = max(active, key=lambda x: (x.start, x.end))
+            text = e.text
             if text not in cache:
                 cache[text] = _render_subtitle(text, vw, vh, font_path, style, fixed_size)
             frame = _overlay_subtitle(frame, cache[text])
@@ -560,14 +583,13 @@ def run_hardcode_sync(
     job_id: str,
 ):
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "hardcode"})
-    job.setdefault("logs", []).append({
-        "message": "Nhúng phụ đề vào video (FFmpeg)...",
-        "ts": time.time(), "level": "info",
-    })
-    notify_ws_sync(loop, ws_clients, job_id, {
-        "type": "log", "message": "Nhúng phụ đề vào video (FFmpeg)...",
-        "ts": time.time(), "level": "info",
-    })
+
+    def _log(message: str, level: str = "info"):
+        entry = {"message": message, "ts": time.time(), "level": level}
+        job.setdefault("logs", []).append(entry)
+        notify_ws_sync(loop, ws_clients, job_id, {"type": "log", **entry})
+
+    _log("Nhúng phụ đề vào video (FFmpeg)...")
 
     total_dur = _get_duration(video_path_str)
     vw, vh = _get_video_resolution(video_path_str)
@@ -589,6 +611,7 @@ def run_hardcode_sync(
     ass_content = srt_to_ass_blackbox(srt_content, vw, vh, style)
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
+    _log(f"Đã tạo file ASS phụ đề ({len(parse_srt(srt_content))} dòng) — chuẩn bị encode...")
 
     # Chạy ffmpeg từ thư mục chứa file .ass, chỉ truyền tên file tương đối
     # để tránh lỗi escape đường dẫn tuyệt đối trong filter `subtitles`.
@@ -608,18 +631,21 @@ def run_hardcode_sync(
     use_dubbed = audio_src is not None
     if use_dubbed:
         logger.info("hardcode job %s: using dubbed audio (%s)", job_id, audio_src.name)
+        _log("Dùng audio đã lồng tiếng Việt (full_audio/dubbed).")
 
     if not _has_subtitles_filter():
         # ffmpeg lacks libass — fall back to OpenCV + Pillow burn
         logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
+        _log("FFmpeg thiếu libass → dùng engine vẽ phụ đề (Pillow) từng khung hình.")
 
         # Watermark (logo + scrolling text) is rendered by the Pillow path.
         watermark = None
         if job.get("watermark"):
             from app.routers.config_router import get_watermark
-            watermark = get_watermark()
+            watermark = get_watermark(job.get("watermark_preset"))
             if watermark.get("text") or watermark.get("logo_path"):
-                logger.info("hardcode job %s: watermark ON (%s)", job_id, "text+logo" if watermark.get("logo_path") else "text")
+                logger.info("hardcode job %s: watermark ON (preset=%s, %s)", job_id, watermark.get("preset_id"), "text+logo" if watermark.get("logo_path") else "text")
+                _log(f"Bật watermark: {watermark.get('text') or 'logo'} (bộ: {watermark.get('preset_id') or 'default'}).")
             else:
                 logger.info("hardcode job %s: watermark requested but no text/logo configured", job_id)
                 watermark = None
@@ -630,9 +656,18 @@ def run_hardcode_sync(
                 "type": "progress", "progress": pct, "phase": "hardcode",
             })
 
+        # Pillow path: also emit a log line every 10% so the UI log feed moves.
+        last_pillow_log = {"pct": 0}
+
+        def _pillow_log_cb(pct: int):
+            progress_cb(pct)
+            if pct - last_pillow_log["pct"] >= 10:
+                last_pillow_log["pct"] = pct
+                _log(f"Đang vẽ phụ đề khung hình... {pct}%")
+
         burn_subtitles_pillow(
             video_path_str, srt_path_str, out_path,
-            progress_callback=progress_cb,
+            progress_callback=_pillow_log_cb,
             audio_source=str(audio_src) if use_dubbed else None,
             style=style,
             # auto-fit or manual style must render at the exact size chosen.
@@ -641,6 +676,7 @@ def run_hardcode_sync(
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
+        _log("Đã vẽ phụ đề xong toàn bộ khung hình.", "success")
         return Path(out_path)
 
     if use_dubbed:
@@ -673,6 +709,7 @@ def run_hardcode_sync(
         ]
 
     logger.info("hardcode job %s: %s", job_id, " ".join(shlex.quote(str(p)) for p in cmd))
+    _log("Khởi động FFmpeg encode phụ đề cứng (libass)...")
 
     proc = subprocess.Popen(
         cmd,
@@ -700,6 +737,7 @@ def run_hardcode_sync(
                     notify_ws_sync(loop, ws_clients, job_id, {
                         "type": "progress", "progress": pct, "phase": "hardcode",
                     })
+                    _log(f"FFmpeg đang encode phụ đề... {pct}%")
             except Exception:
                 pass
 
@@ -709,4 +747,5 @@ def run_hardcode_sync(
 
     job["progress"] = 100
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
+    _log("FFmpeg encode xong 100%.", "success")
     return Path(out_path)

@@ -44,6 +44,14 @@ export function getFrameUrl(videoId: string): string {
 
 export type VideoStatus = "uploaded" | "queued" | "processing" | "done" | "error" | "cancelled";
 
+export interface PipelineProgress {
+  status: string;
+  stage: string;
+  progress: number;
+  step_progress: (number | null)[];
+  error?: string;
+}
+
 export interface VideoMeta {
   video_id: string;
   filename: string;
@@ -54,13 +62,20 @@ export interface VideoMeta {
   status?: VideoStatus;
   progress?: number;
   phase?: string;
+  job_type?: string;
   job_id?: string;
   error?: string | null;
+  logs?: LogEntry[];
+  pipeline?: PipelineProgress;
 }
 
 export async function listVideos(): Promise<VideoMeta[]> {
   const res = await api.get<{ videos: VideoMeta[] }>("/videos");
   return res.data.videos;
+}
+
+export async function reportPipelineState(videoId: string, state: PipelineProgress): Promise<void> {
+  await api.post(`/pipeline/${videoId}`, state);
 }
 
 export async function deleteVideo(videoId: string): Promise<void> {
@@ -158,6 +173,66 @@ export async function getSrtEntries(videoId: string): Promise<SrtEntry[]> {
 
 export async function updateSrt(videoId: string, content: string): Promise<void> {
   await api.put(`/srt/${videoId}`, { content });
+}
+
+export interface TimelineIssue {
+  index: number;
+  type: "negative_duration" | "overlap" | "out_of_order";
+  message: string;
+  start: number;
+  end: number;
+  prev_index?: number;
+}
+
+export interface TimelineFix {
+  index: number;
+  type: "negative_duration" | "overlap";
+  from: string;
+  to: string;
+}
+
+export async function validateSrtTimeline(
+  videoId: string
+): Promise<{ issues: TimelineIssue[]; count: number }> {
+  const res = await api.get<{ issues: TimelineIssue[]; count: number }>(
+    `/srt/${videoId}/validate`
+  );
+  return res.data;
+}
+
+export async function fixSrtTimeline(
+  videoId: string
+): Promise<{ entries: SrtEntry[]; fixes: TimelineFix[]; count: number }> {
+  const res = await api.post<{ entries: SrtEntry[]; fixes: TimelineFix[]; count: number }>(
+    `/srt/${videoId}/fix-timeline`
+  );
+  return res.data;
+}
+
+export interface SubtitleRisk {
+  index: number;
+  text: string;
+  problems: string[];
+  note: string;
+}
+
+export type SubtitleRiskProblem =
+  | "NOT_TRANSLATED"
+  | "TIMELINE_OVERLAP"
+  | "ADJACENT_SIMILAR";
+
+export async function startSrtRiskCheck(videoId: string): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>(`/srt/${videoId}/risk-check`);
+  return res.data;
+}
+
+export async function getSrtRiskResult(
+  videoId: string
+): Promise<{ risks: SubtitleRisk[]; checked_at?: number | null }> {
+  const res = await api.get<{ risks: SubtitleRisk[]; checked_at?: number | null }>(
+    `/srt/${videoId}/risk-check`
+  );
+  return res.data;
 }
 
 export async function muxSubtitles(videoId: string): Promise<JobStatus> {
@@ -278,9 +353,19 @@ export interface SubtitleStyle {
   margin_h: number;
 }
 
+export interface WatermarkPreset {
+  id: string;
+  name: string;
+  text: string;
+  has_logo: boolean;
+  logo_name: string;
+  active: boolean;
+}
+
 export interface AppConfig {
   has_gemini_key: boolean;
   gemini_api_key: string;
+  gemini_api_keys: string[];
   has_tts_credentials: boolean;
   google_tts_credentials: string;
   tts_credentials_info: string;
@@ -289,6 +374,8 @@ export interface AppConfig {
   watermark_text: string;
   has_watermark_logo: boolean;
   watermark_logo_name: string;
+  watermark_presets: WatermarkPreset[];
+  active_watermark_preset: string;
 }
 
 export async function getAppConfig(): Promise<AppConfig> {
@@ -298,6 +385,7 @@ export async function getAppConfig(): Promise<AppConfig> {
 
 export async function saveAppConfig(body: {
   gemini_api_key?: string;
+  gemini_api_keys?: string[];
   google_tts_json?: string;
   auto_context_enabled?: boolean;
   subtitle_style?: Partial<SubtitleStyle>;
@@ -321,4 +409,42 @@ export async function deleteWatermarkLogo(): Promise<{ status: string; removed?:
 
 export function watermarkLogoUrl(): string {
   return "/api/config/logo";
+}
+
+// ── Watermark presets (nhiều bộ text + logo) ──
+
+export async function createWatermarkPreset(body: { name: string; text: string }): Promise<{ status: string; preset_id?: string }> {
+  const res = await api.post("/config/watermark/presets", body);
+  return res.data;
+}
+
+export async function updateWatermarkPreset(presetId: string, body: { name?: string; text?: string }): Promise<{ status: string }> {
+  const res = await api.put(`/config/watermark/presets/${presetId}`, body);
+  return res.data;
+}
+
+export async function deleteWatermarkPreset(presetId: string): Promise<{ status: string; removed?: boolean }> {
+  const res = await api.delete(`/config/watermark/presets/${presetId}`);
+  return res.data;
+}
+
+export async function setActiveWatermarkPreset(presetId: string): Promise<{ status: string }> {
+  const res = await api.post("/config/watermark/active", { preset_id: presetId });
+  return res.data;
+}
+
+export async function uploadPresetLogo(presetId: string, file: File): Promise<{ status: string; watermark_logo_name?: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await api.post(`/config/watermark/presets/${presetId}/logo`, fd);
+  return res.data;
+}
+
+export async function deletePresetLogo(presetId: string): Promise<{ status: string; removed?: boolean }> {
+  const res = await api.delete(`/config/watermark/presets/${presetId}/logo`);
+  return res.data;
+}
+
+export function presetLogoUrl(presetId: string): string {
+  return `/api/config/watermark/presets/${presetId}/logo`;
 }

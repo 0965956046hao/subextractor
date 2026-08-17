@@ -62,6 +62,10 @@ def run_align_sync(
         aligned = _whisper_subword_align(audio_path, entries, job, ws_clients, loop, job_id)
 
         new_srt = entries_to_srt(aligned)
+        # Preserve the original SRT before overwriting with the aligned version.
+        backup = srt_path.with_name("subtitles_original.srt")
+        if srt_path.exists() and not backup.exists():
+            backup.write_text(srt_path.read_text(encoding="utf-8"), encoding="utf-8")
         srt_path.write_text(new_srt, encoding="utf-8")
 
         job["progress"] = 100

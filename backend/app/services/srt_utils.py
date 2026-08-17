@@ -1,6 +1,16 @@
 """SRT parsing & formatting utilities (shared by multiple services)."""
 
+from rapidfuzz import fuzz
+
 from app.models import SrtEntry
+
+MERGE_THRESHOLD = 0.8
+
+
+def _texts_similar(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    return fuzz.ratio(a.strip(), b.strip()) / 100.0 >= MERGE_THRESHOLD
 
 
 def _fmt(sec: float) -> str:
@@ -59,3 +69,135 @@ def entries_to_srt(entries: list[SrtEntry]) -> str:
     for i, e in enumerate(entries):
         blocks.append(f"{i + 1}\n{e.startLabel} --> {e.endLabel}\n{e.text}")
     return "\n\n".join(blocks) + "\n"
+
+
+MIN_SRT_DURATION = 0.6
+
+
+def validate_timeline(entries: list[SrtEntry]) -> list[dict]:
+    """Detect illogical timeline issues in parsed SRT entries.
+
+    Checks three structural rules:
+    - negative/zero duration (end <= start)
+    - overlap between consecutive entries (next start before prev end)
+    - out-of-order entries (next start before prev start)
+    """
+    issues: list[dict] = []
+    prev: SrtEntry | None = None
+    for e in entries:
+        if e.end <= e.start:
+            issues.append({
+                "index": e.index,
+                "type": "negative_duration",
+                "message": (
+                    f"Phụ đề #{e.index}: thời gian kết thúc ({e.endLabel}) "
+                    f"không sau thời gian bắt đầu ({e.startLabel})"
+                ),
+                "start": e.start,
+                "end": e.end,
+            })
+        if prev is not None and e.start < prev.end:
+            issues.append({
+                "index": e.index,
+                "type": "overlap",
+                "message": (
+                    f"Phụ đề #{e.index} chồng lấn với phụ đề #{prev.index} "
+                    f"(bắt đầu {e.startLabel} trước khi kết thúc {prev.endLabel})"
+                ),
+                "start": e.start,
+                "end": e.end,
+                "prev_index": prev.index,
+            })
+        if prev is not None and e.start < prev.start:
+            issues.append({
+                "index": e.index,
+                "type": "out_of_order",
+                "message": (
+                    f"Phụ đề #{e.index} không theo thứ tự "
+                    f"(bắt đầu {e.startLabel} trước phụ đề #{prev.index})"
+                ),
+                "start": e.start,
+                "end": e.end,
+                "prev_index": prev.index,
+            })
+        prev = e
+    return issues
+
+
+def fix_timeline(entries: list[SrtEntry]) -> tuple[list[SrtEntry], list[dict]]:
+    """Auto-fix illogical timelines.
+
+    Pass 1: give every negative/zero-duration entry a minimum length.
+    Pass 2: sort by start time; for overlaps:
+      - if the two texts are similar (>= 80%) -> merge, keeping the longest
+        text and the union span (same rule as sub merge),
+      - otherwise -> trim the previous entry's end to the next entry's start
+        so both subtitles survive.
+    Returns (fixed_entries, list of fixes applied).
+    """
+    fixes: list[dict] = []
+    fixed = [e.model_copy(deep=True) for e in entries]
+
+    # Pass 1: fix negative/zero durations
+    for i, e in enumerate(fixed):
+        if e.end <= e.start:
+            nxt_start = fixed[i + 1].start if i + 1 < len(fixed) else None
+            if nxt_start is not None and nxt_start - e.start > 0.05:
+                new_end = min(e.start + MIN_SRT_DURATION, nxt_start)
+            else:
+                new_end = e.start + MIN_SRT_DURATION
+            fixes.append({
+                "index": e.index,
+                "type": "negative_duration",
+                "from": f"{e.startLabel} --> {e.endLabel}",
+                "to": f"{_fmt(e.start)} --> {_fmt(new_end)}",
+            })
+            e.end = new_end
+            e.endLabel = _fmt(new_end)
+
+    # Pass 2: sort by start, resolve overlaps
+    fixed.sort(key=lambda e: (e.start, e.end))
+    merged: list[SrtEntry] = []
+    for e in fixed:
+        if merged and e.start < merged[-1].end:
+            prev = merged[-1]
+            if _texts_similar(prev.text, e.text):
+                # Same content -> merge, keep longest text + union span
+                merged_end = max(prev.end, e.end)
+                fixes.append({
+                    "index": e.index,
+                    "type": "overlap",
+                    "from": f"#{prev.index} + #{e.index}",
+                    "to": f"#{prev.index} --> {_fmt(prev.start)} --> {_fmt(merged_end)}",
+                })
+                if len(e.text) >= len(prev.text):
+                    prev.text = e.text
+                prev.end = merged_end
+                prev.endLabel = _fmt(merged_end)
+            else:
+                # Different content -> trim prev end so both survive
+                new_end = e.start
+                if new_end <= prev.start:
+                    new_end = min(prev.start + MIN_SRT_DURATION, e.end)
+                fixes.append({
+                    "index": prev.index,
+                    "type": "overlap",
+                    "from": f"#{prev.index} --> {_fmt(prev.end)}",
+                    "to": f"#{prev.index} --> {_fmt(new_end)}",
+                })
+                prev.end = new_end
+                prev.endLabel = _fmt(new_end)
+        else:
+            merged.append(e)
+
+    out: list[SrtEntry] = []
+    for i, e in enumerate(merged):
+        out.append(SrtEntry(
+            index=i + 1,
+            start=e.start,
+            end=e.end,
+            startLabel=_fmt(e.start),
+            endLabel=_fmt(e.end),
+            text=e.text,
+        ))
+    return out, fixes

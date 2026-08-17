@@ -47,3 +47,13 @@ class SrtEntry(BaseModel):
 
 class UpdateSrtRequest(BaseModel):
     content: str
+
+
+class PipelineState(BaseModel):
+    """Frontend AutoPipeline progress reported for a video, so other tabs (and
+    the video list) can mirror the exact step-by-step progress."""
+    status: str = "running"          # queued | running | done | error
+    stage: str = "processing"
+    progress: float = 0
+    step_progress: list[float | None] = []
+    error: str = ""

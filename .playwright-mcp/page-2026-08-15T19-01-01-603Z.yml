@@ -1,0 +1,21 @@
+- generic [active] [ref=f1e1]:
+  - main [ref=f1e3]:
+    - link "Back to library" [ref=f1e5] [cursor=pointer]:
+      - /url: /
+    - generic [ref=f1e12]:
+      - generic [ref=f1e13]: Extracted Video
+      - heading "video.mp4" [level=1] [ref=f1e14]
+      - generic [ref=f1e15]:
+        - generic [ref=f1e16]: 73 subtitle lines
+        - generic [ref=f1e20]: Extracted Aug 16, 2026
+        - link "Xử lý lại" [ref=f1e21] [cursor=pointer]:
+          - /url: /extract?video_id=289a3e4fae8c
+        - button "Làm mới trạng thái" [ref=f1e22] [cursor=pointer]
+    - generic [ref=f1e23]:
+      - generic [ref=f1e24]:
+        - generic [ref=f1e25]:
+          - button "Transcript" [ref=f1e26] [cursor=pointer]
+          - button "Ngữ cảnh" [ref=f1e27] [cursor=pointer]
+        - generic [ref=f1e28]: 73 dòng phụ đề
+      - paragraph [ref=f1e36]: Loading transcript…
+  - alert [ref=f1e37]

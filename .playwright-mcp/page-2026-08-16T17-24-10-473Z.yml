@@ -1,0 +1,148 @@
+- generic [active] [ref=f1e1]:
+  - main [ref=f1e3]:
+    - generic [ref=f1e5]:
+      - link "Back to library" [ref=f1e6] [cursor=pointer]:
+        - /url: /
+      - button "Dọn sạch dữ liệu tạm" [ref=f1e11] [cursor=pointer]
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=f1e12] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f1e16]:
+      - generic [ref=f1e17]: Auto Pipeline
+      - heading "Link Douyin → Video có phụ đề Việt" [level=1] [ref=f1e18]
+      - paragraph [ref=f1e19]: "Dán link, hệ thống tự động: tải → merge audio/video → OCR → ngữ cảnh → dịch Gemini → nhúng phụ đề mới vào video."
+    - generic [ref=f1e22]:
+      - paragraph [ref=f1e23]: 1. Dán link video
+      - generic [ref=f1e24]: Đang kiểm tra Gemini API + engine lồng tiếng...
+      - generic [ref=f1e29]:
+        - textbox "Đang kiểm tra kết nối..." [disabled] [ref=f1e30]
+        - button "Bắt đầu" [disabled] [ref=f1e31]
+      - generic [ref=f1e33]:
+        - generic [ref=f1e34]: "Vùng quét phụ đề:"
+        - generic [ref=f1e35]:
+          - button "Tự động (vùng mặc định)" [ref=f1e36] [cursor=pointer]
+          - button "Chọn vùng thủ công" [ref=f1e37] [cursor=pointer]
+        - paragraph [ref=f1e38]: Pipeline sẽ dừng lại ở bước Chọn vùng quét để bạn kéo vùng lấy phụ đề.
+      - generic [ref=f1e39]:
+        - generic [ref=f1e40]:
+          - generic [ref=f1e41]: "Lồng tiếng:"
+          - generic [ref=f1e42]:
+            - button "Google TTS" [ref=f1e43] [cursor=pointer]
+            - button "CapCut" [ref=f1e44] [cursor=pointer]
+          - generic [ref=f1e45]: Đang tải giọng CapCut...
+        - paragraph [ref=f1e49]: Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100).
+        - generic [ref=f1e50]:
+          - generic [ref=f1e51]: "Voice gốc:"
+          - generic [ref=f1e52]:
+            - button "Tắt (tách bằng Demucs)" [ref=f1e53] [cursor=pointer]
+            - button "Giữ lại (giảm âm lượng)" [ref=f1e54] [cursor=pointer]
+        - generic [ref=f1e55]:
+          - generic [ref=f1e56]: "Căn chỉnh phụ đề:"
+          - generic [ref=f1e57]:
+            - button "Tự động khớp vị trí sub gốc" [ref=f1e58] [cursor=pointer]
+            - button "Tự chỉnh kích thước & vị trí" [ref=f1e59] [cursor=pointer]
+          - paragraph [ref=f1e60]: Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video.
+        - generic [ref=f1e62]:
+          - generic [ref=f1e63]:
+            - paragraph [ref=f1e64]: Logo + Watermark
+            - paragraph [ref=f1e65]: Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo bộ text + logo trong Settings ⚙️).
+          - button [ref=f1e66] [cursor=pointer]
+        - generic [ref=f1e69]:
+          - generic [ref=f1e70]:
+            - paragraph [ref=f1e71]: Kiểm tra timeline phụ đề
+            - paragraph [ref=f1e72]: Sau khi dịch xong, pipeline dừng lại để kiểm tra timeline vô lý (end ≤ start, chồng lấn) và hiển thị popup cho bạn duyệt trước khi tiếp tục.
+          - button [ref=f1e73] [cursor=pointer]
+    - generic [ref=f1e77]:
+      - button "Tiến trình" [ref=f1e78] [cursor=pointer]
+      - button "Đang xử lý1" [ref=f1e79] [cursor=pointer]
+      - button "Đã xử lý" [ref=f1e80] [cursor=pointer]
+    - generic [ref=f1e83]:
+      - generic [ref=f1e84]:
+        - generic [ref=f1e85]:
+          - generic [ref=f1e86]:
+            - paragraph [ref=f1e87]: "山海经异兽美女和姬子阿姨的机甲，你选哪个？#姬甲无限流ai征集 #崩坏星穹铁道 #山海经 #机甲 - 抖音.mp4"
+            - generic [ref=f1e88]: Đang xử lý
+          - paragraph
+        - generic [ref=f1e92]:
+          - button "Hủy xử lý" [ref=f1e93] [cursor=pointer]
+          - button "Xoá" [ref=f1e94] [cursor=pointer]
+      - generic [ref=f1e96]:
+        - generic [ref=f1e97]: Tổng tiến độ
+        - generic [ref=f1e98]: 56%
+      - generic [ref=f1e101]:
+        - generic [ref=f1e102]:
+          - generic [ref=f1e107]:
+            - generic [ref=f1e108]:
+              - paragraph [ref=f1e109]: Phân tích link
+              - generic [ref=f1e110]: 100%
+            - paragraph [ref=f1e111]: Mở link Douyin lấy URL video
+          - generic [ref=f1e114]: 0s
+        - generic [ref=f1e116]:
+          - generic [ref=f1e121]:
+            - generic [ref=f1e122]:
+              - paragraph [ref=f1e123]: Merge video + audio
+              - generic [ref=f1e124]: 100%
+            - paragraph [ref=f1e125]: Gộp 2 file nếu có audio riêng
+          - generic [ref=f1e128]: 0s
+        - generic [ref=f1e130]:
+          - generic [ref=f1e135]:
+            - generic [ref=f1e136]:
+              - paragraph [ref=f1e137]: Chọn vùng quét sub
+              - generic [ref=f1e138]: 100%
+            - paragraph [ref=f1e139]: Kéo vùng trên video để lấy phụ đề
+          - generic [ref=f1e142]: 0s
+        - generic [ref=f1e144]:
+          - generic [ref=f1e149]:
+            - generic [ref=f1e150]:
+              - paragraph [ref=f1e151]: Chỉnh kích thước & vị trí sub
+              - generic [ref=f1e152]: 100%
+            - paragraph [ref=f1e153]: Xem trước, chỉnh cỡ chữ và vị trí
+          - generic [ref=f1e156]: 0s
+        - generic [ref=f1e158]:
+          - generic [ref=f1e163]:
+            - generic [ref=f1e164]:
+              - paragraph [ref=f1e165]: OCR trích phụ đề
+              - generic [ref=f1e166]: 100%
+            - paragraph [ref=f1e167]: Nhận dạng chữ trong vùng đã chọn
+          - generic [ref=f1e170]: 0s
+        - generic [ref=f1e172]:
+          - generic [ref=f1e177]:
+            - generic [ref=f1e178]:
+              - paragraph [ref=f1e179]: Phân tích ngữ cảnh
+              - generic [ref=f1e180]: 0%
+            - paragraph [ref=f1e181]: Gemini Vision · chưa bật
+          - generic [ref=f1e183]:
+            - generic [ref=f1e184]: 0%
+            - generic [ref=f1e185]: 0s
+        - generic [ref=f1e186]:
+          - generic [ref=f1e187]: "7"
+          - generic [ref=f1e189]:
+            - generic [ref=f1e190]:
+              - paragraph [ref=f1e191]: Dịch Gemini
+              - generic [ref=f1e192]: 0%
+            - paragraph [ref=f1e193]: Dịch phụ đề sang tiếng Việt
+        - generic [ref=f1e194]:
+          - generic [ref=f1e195]: "8"
+          - generic [ref=f1e197]:
+            - generic [ref=f1e198]:
+              - paragraph [ref=f1e199]: Lồng tiếng Việt
+              - generic [ref=f1e200]: 0%
+            - paragraph [ref=f1e201]: Tách giọng + TTS Việt + giữ nhạc nền
+        - generic [ref=f1e202]:
+          - generic [ref=f1e203]: "9"
+          - generic [ref=f1e205]:
+            - generic [ref=f1e206]:
+              - paragraph [ref=f1e207]: Nhúng SRT vào video
+              - generic [ref=f1e208]: 0%
+            - paragraph [ref=f1e209]: FFmpeg gộp SRT mới vào MP4
+      - generic [ref=f1e210]:
+        - generic [ref=f1e211]:
+          - generic [ref=f1e212]: Nhật ký chi tiết · 2 dòng
+          - generic [ref=f1e213]: "Thời gian: 0s"
+        - generic [ref=f1e214]:
+          - generic [ref=f1e215]:
+            - generic [ref=f1e216]: 00:24:10
+            - generic [ref=f1e217]: Đang theo dõi tiến trình từ máy chủ...
+          - generic [ref=f1e218]:
+            - generic [ref=f1e219]: 00:23:41
+            - generic [ref=f1e220]: Đang upload ảnh snapshot lên Gemini File Store...
+  - alert [ref=f1e221]

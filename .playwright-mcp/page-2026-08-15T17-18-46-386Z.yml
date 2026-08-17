@@ -1,0 +1,108 @@
+- generic [ref=e1]:
+  - main [ref=e283]:
+    - generic [ref=e285]:
+      - link "Back to library" [ref=e286] [cursor=pointer]:
+        - /url: /
+      - button "Xoá job đã xong" [ref=e291] [cursor=pointer]
+      - button "Dọn sạch dữ liệu tạm" [ref=e292] [cursor=pointer]
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=e293] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e297]:
+      - generic [ref=e298]: Auto Pipeline
+      - heading "Link Douyin → Video có phụ đề Việt" [level=1] [ref=e299]
+      - paragraph [ref=e300]: "Dán link, hệ thống tự động: tải → merge audio/video → OCR → ngữ cảnh → dịch Gemini → nhúng phụ đề mới vào video."
+    - generic [ref=e303]:
+      - paragraph [ref=e304]: 1. Dán link video
+      - generic [ref=e305]:
+        - generic [ref=e309]: "Gemini API đã sẵn sàng. Engine lồng tiếng: Google TTS + CapCut sẵn sàng."
+        - button "Kiểm tra lại" [ref=e310] [cursor=pointer]
+      - generic [ref=e311]:
+        - textbox "Dán toàn bộ nội dung chia sẻ (hoặc link https://v.douyin.com/...)" [ref=e312]
+        - button "Bắt đầu" [disabled] [ref=e313]
+      - generic [ref=e315]:
+        - generic [ref=e316]: "Vùng quét phụ đề:"
+        - generic [ref=e317]:
+          - button "Tự động (vùng mặc định)" [ref=e318] [cursor=pointer]
+          - button "Chọn vùng thủ công" [ref=e319] [cursor=pointer]
+        - paragraph [ref=e320]: Pipeline sẽ dừng lại ở bước Chọn vùng quét để bạn kéo vùng lấy phụ đề.
+      - generic [ref=e321]:
+        - generic [ref=e322]:
+          - generic [ref=e323]: "Lồng tiếng:"
+          - generic [ref=e324]:
+            - button "Google TTS" [ref=e325] [cursor=pointer]
+            - button "CapCut" [ref=e326] [cursor=pointer]
+          - combobox [ref=e327]:
+            - option "Nhỏ Ngọt Ngào (BV421_vivn_streaming)" [selected]
+            - option "Giọng Nữ Phổ Thông (vi_female_huong)"
+            - option "Giọng Bé (BV074_streaming_dsp)"
+            - option "Cô Gái Hoạt Ngôn (BV074_streaming)"
+            - option "Hoai My (vi-VN-HoaiMyNeural)"
+            - option "Nam Minh (vi-VN-NamMinhNeural)"
+            - option "Việt Méo (BV075_streaming_vibrato_dsp)"
+            - option "Mai (BV562_streaming)"
+            - option "Ban Mai (multi_female_yangguangnv_uranus_bigtts)"
+            - option "Review Phim new (multi_female_richgirl_uranus_bigtts)"
+            - option "Bản Tin 1 (multi_female_quanweinv_uranus_bigtts)"
+            - option "Review Phim 4 (multi_female_stokie_uranus_bigtts)"
+            - option "Bản Tin nữ (multi_female_sisi_uranus_bigtts)"
+            - option "Review Phim 3 (multi_female_daqi_uranus_bigtts)"
+            - option "Review Phim 2 (multi_female_xyf04auto_uranus_bigtts)"
+            - option "Sunny Idol (multi_female_kiwi_uranus_bigtts)"
+            - option "Kenny Đại Đế (BV075_streaming_demon_dsp)"
+            - option "Robot VN (BV075_streaming_robot_dsp)"
+            - option "Giọng Nam Trầm (multi_male_felipe_uranus_bigtts)"
+            - option "Giọng Gái Mới Lớn (multi_female_peiqi_uranus_bigtts)"
+            - option "Nam bản tin (multi_female_xinwenjieshuo_uranus_bigtts)"
+            - option "Quên Tên Tự Test (multi_female_tianmeijieshuo_uranus_bigtts)"
+            - option "Thanh Niên Tự Tin (BV075_streaming)"
+            - option "Alex Đại Đế (BV560_streaming)"
+          - button "Nghe thử" [ref=e328] [cursor=pointer]
+        - paragraph [ref=e329]: Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100).
+        - generic [ref=e330]:
+          - generic [ref=e331]: "Voice gốc:"
+          - generic [ref=e332]:
+            - button "Tắt (tách bằng Demucs)" [ref=e333] [cursor=pointer]
+            - button "Giữ lại (giảm âm lượng)" [ref=e334] [cursor=pointer]
+        - generic [ref=e335]:
+          - generic [ref=e336]: "Căn chỉnh phụ đề:"
+          - generic [ref=e337]:
+            - button "Tự động khớp vị trí sub gốc" [ref=e338] [cursor=pointer]
+            - button "Tự chỉnh kích thước & vị trí" [ref=e339] [cursor=pointer]
+          - paragraph [ref=e340]: Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video.
+        - generic [ref=e342]:
+          - generic [ref=e343]:
+            - paragraph [ref=e344]: Logo + Watermark
+            - paragraph [ref=e345]: Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo bộ text + logo trong Settings ⚙️).
+          - button [ref=e346] [cursor=pointer]
+    - generic [ref=e350]:
+      - button "Tiến trình" [ref=e351] [cursor=pointer]
+      - button "Đang xử lý" [ref=e352] [cursor=pointer]
+      - button "Đã xử lý3" [active] [ref=e353] [cursor=pointer]
+    - generic [ref=e505]:
+      - generic [ref=e506] [cursor=pointer]:
+        - generic [ref=e512]:
+          - generic [ref=e513]:
+            - generic [ref=e515]: Lỗi
+            - generic [ref=e516]: 31s
+          - paragraph [ref=e517]: https://example.com/not-a-douyin-link
+          - paragraph [ref=e521]: Lỗi ở bước 1/9 · Phân tích link
+        - button "Xoá" [ref=e522]
+      - generic [ref=e526] [cursor=pointer]:
+        - generic [ref=e528]:
+          - generic [ref=e529]:
+            - generic [ref=e531]: Xong
+            - generic [ref=e532]: 70 phụ đề
+          - paragraph [ref=e533]: video.mp4
+          - generic [ref=e534]: 100%
+        - generic [ref=e537]: 16-08
+        - button "Xoá toàn bộ video" [ref=e538]
+      - generic [ref=e542] [cursor=pointer]:
+        - generic [ref=e544]:
+          - generic [ref=e545]:
+            - generic [ref=e547]: Xong
+            - generic [ref=e548]: 78 phụ đề
+          - paragraph [ref=e549]: video.mp4
+          - generic [ref=e550]: 100%
+        - generic [ref=e553]: 15-08
+        - button "Xoá toàn bộ video" [ref=e554]
+  - alert [ref=e78]

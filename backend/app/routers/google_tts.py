@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from app.config import settings
@@ -23,7 +24,7 @@ PREVIEW_TEXT = "Xin chào, đây là giọng đọc Google TTS. Bạn có thích
 async def tts_voices(lang: Optional[str] = "vi-VN", max_results: int = 100):
     """List Google TTS voices (default Vietnamese)."""
     try:
-        return list_google_voices(lang=lang, max_results=max_results)
+        return await run_in_threadpool(list_google_voices, lang=lang, max_results=max_results)
     except Exception as e:
         logger.warning("Google TTS list_voices failed: %s", e)
         raise HTTPException(502, f"Google TTS không tải được danh sách giọng: {e}") from e
@@ -45,7 +46,7 @@ async def tts_preview(body: dict):
     out_path = settings.temp_dir / "tts_preview" / f"google_{voice.replace('/', '_')}.mp3"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        synthesize_preview(voice, text, out_path)
+        await run_in_threadpool(synthesize_preview, voice, text, out_path)
     except Exception as e:
         logger.warning("Google TTS preview failed for %s: %s", voice, e)
         raise HTTPException(502, f"Google TTS preview lỗi: {e}") from e
