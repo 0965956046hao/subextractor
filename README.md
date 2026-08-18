@@ -1,5 +1,7 @@
 # SubTitleExtractor
 
+> **Build app desktop (Tauri):** xem [BUILD.md](BUILD.md) — hướng dẫn step-by-step đóng gói khi có update code.
+
 Trích xuất phụ đề (subtitle) từ video bằng OCR: upload video, chọn vùng hiển thị phụ đề, OCR toàn bộ frame và tải về file `.srt` (hoặc `.txt`).
 
 ## Tính năng
