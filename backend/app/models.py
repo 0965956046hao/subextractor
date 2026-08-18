@@ -49,6 +49,21 @@ class UpdateSrtRequest(BaseModel):
     content: str
 
 
+class TimelineCheckState(BaseModel):
+    """Timeline-review popup state for the "Kiểm tra dịch sub" step, reported so
+    other tabs/browsers can show the same popup when they view the video."""
+    waiting: bool = False            # pipeline is paused awaiting review
+    open: bool = False               # big review modal shown (vs small prompt)
+    issues: list[dict] = []
+    fixing: bool = False
+    decision: str | None = None      # "continue" | "fix" once someone resolves
+
+
+class TimelineAction(BaseModel):
+    action: Literal["wait", "open", "close", "continue", "fix"]
+    issues: list[dict] = []
+
+
 class PipelineState(BaseModel):
     """Frontend AutoPipeline progress reported for a video, so other tabs (and
     the video list) can mirror the exact step-by-step progress."""
@@ -57,3 +72,4 @@ class PipelineState(BaseModel):
     progress: float = 0
     step_progress: list[float | None] = []
     error: str = ""
+    timeline_check: TimelineCheckState | None = None

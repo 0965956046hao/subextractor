@@ -84,6 +84,7 @@ interface TimelineCheckModalProps {
   videoId: string;
   initialIssues: TimelineIssue[];
   onResolve: (action: "continue") => void;
+  onClose: () => void;
   targetLang?: string;
 }
 
@@ -101,6 +102,7 @@ export default function TimelineCheckModal({
   videoId,
   initialIssues,
   onResolve,
+  onClose,
   targetLang = "vi",
 }: TimelineCheckModalProps) {
   const [entries, setEntries] = useState<SrtEntry[]>([]);
@@ -224,6 +226,16 @@ export default function TimelineCheckModal({
     setCurrentTime(sec);
   }, []);
 
+  // Scrub (seek without autoplay) used by click-on-timeline.
+  const scrubTo = useCallback(
+    (sec: number) => {
+      const v = videoRef.current;
+      if (v) v.currentTime = Math.max(0, Math.min(sec, v.duration || sec));
+      setCurrentTime(Math.max(0, Math.min(sec, effectiveDuration || sec)));
+    },
+    [effectiveDuration]
+  );
+
   const selectEntry = useCallback(
     (index: number, sec: number) => {
       setActiveIndex(index);
@@ -277,6 +289,7 @@ export default function TimelineCheckModal({
   const handleBlockPointerDown = useCallback(
     (e: React.PointerEvent, index: number, mode: Exclude<DragMode, null>) => {
       e.preventDefault();
+      e.stopPropagation();
       const entry = entries.find((en) => en.index === index);
       if (!entry) return;
       const track = trackRef.current;
@@ -338,6 +351,19 @@ export default function TimelineCheckModal({
     dragRef.current = null;
   }, []);
 
+  // Click anywhere on the timeline (ruler / empty space) to move the playhead
+  // there and seek the video, without starting playback.
+  const handleTrackPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      const track = trackRef.current;
+      if (!track) return;
+      const rect = track.getBoundingClientRect();
+      const sec = (e.clientX - rect.left + track.scrollLeft) / pps;
+      scrubTo(Math.max(0, Math.min(sec, effectiveDuration)));
+    },
+    [scrubTo, pps, effectiveDuration]
+  );
+
   const performRiskCheck = useCallback(async () => {
     const { job_id } = await startSrtRiskCheck(videoId, targetLang);
     for (let i = 0; i < 600; i++) {
@@ -388,6 +414,49 @@ export default function TimelineCheckModal({
     }
   }, [videoId, entries, onResolve]);
 
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }, []);
+
+  // Space toggles play/pause, unless focus is in a text field, on a button, on
+  // the video (native controls), or on a timeline row (which uses Space itself).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el) {
+        const tag = el.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable) return;
+        if (tag === "BUTTON" || tag === "VIDEO") return;
+        if (el.getAttribute("role") === "button") return;
+      }
+      e.preventDefault();
+      togglePlay();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [togglePlay]);
+
+  // Drop all unsaved edits: reload the saved SRT and re-validate the timeline.
+  const resetEdits = useCallback(async () => {
+    setEditingIndex(-1);
+    setActiveIndex(-1);
+    setCheckError("");
+    setLoadError("");
+    try {
+      const es = await getSrtEntries(videoId);
+      setEntries(es);
+      setRisks([]);
+      const v = await validateSrtTimeline(videoId);
+      setTimelineIssues(v.issues ?? []);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Khôi phục phụ đề đã lưu thất bại");
+    }
+  }, [videoId]);
+
   const activeRisk = riskByIndex.get(activeIndex);
 
   if (!mounted) return null;
@@ -423,6 +492,15 @@ export default function TimelineCheckModal({
               >
                 {checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
                 {checking ? "Đang kiểm tra…" : "Kiểm tra rủi ro file sub"}
+              </button>
+              <button
+                onClick={onClose}
+                title="Thu nhỏ lại (tiếp tục chờ kiểm tra)"
+                className="w-9 h-9 rounded-full bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+                </svg>
               </button>
             </div>
           </div>
@@ -475,27 +553,27 @@ export default function TimelineCheckModal({
           <div className="flex flex-col gap-4 min-h-0 flex-1">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 flex-1">
             {/* Left: video */}
-            <div className="relative rounded-xl overflow-hidden bg-black ring-1 ring-black/10 flex-shrink-0">
-              <video
-                ref={videoRef}
-                src={getVideoUrl(videoId)}
-                controls
-                className="w-full max-h-[32vh] object-contain bg-black"
-                onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
-                onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-                onLoadedMetadata={(e) => {
-                  const d = (e.target as HTMLVideoElement).duration;
-                  if (Number.isFinite(d) && d > 0) setDuration(d);
-                }}
-              />
-              {activeEntry && (
-                <div className="absolute inset-x-0 bottom-2 flex justify-center px-4 pointer-events-none">
-                  <p className="max-w-[90%] text-center text-white text-xs sm:text-sm font-medium bg-black/70 backdrop-blur-sm rounded-lg px-3 py-1.5 leading-snug">
-                    {activeEntry.text}
-                  </p>
-                </div>
-              )}
+            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/10 flex flex-col min-h-0">
+              <div className="relative w-full flex-1 min-h-0">
+                <video
+                  ref={videoRef}
+                  src={getVideoUrl(videoId)}
+                  controls
+                  className="absolute inset-0 w-full h-full object-contain bg-black"
+                  onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
+                  onLoadedMetadata={(e) => {
+                    const d = (e.target as HTMLVideoElement).duration;
+                    if (Number.isFinite(d) && d > 0) setDuration(d);
+                  }}
+                />
+              </div>
+              <div className="h-11 flex items-center justify-center px-3 border-t border-white/10 bg-white/[0.04] flex-shrink-0">
+                <p className="max-w-full text-center text-white text-xs sm:text-sm font-medium leading-snug line-clamp-2">
+                  {activeEntry ? activeEntry.text : "—"}
+                </p>
+              </div>
             </div>
 
 
@@ -672,9 +750,9 @@ export default function TimelineCheckModal({
                 </p>
               </div>
               <div className="overflow-x-auto scrollbar-thin" ref={trackRef}>
-                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }}>
-                  {/* ruler */}
-                  <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-black/[0.06]">
+                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }} onPointerDown={handleTrackPointerDown}>
+                  {/* ruler — pointer-events-none so clicks fall through to scrub */}
+                  <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-black/[0.06] pointer-events-none">
                     {Array.from({ length: Math.ceil(effectiveDuration / interval) + 1 }).map((_, i) => (
                       <div
                         key={i}
@@ -770,7 +848,19 @@ export default function TimelineCheckModal({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-2 pt-1">
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={resetEdits}
+              disabled={saving || checking || entries.length === 0}
+              className="mr-auto px-3.5 py-2 rounded-full text-[12px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              title="Xoá các chỉnh sửa chưa lưu, khôi phục phụ đề đã lưu"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+              Khôi phục bản đã lưu
+            </button>
             <button
               onClick={() => onResolve("continue")}
               disabled={saving || checking}
