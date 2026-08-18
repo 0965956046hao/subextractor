@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { Region, SubtitleStyle, VideoMeta, TimelineIssue } from "@/lib/api";
-import { listVideos, reportPipelineState } from "@/lib/api";
+import { listVideos, reportPipelineState, getPipelineState, reportTimelineAction } from "@/lib/api";
 
 function sanitizeFilename(name: string): string {
   return (name || "")
@@ -160,6 +160,7 @@ interface PipelineState {
   cancelPipeline: (id: string) => void;
   resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
   openTimelineCheck: (id: string) => void;
+  closeTimelineCheck: (id: string) => void;
   restorePaused: () => void;
 }
 
@@ -308,6 +309,10 @@ export const usePipelineStore = create<PipelineState>()(
       stepEnds: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : null)),
       logs: [{ message: "Đang theo dõi tiến trình từ máy chủ...", ts: started / 1000, level: "info" }],
     };
+    const tc = v.pipeline?.timeline_check;
+    if (tc?.waiting) {
+      p.timelineCheck = { waiting: true, open: !!tc.open, issues: tc.issues ?? [], fixing: !!tc.fixing };
+    }
     set((s) => ({ pipelines: [...s.pipelines, p] }));
     if (v.logs && Array.isArray(v.logs)) {
       appendBackendLogs(id, v.logs as LogEntry[]);
@@ -423,9 +428,8 @@ export const usePipelineStore = create<PipelineState>()(
         const res = await fetch(`/api/srt/${videoId}/fix-timeline`, { method: "POST" });
         const d = await res.json();
         if (!res.ok) throw new Error(d.detail || "Sửa timeline thất bại");
-        patch(id, {
-          timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false },
-        });
+        patch(id, { timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false } });
+        if (videoId) reportTimelineAction(videoId, "fix").catch(() => {});
       } catch (e) {
         patch(id, { timelineCheck: { ...s.timelineCheck, fixing: false } });
         const resolve = timelineCheckWaiters.get(id);
@@ -437,6 +441,7 @@ export const usePipelineStore = create<PipelineState>()(
       }
     } else {
       patch(id, { timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false } });
+      if (s.videoId) reportTimelineAction(s.videoId, "continue").catch(() => {});
     }
     const resolve = timelineCheckWaiters.get(id);
     if (resolve) {
@@ -454,6 +459,15 @@ export const usePipelineStore = create<PipelineState>()(
     const s = get().pipelines.find((p) => p.id === id);
     if (!s || !s.timelineCheck?.waiting || s.timelineCheck.open) return;
     patch(id, { timelineCheck: { ...s.timelineCheck, open: true } });
+    if (s.videoId) reportTimelineAction(s.videoId, "open").catch(() => {});
+  },
+  // Collapse the big review modal back to the small waiting prompt. The
+  // pipeline stays paused for review; no resolution is sent.
+  closeTimelineCheck: (id) => {
+    const s = get().pipelines.find((p) => p.id === id);
+    if (!s || !s.timelineCheck?.waiting || !s.timelineCheck.open) return;
+    patch(id, { timelineCheck: { ...s.timelineCheck, open: false } });
+    if (s.videoId) reportTimelineAction(s.videoId, "close").catch(() => {});
   },
   restorePaused: () => {
     runRestorePaused();
@@ -673,6 +687,14 @@ async function pollRemoteVideo(id: string, videoId: string) {
         title: row.filename || cur.title,
         stepProgress,
       });
+      const tc = row.pipeline?.timeline_check;
+      if (tc?.waiting) {
+        patch(id, {
+          timelineCheck: { waiting: true, open: !!tc.open, issues: tc.issues ?? [], fixing: !!tc.fixing },
+        });
+      } else if (cur.timelineCheck) {
+        patch(id, { timelineCheck: null });
+      }
     } catch {
       // ignore transient
     }
@@ -732,6 +754,35 @@ function rejectTimelineCheck(id: string) {
     timelineCheckWaiters.delete(id);
     w.reject(new Error("Đã hủy kiểm tra timeline"));
   }
+}
+
+// Watches the backend for a timeline-review decision made from another
+// tab/browser, so a remote "Tiếp tục xử lý" / "Sửa timeline" can unblock the
+// driving tab's runner. Also mirrors "open" so the big modal expands everywhere.
+function pollBackendTimelineDecision(videoId: string, id: string, signal: AbortSignal): Promise<"fix" | "continue"> {
+  return new Promise((resolve) => {
+    const step = async () => {
+      if (signal.aborted) return;
+      try {
+        const st = await getPipelineState(videoId);
+        const tc = st?.timeline_check;
+        if (tc?.decision === "continue" || tc?.decision === "fix") {
+          resolve(tc.decision);
+          return;
+        }
+        if (tc?.open) {
+          const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+          if (cur?.timelineCheck && !cur.timelineCheck.open) {
+            patch(id, { timelineCheck: { ...cur.timelineCheck, open: true } });
+          }
+        }
+      } catch {
+        // ignore transient
+      }
+      if (!signal.aborted) setTimeout(step, 1000);
+    };
+    setTimeout(step, 1000);
+  });
 }
 
 function enqueue(id: string, startStep = 0) {
@@ -1265,6 +1316,9 @@ async function runPipeline(id: string, startStep = 4) {
             patch(id, {
               timelineCheck: { waiting: true, open: false, issues, fixing: false },
             });
+            // Report the pause so other tabs/browsers can show the same popup,
+            // and let a remote "Tiếp tục xử lý" / "Sửa timeline" unblock us.
+            reportTimelineAction(videoId, "wait", issues).catch(() => {});
             appendLog(
               id,
               issues.length > 0
@@ -1272,7 +1326,16 @@ async function runPipeline(id: string, startStep = 4) {
                 : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
             );
             patch(id, { resumeStep: 7 });
-            const choice = await waitForTimelineCheck(id);
+            const decisionAbort = new AbortController();
+            let choice: "fix" | "continue";
+            try {
+              choice = await Promise.race([
+                waitForTimelineCheck(id),
+                pollBackendTimelineDecision(videoId, id, decisionAbort.signal),
+              ]);
+            } finally {
+              decisionAbort.abort();
+            }
             if (choice === "fix") {
               appendLog(id, "Đã tự sửa timeline phụ đề (giữ sub dài nhất).");
             } else {

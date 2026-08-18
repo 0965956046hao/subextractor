@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from app.config import settings
-from app.models import UpdateSrtRequest, PipelineState
+from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
 from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _video_playable
 from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, validate_timeline
@@ -983,5 +983,67 @@ async def update_pipeline_state(
     the exact same stage / overall % / per-step progress."""
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
-    pipeline_states[video_id] = body.model_dump()
+    new_state = body.model_dump()
+    # Generic progress reports don't carry timeline_check — preserve whatever the
+    # dedicated timeline endpoint stored so remote tabs keep seeing the popup.
+    if body.timeline_check is None:
+        new_state["timeline_check"] = (pipeline_states.get(video_id) or {}).get("timeline_check")
+    pipeline_states[video_id] = new_state
+    return {"ok": True, "video_id": video_id}
+
+
+# ── GET /api/pipeline/{video_id} ──
+
+@router.get("/api/pipeline/{video_id}")
+async def get_pipeline_state(
+    video_id: str,
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
+    """Read back the reported AutoPipeline state for a video, so the driving tab
+    can observe decisions made from other tabs/browsers (timeline review)."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    return pipeline_states.get(video_id) or {}
+
+
+# ── POST /api/pipeline/{video_id}/timeline ──
+
+@router.post("/api/pipeline/{video_id}/timeline")
+async def update_timeline_check(
+    video_id: str,
+    body: TimelineAction,
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
+    """Timeline-review state for the "Kiểm tra dịch sub" step. The driving tab
+    reports 'wait' when it pauses for review; any tab/browser can report 'open'
+    to expand the modal, 'close' to collapse it back to the small prompt, or
+    'continue'/'fix' to resolve the pause, which the driving tab picks up via
+    GET /api/pipeline/{video_id}."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    ps = pipeline_states.get(video_id) or {}
+    tc = dict(ps.get("timeline_check") or {})
+    if body.action == "wait":
+        tc.update({
+            "waiting": True,
+            "open": bool(tc.get("open")),
+            "fixing": False,
+            "decision": None,
+            "issues": body.issues,
+        })
+    elif body.action == "open":
+        tc.update({"waiting": True, "open": True})
+    elif body.action == "close":
+        # Collapse the big modal back to the small waiting prompt — the
+        # pipeline stays paused (waiting) for review.
+        tc.update({"waiting": True, "open": False, "fixing": False})
+    elif body.action in ("continue", "fix"):
+        tc.update({
+            "waiting": False,
+            "open": False,
+            "fixing": body.action == "fix",
+            "decision": body.action,
+        })
+    ps["timeline_check"] = tc
+    pipeline_states[video_id] = ps
     return {"ok": True, "video_id": video_id}

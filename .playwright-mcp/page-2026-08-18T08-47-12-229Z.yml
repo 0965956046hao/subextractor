@@ -1,0 +1,57 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: SubTitle Extractor
+      - link "New Extractor" [ref=e10] [cursor=pointer]:
+        - /url: /extract
+      - link "Auto Pipeline" [ref=e14] [cursor=pointer]:
+        - /url: /auto
+      - link "YouTube Upload" [ref=e19] [cursor=pointer]:
+        - /url: /youtube
+      - link "Tải video" [ref=e25] [cursor=pointer]:
+        - /url: /download
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=e31] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e35]:
+      - generic [ref=e36]: Extracted Library
+      - heading "Your subtitles, ready to relive" [level=1] [ref=e39]: Your subtitles,ready to relive
+      - paragraph [ref=e41]: Every video you’ve extracted lives here — open one to watch, read the transcript, and download clean SRT text.
+      - link "Start a new extractor" [ref=e44] [cursor=pointer]:
+        - /url: /extract
+      - generic [ref=e50]:
+        - generic [ref=e51]: 2 videos
+        - generic [ref=e52]: 186 subtitle lines
+        - generic [ref=e53]: latest Aug 18, 2026
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e56]: 2 videos
+        - generic [ref=e57]:
+          - button "Xem dạng lưới" [ref=e58] [cursor=pointer]
+          - button "Xem dạng danh sách" [ref=e64] [cursor=pointer]
+      - generic [ref=e66]:
+        - 'link "（主页置顶视频可抢先看8集）第30集：锦鲤娃娃的反击#原创动画 #ai动画 #神经也是神 - 抖音.mp4 Delete （主页置顶视频可抢先看8集）第30集：锦鲤娃娃的反击#原创动画 #ai动画 #神经也是神 - 抖音.mp4 108 lines Aug 18, 2026 · 02:52 PM Latest extraction" [ref=e67] [cursor=pointer]':
+          - /url: /video/39982400af00
+          - generic [ref=e69]:
+            - generic [ref=e70]:
+              - 'img "（主页置顶视频可抢先看8集）第30集：锦鲤娃娃的反击#原创动画 #ai动画 #神经也是神 - 抖音.mp4" [ref=e71]'
+              - button "Delete" [ref=e76]
+            - generic [ref=e79]:
+              - generic [ref=e80]:
+                - 'heading "（主页置顶视频可抢先看8集）第30集：锦鲤娃娃的反击#原创动画 #ai动画 #神经也是神 - 抖音.mp4" [level=3] [ref=e81]'
+                - generic [ref=e82]:
+                  - generic [ref=e83]: 108 lines
+                  - generic [ref=e87]: Aug 18, 2026 · 02:52 PM
+              - generic [ref=e88]: Latest extraction
+        - 'link "（主页置顶视频可抢先看8集）第29集：生死拔河#原创动画 #ai动画 #神经也是神 - 抖音.mp4 Delete （主页置顶视频可抢先看8集）第29集：生死拔河#原创动画 #ai动画 #神经也是神 - 抖音.mp4 78 lines Aug 18, 2026 · 02:05 PM" [ref=e91] [cursor=pointer]':
+          - /url: /video/f93366990d74
+          - generic [ref=e93]:
+            - generic [ref=e94]:
+              - 'img "（主页置顶视频可抢先看8集）第29集：生死拔河#原创动画 #ai动画 #神经也是神 - 抖音.mp4" [ref=e95]'
+              - button "Delete" [ref=e100]
+            - generic [ref=e104]:
+              - 'heading "（主页置顶视频可抢先看8集）第29集：生死拔河#原创动画 #ai动画 #神经也是神 - 抖音.mp4" [level=3] [ref=e105]'
+              - generic [ref=e106]:
+                - generic [ref=e107]: 78 lines
+                - generic [ref=e111]: Aug 18, 2026 · 02:05 PM
+    - paragraph [ref=e113]: SubTitle Extractor — built with FastAPI & Next.js
+  - alert [ref=e114]

@@ -1532,6 +1532,7 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
+  const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
 
@@ -1939,6 +1940,7 @@ function DetailView({ pipeline: p, now, onRemove, onStartNext }: { pipeline: Pip
           initialIssues={p.timelineCheck.issues}
           targetLang={p.translateTarget || "vi"}
           onResolve={() => resolveTimelineCheck(p.id, "continue")}
+          onClose={() => closeTimelineCheck(p.id)}
         />
       )}
     </div>
