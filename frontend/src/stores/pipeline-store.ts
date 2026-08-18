@@ -848,6 +848,30 @@ function appendLog(id: string, msg: string, level = "info") {
   patch(id, { logs: [...cur.logs, entry] });
 }
 
+// Đảm bảo voice_map.json tồn tại (multi-voice CapCut) và CHỜ tạo xong rồi mới tiếp tục.
+async function ensureVoiceMap(videoId: string, id: string): Promise<boolean> {
+  try {
+    const vmCheck = await fetch(`/api/voice-map/${videoId}`);
+    const vmData = await vmCheck.json();
+    if (vmData.exists) {
+      appendLog(id, `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`);
+      return true;
+    }
+    appendLog(id, "Đang tạo voice_map.json (chọn giọng CapCut cho từng dòng bằng Gemini)...");
+    const vmRes = await fetch(`/api/voice-map/${videoId}`, { method: "POST" });
+    const vmd = await vmRes.json();
+    if (vmRes.ok && vmd.status === "done") {
+      appendLog(id, `Đã tạo voice_map.json: ${vmd.voices} dòng có giọng riêng.`);
+      return true;
+    }
+    appendLog(id, `Không tạo được voice_map.json: ${vmd.detail || "lỗi"}`);
+    return false;
+  } catch {
+    appendLog(id, "Bỏ qua tạo voice_map.json (lỗi).");
+    return false;
+  }
+}
+
 function appendBackendLogs(id: string, entries: LogEntry[]) {
   if (!Array.isArray(entries) || entries.length === 0) return;
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
@@ -1320,12 +1344,13 @@ async function runPipeline(id: string, startStep = 4) {
       markStepStart(id, 6);
 const translateTarget = cur.translateTarget || "vi";
 
+      let translateSkipped = false;
       if (cur.translateOn === false) {
         appendLog(id, "Đã tắt dịch tự động — giữ nguyên phụ đề gốc.");
-        markStepSkipped(id, 6);
+        translateSkipped = true;
       } else if (sourceLang === translateTarget) {
         appendLog(id, `Ngôn ngữ đích (${langLabel(translateTarget)}) trùng ngôn ngữ gốc — giữ nguyên phụ đề gốc.`);
-        markStepSkipped(id, 6);
+        translateSkipped = true;
       } else {
         // Resume: nếu bản dịch đúng ngôn ngữ đích đã tồn tại thì dùng thẳng kết quả.
         let translatedExists = false;
@@ -1391,32 +1416,16 @@ const translateTarget = cur.translateTarget || "vi";
             patch(id, { timelineCheck: null });
           }
         }
-
-        // Multi-voice: đảm bảo voice_map.json tồn tại ngay trong bước Dịch
-        // (kể cả khi dịch bị bỏ qua do bản dịch đã có sẵn).
-        if (cur.multiVoice && videoId) {
-          try {
-            const vmCheck = await fetch(`/api/voice-map/${videoId}`);
-            const vmData = await vmCheck.json();
-            if (vmData.exists) {
-              appendLog(id, `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`);
-            } else {
-              appendLog(id, "Đang tạo voice_map.json (chọn giọng CapCut cho từng dòng bằng Gemini)...");
-              const vmRes = await fetch(`/api/voice-map/${videoId}`, { method: "POST" });
-              const vmd = await vmRes.json();
-              if (vmRes.ok && vmd.status === "done") {
-                appendLog(id, `Đã tạo voice_map.json: ${vmd.voices} dòng có giọng riêng.`);
-              } else {
-                appendLog(id, `Không tạo được voice_map.json: ${vmd.detail || "lỗi"}`);
-              }
-            }
-          } catch {
-            appendLog(id, "Bỏ qua tạo voice_map.json (lỗi).");
-          }
-        }
-
-        markStepEnd(id, 6);
       }
+
+      // Multi-voice: đảm bảo voice_map.json tồn tại — kể cả khi dịch bị bỏ qua.
+      // Chờ tạo xong (Gemini) rồi mới chuyển sang bước lồng tiếng.
+      if (cur.multiVoice && videoId) {
+        await ensureVoiceMap(videoId, id);
+      }
+
+      if (translateSkipped) markStepSkipped(id, 6);
+      else markStepEnd(id, 6);
     }
 
     // 7. Dub
@@ -1453,6 +1462,11 @@ const translateTarget = cur.translateTarget || "vi";
         appendLog(id, engine === "capcut"
           ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
           : "Tách giọng & lồng tiếng Việt (Google TTS)...");
+        // Multi-voice: phải chờ tạo xong voice_map.json rồi mới được lồng tiếng
+        // (kể cả khi chạy lại/resume từ bước này mà voice_map chưa có).
+        if (cur.multiVoice && engine === "capcut" && videoId) {
+          await ensureVoiceMap(videoId, id);
+        }
         try {
           const dr = await fetch(`/api/dub/${videoId}`, {
             method: "POST",

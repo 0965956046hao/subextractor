@@ -61,7 +61,8 @@ export default function LibraryPage() {
     try {
       setVideos(await listVideos());
     } catch (err: unknown) {
-      if (!opts?.silent) setError(err instanceof Error ? err.message : "Failed to load library");
+      if (!opts?.silent)
+        setError(err instanceof Error ? err.message : "Failed to load library");
     }
   }, []);
 
@@ -76,7 +77,7 @@ export default function LibraryPage() {
   useEffect(() => {
     if (!videos) return;
     const hasActive = videos.some(
-      (v) => v.status === "queued" || v.status === "processing"
+      (v) => v.status === "queued" || v.status === "processing",
     );
     if (!hasActive) return;
     const timer = setInterval(refreshActive, 4000);
@@ -92,20 +93,23 @@ export default function LibraryPage() {
     }
   }, []);
 
-  const handleCancel = useCallback(async (jobId: string) => {
-    try {
-      await cancelJob(jobId);
-      refreshActive();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to cancel");
-    }
-  }, [refreshActive]);
+  const handleCancel = useCallback(
+    async (jobId: string) => {
+      try {
+        await cancelJob(jobId);
+        refreshActive();
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to cancel");
+      }
+    },
+    [refreshActive],
+  );
 
   const stats = useMemo(() => {
     if (!videos || videos.length === 0) return null;
     const totalEntries = videos.reduce((acc, v) => acc + v.entries, 0);
     const newest = videos.reduce((a, b) =>
-      new Date(a.created_at) > new Date(b.created_at) ? a : b
+      new Date(a.created_at) > new Date(b.created_at) ? a : b,
     );
     return { count: videos.length, totalEntries, newest: newest.created_at };
   }, [videos]);
@@ -119,7 +123,15 @@ export default function LibraryPage() {
         <div className="mx-auto w-max glass-panel rounded-full pl-5 pr-2 py-2 flex items-center gap-6 pointer-events-auto shadow-[0_12px_40px_-16px_rgba(0,0,0,0.12)]">
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center">
-              <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                className="w-3.5 h-3.5 text-white"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.75}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <rect x="2" y="4" width="20" height="16" rx="3" />
                 <line x1="2" y1="9" x2="22" y2="9" />
               </svg>
@@ -134,8 +146,17 @@ export default function LibraryPage() {
           >
             <span className="tracking-tight">New Extractor</span>
             <span className="btn-island-icon !w-7 !h-7">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" /><path d="M5 12h14" />
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
               </svg>
             </span>
           </Link>
@@ -145,43 +166,34 @@ export default function LibraryPage() {
           >
             <span className="tracking-tight">Auto Pipeline</span>
             <span className="btn-island-icon !w-7 !h-7">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
               </svg>
             </span>
           </Link>
-          <Link
-            href="/youtube"
-            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-          >
-            <span className="tracking-tight">YouTube Upload</span>
-            <span className="btn-island-icon !w-7 !h-7">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-            </span>
-          </Link>
-          <Link
-            href="/download"
-            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-          >
-            <span className="tracking-tight">Tải video</span>
-            <span className="btn-island-icon !w-7 !h-7">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-            </span>
-          </Link>
+
           <Link
             href="/settings"
             title="Cài đặt (API key, TTS, style phụ đề)"
             className="w-9 h-9 rounded-full bg-black/[0.04] ring-1 ring-black/[0.08] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-all duration-300 active:scale-[0.95] flex items-center justify-center cursor-pointer"
           >
-            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              className="w-[18px] h-[18px]"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
@@ -211,11 +223,23 @@ export default function LibraryPage() {
         </AnimatedBlock>
         <AnimatedBlock delay={300}>
           <div className="mt-9 flex items-center justify-center">
-            <Link href="/extract" className="btn-island-primary group text-[15px]">
+            <Link
+              href="/extract"
+              className="btn-island-primary group text-[15px]"
+            >
               <span className="tracking-tight">Start a new extractor</span>
               <span className="btn-island-icon">
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M5 12h14" />
+                  <path d="M13 6l6 6-6 6" />
                 </svg>
               </span>
             </Link>
@@ -225,11 +249,15 @@ export default function LibraryPage() {
           <AnimatedBlock delay={400}>
             <div className="mt-12 flex items-center justify-center gap-2.5 flex-wrap">
               <div className="tag !px-4 !py-2">
-                <span className="font-semibold text-ink tabular-nums">{stats.count}</span>
+                <span className="font-semibold text-ink tabular-nums">
+                  {stats.count}
+                </span>
                 <span className="text-ink-light"> videos</span>
               </div>
               <div className="tag !px-4 !py-2">
-                <span className="font-semibold text-ink tabular-nums">{stats.totalEntries}</span>
+                <span className="font-semibold text-ink tabular-nums">
+                  {stats.totalEntries}
+                </span>
                 <span className="text-ink-light"> subtitle lines</span>
               </div>
               <div className="tag !px-4 !py-2">
@@ -247,15 +275,36 @@ export default function LibraryPage() {
           <AnimatedBlock delay={0}>
             <div className="double-bezel">
               <div className="double-bezel-inner p-10 text-center">
-                <svg className="w-6 h-6 text-red-500 mx-auto mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                  <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                <svg
+                  className="w-6 h-6 text-red-500 mx-auto mb-3"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
                 </svg>
                 <p className="text-sm text-red-600/80">{error}</p>
-                <button onClick={() => load()} className="btn-island-secondary group mt-5 text-sm">
+                <button
+                  onClick={() => load()}
+                  className="btn-island-secondary group mt-5 text-sm"
+                >
                   <span className="tracking-tight">Try again</span>
                   <span className="btn-island-icon">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="23 4 23 10 17 10" />
+                      <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
                     </svg>
                   </span>
                 </button>
@@ -277,7 +326,15 @@ export default function LibraryPage() {
             <div className="double-bezel">
               <div className="double-bezel-inner p-14 sm:p-20 text-center">
                 <div className="w-16 h-16 rounded-full bg-blue-600/10 ring-1 ring-blue-600/20 flex items-center justify-center mx-auto mb-6">
-                  <svg className="w-7 h-7 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.25} strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    className="w-7 h-7 text-blue-500"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.25}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <rect x="2" y="4" width="20" height="16" rx="3" />
                     <line x1="2" y1="9" x2="22" y2="9" />
                     <path d="M10 14l4-2-4-2v4" />
@@ -291,10 +348,21 @@ export default function LibraryPage() {
                   do the rest. Your library appears here.
                 </p>
                 <Link href="/extract" className="btn-island-primary group mt-8">
-                  <span className="tracking-tight">Start your first extractor</span>
+                  <span className="tracking-tight">
+                    Start your first extractor
+                  </span>
                   <span className="btn-island-icon">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M5 12h14" />
+                      <path d="M13 6l6 6-6 6" />
                     </svg>
                   </span>
                 </Link>
@@ -314,15 +382,35 @@ export default function LibraryPage() {
 
             {view === "grid" ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8">
-                {featured && <VideoCard video={featured} featured index={0} onDelete={handleDelete} onCancel={handleCancel} />}
+                {featured && (
+                  <VideoCard
+                    video={featured}
+                    featured
+                    index={0}
+                    onDelete={handleDelete}
+                    onCancel={handleCancel}
+                  />
+                )}
                 {rest.map((v, i) => (
-                  <VideoCard key={v.video_id} video={v} index={i + 1} onDelete={handleDelete} onCancel={handleCancel} />
+                  <VideoCard
+                    key={v.video_id}
+                    video={v}
+                    index={i + 1}
+                    onDelete={handleDelete}
+                    onCancel={handleCancel}
+                  />
                 ))}
               </div>
             ) : (
               <div className="space-y-4">
                 {videos.map((v, i) => (
-                  <VideoRow key={v.video_id} video={v} index={i} onDelete={handleDelete} onCancel={handleCancel} />
+                  <VideoRow
+                    key={v.video_id}
+                    video={v}
+                    index={i}
+                    onDelete={handleDelete}
+                    onCancel={handleCancel}
+                  />
                 ))}
               </div>
             )}
@@ -341,7 +429,13 @@ export default function LibraryPage() {
 
 type ViewMode = "grid" | "list";
 
-function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMode) => void }) {
+function ViewToggle({
+  value,
+  onChange,
+}: {
+  value: ViewMode;
+  onChange: (v: ViewMode) => void;
+}) {
   return (
     <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
       <button
@@ -351,8 +445,19 @@ function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMo
         className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
           ${value === "grid" ? "bg-white text-blue-600 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
       >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
+        <svg
+          className="w-4 h-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
         </svg>
       </button>
       <button
@@ -362,8 +467,21 @@ function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMo
         className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
           ${value === "list" ? "bg-white text-blue-600 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
       >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-          <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" />
+        <svg
+          className="w-4 h-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="8" y1="6" x2="21" y2="6" />
+          <line x1="8" y1="12" x2="21" y2="12" />
+          <line x1="8" y1="18" x2="21" y2="18" />
+          <path d="M3 6h.01" />
+          <path d="M3 12h.01" />
+          <path d="M3 18h.01" />
         </svg>
       </button>
     </div>
@@ -382,7 +500,7 @@ function useReveal(index: number, distance = 30) {
           obs.disconnect();
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1 },
     );
     obs.observe(el);
     return () => obs.disconnect();
@@ -397,20 +515,35 @@ function useReveal(index: number, distance = 30) {
         ? { opacity: 1, transform: "translateY(0) scale(1)", filter: "blur(0)" }
         : {}),
     }),
-    [visible, index, distance]
+    [visible, index, distance],
   );
   return { ref: (node: HTMLDivElement | null) => setEl(node), style };
 }
 
-function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (jobId: string) => void }) {
+function JobStatusBlock({
+  video,
+  onCancel,
+}: {
+  video: VideoMeta;
+  onCancel?: (jobId: string) => void;
+}) {
   if (!video.status || video.status === "done") return null;
 
   if (video.status === "uploaded") {
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90 truncate">
-          <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
+          <svg
+            className="w-3 h-3 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          >
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
           </svg>
           Đã upload — cần chọn vùng & extract
         </span>
@@ -422,8 +555,16 @@ function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (job
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/20 text-[11px] font-medium text-amber-600/90 truncate">
-          <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-            <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+          <svg
+            className="w-3 h-3 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="5" y1="5" x2="19" y2="19" />
           </svg>
           Đã hủy — xử lý lại
         </span>
@@ -435,8 +576,17 @@ function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (job
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 ring-1 ring-red-500/20 text-[11px] font-medium text-red-600/90 truncate">
-          <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+          <svg
+            className="w-3 h-3 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
           {video.error ? video.error : "Có lỗi xử lý"}
         </span>
@@ -452,7 +602,9 @@ function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (job
           <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
           {video.status === "queued" ? "Đang chờ xử lý…" : "Đang xử lý…"}
         </span>
-        <span className="text-[11px] font-mono text-blue-600 tabular-nums">{pct}%</span>
+        <span className="text-[11px] font-mono text-blue-600 tabular-nums">
+          {pct}%
+        </span>
       </div>
       <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
         <div
@@ -469,8 +621,17 @@ function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (job
           }}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 mt-2 rounded-full text-[11px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 cursor-pointer active:scale-95"
         >
-          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" /><line x1="5" y1="5" x2="19" y2="19" />
+          <svg
+            className="w-3 h-3"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="5" y1="5" x2="19" y2="19" />
           </svg>
           Hủy xử lý
         </button>
@@ -479,7 +640,17 @@ function JobStatusBlock({ video, onCancel }: { video: VideoMeta; onCancel?: (job
   );
 }
 
-function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; index: number; onDelete: (videoId: string) => void; onCancel: (jobId: string) => void }) {
+function VideoRow({
+  video,
+  index,
+  onDelete,
+  onCancel,
+}: {
+  video: VideoMeta;
+  index: number;
+  onDelete: (videoId: string) => void;
+  onCancel: (jobId: string) => void;
+}) {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -489,14 +660,13 @@ function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; inde
   }, [confirming]);
 
   const { ref, style } = useReveal(index);
-  const href = video.status === "uploaded" ? `/extract?video_id=${video.video_id}` : `/video/${video.video_id}`;
+  const href =
+    video.status === "uploaded"
+      ? `/extract?video_id=${video.video_id}`
+      : `/video/${video.video_id}`;
 
   return (
-    <Link
-      href={href}
-      className="group block focus:outline-none"
-      style={style}
-    >
+    <Link href={href} className="group block focus:outline-none" style={style}>
       <div
         ref={ref}
         className="double-bezel transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:-translate-y-1 group-hover:shadow-[0_30px_60px_-28px_rgba(0,0,0,0.2)]"
@@ -513,7 +683,15 @@ function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; inde
               />
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-blue-600/20 via-blue-500/10 to-transparent flex items-center justify-center">
-                <svg className="w-7 h-7 text-blue-500/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.25} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-7 h-7 text-blue-500/40"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.25}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <rect x="2" y="4" width="20" height="16" rx="3" />
                   <line x1="2" y1="9" x2="22" y2="9" />
                   <path d="M10 14l4-2-4-2v4" />
@@ -524,16 +702,39 @@ function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; inde
             {(video.status === "queued" || video.status === "processing") && (
               <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
                 <div className="w-10 h-10 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center">
-                  <svg className="w-5 h-5 text-blue-600 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
-                    <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <svg
+                    className="w-5 h-5 text-blue-600 animate-spin"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      opacity="0.15"
+                    />
+                    <path
+                      d="M12 2a10 10 0 019.95 9"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
                   </svg>
                 </div>
               </div>
             )}
             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-500">
               <div className="w-10 h-10 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center">
-                <svg className="w-5 h-5 text-ink ml-0.5" viewBox="0 0 24 24" fill="currentColor" strokeWidth={0} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-5 h-5 text-ink ml-0.5"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  strokeWidth={0}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <polygon points="6 4 20 12 6 20 6 4" />
                 </svg>
               </div>
@@ -549,14 +750,23 @@ function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; inde
             ) : (
               <div className="flex items-center gap-2.5 mt-2 flex-wrap">
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+                  <svg
+                    className="w-3 h-3"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                  >
+                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
                   </svg>
                   {video.entries} lines
                 </span>
                 <span className="text-[11px] text-ink-light tabular-nums">
                   {formatDate(video.created_at)}
-                  {formatTime(video.created_at) && ` · ${formatTime(video.created_at)}`}
+                  {formatTime(video.created_at) &&
+                    ` · ${formatTime(video.created_at)}`}
                 </span>
                 {!video.has_video && (
                   <span className="px-2.5 py-1 rounded-full bg-black/[0.05] text-[10px] font-medium text-ink-light uppercase tracking-wide">
@@ -584,19 +794,44 @@ function VideoRow({ video, index, onDelete, onCancel }: { video: VideoMeta; inde
                 }`}
             >
               {confirming ? (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <path d="M20 6L9 17l-5-5" />
                 </svg>
               ) : (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                  <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
                 </svg>
               )}
             </button>
             <div className="hidden sm:flex w-9 h-9 rounded-full bg-black/[0.03] items-center justify-center text-ink-muted transition-colors duration-300 group-hover:text-blue-600">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M5 12h14M13 6l6 6-6 6" />
               </svg>
             </div>
@@ -623,7 +858,10 @@ function VideoCard({
   const [confirming, setConfirming] = useState(false);
 
   const { ref, style } = useReveal(index, 40);
-  const href = video.status === "uploaded" ? `/extract?video_id=${video.video_id}` : `/video/${video.video_id}`;
+  const href =
+    video.status === "uploaded"
+      ? `/extract?video_id=${video.video_id}`
+      : `/video/${video.video_id}`;
 
   return (
     <Link
@@ -647,27 +885,60 @@ function VideoCard({
               />
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-blue-600/20 via-blue-500/10 to-transparent flex items-center justify-center">
-                <svg className="w-10 h-10 text-blue-500/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.25} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-10 h-10 text-blue-500/40"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.25}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <rect x="2" y="4" width="20" height="16" rx="3" />
                   <line x1="2" y1="9" x2="22" y2="9" />
                   <path d="M10 14l4-2-4-2v4" />
                 </svg>
               </div>
             )}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]" />
             {(video.status === "queued" || video.status === "processing") && (
               <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
                 <div className="w-11 h-11 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center">
-                  <svg className="w-5 h-5 text-blue-600 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
-                    <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <svg
+                    className="w-5 h-5 text-blue-600 animate-spin"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      opacity="0.15"
+                    />
+                    <path
+                      d="M12 2a10 10 0 019.95 9"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
                   </svg>
                 </div>
               </div>
             )}
             <div className="absolute bottom-3 right-3 w-9 h-9 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]">
-              <svg className="w-4 h-4 text-ink" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+              <svg
+                className="w-4 h-4 text-ink"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M5 12h14" />
+                <path d="M13 6l6 6-6 6" />
               </svg>
             </div>
             <button
@@ -687,16 +958,35 @@ function VideoCard({
             >
               {confirming ? (
                 <>
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    className="w-3.5 h-3.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M20 6L9 17l-5-5" />
                   </svg>
-                  <span className="text-[11px] font-medium tracking-tight">Delete?</span>
+                  <span className="text-[11px] font-medium tracking-tight">
+                    Delete?
+                  </span>
                 </>
               ) : (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                  <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
                 </svg>
               )}
             </button>
@@ -707,7 +997,9 @@ function VideoCard({
             )}
           </div>
 
-          <div className={`px-3 sm:px-4 py-4 ${featured ? "sm:flex sm:items-end sm:justify-between sm:gap-6" : ""}`}>
+          <div
+            className={`px-3 sm:px-4 py-4 ${featured ? "sm:flex sm:items-end sm:justify-between sm:gap-6" : ""}`}
+          >
             <div className="min-w-0">
               <h3 className="text-[15px] font-semibold tracking-tight text-ink truncate">
                 {video.filename}
@@ -717,14 +1009,23 @@ function VideoCard({
               ) : (
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                      <path d="M4 19.5A2.5 2.5 0 016.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+                    <svg
+                      className="w-3 h-3"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                    >
+                      <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
                     </svg>
                     {video.entries} lines
                   </span>
                   <span className="text-[11px] text-ink-light tabular-nums">
                     {formatDate(video.created_at)}
-                    {formatTime(video.created_at) && ` · ${formatTime(video.created_at)}`}
+                    {formatTime(video.created_at) &&
+                      ` · ${formatTime(video.created_at)}`}
                   </span>
                 </div>
               )}
