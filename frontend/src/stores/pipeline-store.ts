@@ -2,7 +2,12 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { Region, SubtitleStyle, VideoMeta, TimelineIssue } from "@/lib/api";
+import type {
+  Region,
+  SubtitleStyle,
+  VideoMeta,
+  TimelineIssue,
+} from "@/lib/api";
 import { listVideos, reportPipelineState } from "@/lib/api";
 
 function sanitizeFilename(name: string): string {
@@ -14,17 +19,32 @@ function sanitizeFilename(name: string): string {
 }
 
 export const STEPS = [
-  { label: "Phân tích link", detail: "Lấy URL / tải video theo nguồn (Douyin/YouTube)" },
+  {
+    label: "Phân tích link",
+    detail: "Lấy URL / tải video theo nguồn (Douyin/YouTube)",
+  },
   { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
   { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
-  { label: "Chỉnh kích thước & vị trí sub", detail: "Xem trước, chỉnh cỡ chữ và vị trí" },
+  {
+    label: "Chỉnh kích thước & vị trí sub",
+    detail: "Xem trước, chỉnh cỡ chữ và vị trí",
+  },
   { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
-  { label: "Dịch Gemini", detail: "Dịch tự động sang Trung / Anh / Việt (có thể tắt)" },
-  { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền (có thể tắt)" },
+  {
+    label: "Dịch Gemini",
+    detail: "Dịch tự động sang Trung / Anh / Việt (có thể tắt)",
+  },
+  {
+    label: "Lồng tiếng Việt",
+    detail: "Tách giọng + TTS Việt + giữ nhạc nền (có thể tắt)",
+  },
   { label: "Nhúng SRT vào video", detail: "FFmpeg gộp SRT mới vào MP4" },
   { label: "Tạo meta", detail: "Gemini tạo tiêu đề/mô tả/tags từ ngữ cảnh" },
-  { label: "Cập nhật thumbnail", detail: "fal.ai / ChatGPT chỉnh lại thumbnail 16:9 + tiêu đề" },
+  {
+    label: "Cập nhật thumbnail",
+    detail: "fal.ai / ChatGPT chỉnh lại thumbnail 16:9 + tiêu đề",
+  },
   { label: "Upload YouTube", detail: "Đăng video lên YouTube kèm meta" },
 ];
 
@@ -62,7 +82,12 @@ export const STEP_STAGE: Record<string, number> = {
   youtube: 11,
 };
 
-export const DEFAULT_REGION: Region = { x1: 0.114, y1: 0.748, x2: 0.863, y2: 0.972 };
+export const DEFAULT_REGION: Region = {
+  x1: 0.114,
+  y1: 0.748,
+  x2: 0.863,
+  y2: 0.972,
+};
 
 export interface LogEntry {
   message: string;
@@ -112,8 +137,8 @@ export interface Pipeline {
   multiVoice: boolean;
   autoFit: boolean;
   watermark: boolean;
-useFalThumbnail: boolean;
-useGptThumbnail: boolean;
+  useFalThumbnail: boolean;
+  useGptThumbnail: boolean;
   autoUploadYoutube: boolean;
   watermarkPreset: string;
   checkSubs: boolean;
@@ -152,7 +177,22 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, autoUploadYoutube?: boolean, useFalThumbnail?: boolean, useGptThumbnail?: boolean, srcLang?: string, translateOn?: boolean, translateTarget?: string, dubOn?: boolean) => string;
+  addPipeline: (
+    url: string,
+    regionMode?: "manual" | "auto",
+    dub?: Partial<DubOptions>,
+    autoFit?: boolean,
+    watermark?: boolean,
+    watermarkPreset?: string,
+    checkSubs?: boolean,
+    autoUploadYoutube?: boolean,
+    useFalThumbnail?: boolean,
+    useGptThumbnail?: boolean,
+    srcLang?: string,
+    translateOn?: boolean,
+    translateTarget?: string,
+    dubOn?: boolean,
+  ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
     filename: string;
@@ -197,7 +237,7 @@ function newPipeline(
   watermark = false,
   watermarkPreset = "",
   checkSubs = false,
-autoUploadYoutube = false,
+  autoUploadYoutube = false,
   useFalThumbnail = true,
   useGptThumbnail = false,
   srcLang = "",
@@ -275,249 +315,333 @@ function schedulePersist() {
 export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
-  pipelines: [],
-addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, autoUploadYoutube = false, useFalThumbnail = true, useGptThumbnail = false, srcLang = "", translateOn = true, translateTarget = "vi", dubOn = true) => {
-    const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, autoUploadYoutube, useFalThumbnail, useGptThumbnail, srcLang, translateOn, translateTarget, dubOn)] }));
-    runPrep(id);
-    schedulePersist();
-    return id;
-  },
-  addPipelineFromUpload: (input) => {
-    const id = Math.random().toString(36).slice(2, 10);
-    const p = newPipeline(
-      id,
-      input.filename,
-      input.regionMode ?? "auto",
-      input.dub ?? {},
-      input.autoFit ?? true,
-      input.watermark ?? false,
-      input.watermarkPreset ?? "",
-      input.checkSubs ?? false,
-      false,
-      input.useFalThumbnail ?? true,
-      input.useGptThumbnail ?? false,
-      input.srcLang ?? "zh",
-      input.translateOn ?? true,
-      input.translateTarget ?? "vi",
-      input.dubOn ?? true,
-    );
-    // Uploaded file is already registered on the backend: skip resolve + merge
-    // and start directly at region selection (step 2).
-    set((s) => ({
-      pipelines: [
-        ...s.pipelines,
-        {
-          ...p,
-          videoId: input.videoId,
-          title: input.filename,
-          originalName: sanitizeFilename(input.filename) || "video",
-        },
-      ],
-    }));
-    runPrep(id, 2);
-    return id;
-  },
-  importActive: (v) => {
-    const videoId = v.video_id;
-    if (get().pipelines.some((p) => p.videoId === videoId)) return "";
-    const ps = v.pipeline;
-    const isPipelineRunning = !!ps && (ps.status === "running" || ps.status === "queued");
-    if (!v.job_id && !isPipelineRunning) return "";
-    const id = v.job_id ? `remote-${v.job_id}` : `remote-${videoId}`;
-    if (get().pipelines.some((p) => p.id === id)) return "";
-    const stage = (ps?.stage as Stage) ?? stageForJobType(v.job_type, v.phase);
-    const idx = STEP_STAGE[stage];
-    const started = Date.now();
-    const progress = ps?.progress ?? v.progress ?? 0;
-    const stepProgress = Array.isArray(ps?.step_progress) && ps!.step_progress.length === STEPS.length
-      ? (ps!.step_progress as (number | null)[])
-      : stepProgressFor(stage, progress);
-    const status: Pipeline["status"] =
-      ps?.status === "error" || v.status === "error"
-        ? "error"
-        : ps?.status === "done" || v.status === "done"
-          ? "done"
-          : v.status === "queued" || ps?.status === "queued"
-            ? "queued"
-            : "running";
-    const p: Pipeline = {
-      ...newPipeline(id, "", "auto", {}, true),
-      status,
-      stage,
-      progress,
-      title: v.filename || `Job ${v.job_id}`,
-      originalName: v.filename || "",
-      videoId,
-      startedAt: started,
-      error: ps?.error ?? v.error ?? "",
-      failedStep: status === "error" ? (idx ?? 4) : null,
-      stepProgress,
-      stepStarts: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : i === idx ? started : null)),
-      stepEnds: STEPS.map((_, i) => (idx != null && i < idx ? started - 1000 : null)),
-      logs: [{ message: "Đang theo dõi tiến trình từ máy chủ...", ts: started / 1000, level: "info" }],
-    };
-    set((s) => ({ pipelines: [...s.pipelines, p] }));
-    if (v.logs && Array.isArray(v.logs)) {
-      appendBackendLogs(id, v.logs as LogEntry[]);
-    }
-    pollRemoteVideo(id, videoId);
-    return id;
-  },
-  importDone: (v) => {
-    const id = Math.random().toString(36).slice(2, 10);
-    const p: Pipeline = {
-      ...newPipeline(id, "", "manual", {}, true),
-      status: "done",
-      stage: "done",
-      progress: 100,
-      title: v.title,
-      originalName: v.title,
-      videoId: v.videoId,
-      resultUrl: `/api/download/hardcoded/${v.videoId}`,
-      dubbedUrl: v.hasDubbed ? `/api/download/dubbed/${v.videoId}` : null,
-      startedAt: Date.now(),
-      finishedAt: Date.now(),
-      stepProgress: STEPS.map(() => 100),
-      stepStarts: STEPS.map(() => Date.now() - 1000),
-      stepEnds: STEPS.map(() => Date.now()),
-      logs: [{ message: "Đã nhập lại video đã xử lý trước đó.", ts: Date.now() / 1000, level: "info" }],
-    };
-    set((s) => ({ pipelines: [...s.pipelines, p] }));
-    return id;
-  },
-  updatePipeline: (id, patch) => {
-    set((s) => ({
-      pipelines: s.pipelines.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-    }));
-    schedulePersist();
-  },
-  removePipeline: (id) => {
-    set((s) => ({ pipelines: s.pipelines.filter((p) => p.id !== id) }));
-    schedulePersist();
-  },
-  clearFinished: () => {
-    set((s) => ({
-      pipelines: s.pipelines.filter((p) => p.status !== "done" && p.status !== "error"),
-    }));
-    schedulePersist();
-  },
-  rerunPipeline: (id, step) => {
-    if (step <= 3) {
-      runPrep(id, step);
-    } else {
-      enqueue(id, step);
-    }
-  },
-  confirmRegion: (id, region) => {
-    const s = get().pipelines.find((p) => p.id === id);
-    if (!s) return;
-    set((st) => ({
-      pipelines: st.pipelines.map((p) =>
-        p.id === id
-          ? { ...p, region, stage: p.autoFit ? "processing" : "subtitle_preview" }
-          : p
-      ),
-    }));
-    const resolve = regionWaiters.get(id);
-    if (resolve) {
-      regionWaiters.delete(id);
-      resolve.resolve(region);
-    }
-    // Restored pipeline (page reload): no live runner → resume prep from where it waited.
-    if (!liveRunners.has(id)) {
-      runPrep(id, s.resumeStep ?? 3);
-    }
-  },
-  confirmSubtitleStyle: (id, style) => {
-    const s = get().pipelines.find((p) => p.id === id);
-    if (!s) return;
-    set((st) => ({
-      pipelines: st.pipelines.map((p) =>
-        p.id === id ? { ...p, subtitleStyle: style, stage: "processing" } : p
-      ),
-    }));
-    const resolve = subtitleStyleWaiters.get(id);
-    if (resolve) {
-      subtitleStyleWaiters.delete(id);
-      resolve.resolve(style);
-    }
-    // Restored pipeline: resume heavy processing from step 4.
-    if (!liveRunners.has(id)) {
-      enqueue(id, s.resumeStep ?? 4);
-    }
-  },
-  cancelPipeline: async (id) => {
-    const s = get().pipelines.find((p) => p.id === id);
-    if (!s) return;
-    const videoId = s.videoId;
-    abortedPipelines.add(id);
-    set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
-    rejectRegion(id);
-    rejectSubtitleStyle(id);
-    rejectTimelineCheck(id);
-    if (videoId) {
-      try {
-        await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
-      } catch {
-        // ignore
-      }
-    }
-  },
-hydrate: (pipelines) => set({ pipelines }),
-  resolveTimelineCheck: async (id, action) => {
-    const s = get().pipelines.find((p) => p.id === id);
-    if (!s || !s.timelineCheck?.waiting) return;
-    if (action === "fix") {
-      patch(id, { timelineCheck: { ...s.timelineCheck, fixing: true } });
-      try {
+      pipelines: [],
+      addPipeline: (
+        url,
+        regionMode = "manual",
+        dub = {},
+        autoFit = true,
+        watermark = false,
+        watermarkPreset = "",
+        checkSubs = false,
+        autoUploadYoutube = false,
+        useFalThumbnail = true,
+        useGptThumbnail = false,
+        srcLang = "",
+        translateOn = true,
+        translateTarget = "vi",
+        dubOn = true,
+      ) => {
+        const id = Math.random().toString(36).slice(2, 10);
+        set((s) => ({
+          pipelines: [
+            ...s.pipelines,
+            newPipeline(
+              id,
+              url,
+              regionMode,
+              dub,
+              autoFit,
+              watermark,
+              watermarkPreset,
+              checkSubs,
+              autoUploadYoutube,
+              useFalThumbnail,
+              useGptThumbnail,
+              srcLang,
+              translateOn,
+              translateTarget,
+              dubOn,
+            ),
+          ],
+        }));
+        runPrep(id);
+        schedulePersist();
+        return id;
+      },
+      addPipelineFromUpload: (input) => {
+        const id = Math.random().toString(36).slice(2, 10);
+        const p = newPipeline(
+          id,
+          input.filename,
+          input.regionMode ?? "auto",
+          input.dub ?? {},
+          input.autoFit ?? true,
+          input.watermark ?? false,
+          input.watermarkPreset ?? "",
+          input.checkSubs ?? false,
+          false,
+          input.useFalThumbnail ?? true,
+          input.useGptThumbnail ?? false,
+          input.srcLang ?? "zh",
+          input.translateOn ?? true,
+          input.translateTarget ?? "vi",
+          input.dubOn ?? true,
+        );
+        // Uploaded file is already registered on the backend: skip resolve + merge
+        // and start directly at region selection (step 2).
+        set((s) => ({
+          pipelines: [
+            ...s.pipelines,
+            {
+              ...p,
+              videoId: input.videoId,
+              title: input.filename,
+              originalName: sanitizeFilename(input.filename) || "video",
+            },
+          ],
+        }));
+        runPrep(id, 2);
+        return id;
+      },
+      importActive: (v) => {
+        const videoId = v.video_id;
+        if (get().pipelines.some((p) => p.videoId === videoId)) return "";
+        const ps = v.pipeline;
+        const isPipelineRunning =
+          !!ps && (ps.status === "running" || ps.status === "queued");
+        if (!v.job_id && !isPipelineRunning) return "";
+        const id = v.job_id ? `remote-${v.job_id}` : `remote-${videoId}`;
+        if (get().pipelines.some((p) => p.id === id)) return "";
+        const stage =
+          (ps?.stage as Stage) ?? stageForJobType(v.job_type, v.phase);
+        const idx = STEP_STAGE[stage];
+        const started = Date.now();
+        const progress = ps?.progress ?? v.progress ?? 0;
+        const stepProgress =
+          Array.isArray(ps?.step_progress) &&
+          ps!.step_progress.length === STEPS.length
+            ? (ps!.step_progress as (number | null)[])
+            : stepProgressFor(stage, progress);
+        const status: Pipeline["status"] =
+          ps?.status === "error" || v.status === "error"
+            ? "error"
+            : ps?.status === "done" || v.status === "done"
+              ? "done"
+              : v.status === "queued" || ps?.status === "queued"
+                ? "queued"
+                : "running";
+        const p: Pipeline = {
+          ...newPipeline(id, "", "auto", {}, true),
+          status,
+          stage,
+          progress,
+          title: v.filename || `Job ${v.job_id}`,
+          originalName: v.filename || "",
+          videoId,
+          startedAt: started,
+          error: ps?.error ?? v.error ?? "",
+          failedStep: status === "error" ? (idx ?? 4) : null,
+          stepProgress,
+          stepStarts: STEPS.map((_, i) =>
+            idx != null && i < idx
+              ? started - 1000
+              : i === idx
+                ? started
+                : null,
+          ),
+          stepEnds: STEPS.map((_, i) =>
+            idx != null && i < idx ? started - 1000 : null,
+          ),
+          logs: [
+            {
+              message: "Đang theo dõi tiến trình từ máy chủ...",
+              ts: started / 1000,
+              level: "info",
+            },
+          ],
+        };
+        set((s) => ({ pipelines: [...s.pipelines, p] }));
+        if (v.logs && Array.isArray(v.logs)) {
+          appendBackendLogs(id, v.logs as LogEntry[]);
+        }
+        pollRemoteVideo(id, videoId);
+        return id;
+      },
+      importDone: (v) => {
+        const id = Math.random().toString(36).slice(2, 10);
+        const p: Pipeline = {
+          ...newPipeline(id, "", "manual", {}, true),
+          status: "done",
+          stage: "done",
+          progress: 100,
+          title: v.title,
+          originalName: v.title,
+          videoId: v.videoId,
+          resultUrl: `/api/download/hardcoded/${v.videoId}`,
+          dubbedUrl: v.hasDubbed ? `/api/download/dubbed/${v.videoId}` : null,
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          stepProgress: STEPS.map(() => 100),
+          stepStarts: STEPS.map(() => Date.now() - 1000),
+          stepEnds: STEPS.map(() => Date.now()),
+          logs: [
+            {
+              message: "Đã nhập lại video đã xử lý trước đó.",
+              ts: Date.now() / 1000,
+              level: "info",
+            },
+          ],
+        };
+        set((s) => ({ pipelines: [...s.pipelines, p] }));
+        return id;
+      },
+      updatePipeline: (id, patch) => {
+        set((s) => ({
+          pipelines: s.pipelines.map((p) =>
+            p.id === id ? { ...p, ...patch } : p,
+          ),
+        }));
+        schedulePersist();
+      },
+      removePipeline: (id) => {
+        set((s) => ({ pipelines: s.pipelines.filter((p) => p.id !== id) }));
+        schedulePersist();
+      },
+      clearFinished: () => {
+        set((s) => ({
+          pipelines: s.pipelines.filter(
+            (p) => p.status !== "done" && p.status !== "error",
+          ),
+        }));
+        schedulePersist();
+      },
+      rerunPipeline: (id, step) => {
+        if (step <= 3) {
+          runPrep(id, step);
+        } else {
+          enqueue(id, step);
+        }
+      },
+      confirmRegion: (id, region) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        set((st) => ({
+          pipelines: st.pipelines.map((p) =>
+            p.id === id
+              ? {
+                  ...p,
+                  region,
+                  stage: p.autoFit ? "processing" : "subtitle_preview",
+                }
+              : p,
+          ),
+        }));
+        const resolve = regionWaiters.get(id);
+        if (resolve) {
+          regionWaiters.delete(id);
+          resolve.resolve(region);
+        }
+        // Restored pipeline (page reload): no live runner → resume prep from where it waited.
+        if (!liveRunners.has(id)) {
+          runPrep(id, s.resumeStep ?? 3);
+        }
+      },
+      confirmSubtitleStyle: (id, style) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        set((st) => ({
+          pipelines: st.pipelines.map((p) =>
+            p.id === id
+              ? { ...p, subtitleStyle: style, stage: "processing" }
+              : p,
+          ),
+        }));
+        const resolve = subtitleStyleWaiters.get(id);
+        if (resolve) {
+          subtitleStyleWaiters.delete(id);
+          resolve.resolve(style);
+        }
+        // Restored pipeline: resume heavy processing from step 4.
+        if (!liveRunners.has(id)) {
+          enqueue(id, s.resumeStep ?? 4);
+        }
+      },
+      cancelPipeline: async (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
         const videoId = s.videoId;
-        if (!videoId) throw new Error("Chưa có video");
-        const res = await fetch(`/api/srt/${videoId}/fix-timeline`, { method: "POST" });
-        const d = await res.json();
-        if (!res.ok) throw new Error(d.detail || "Sửa timeline thất bại");
-        patch(id, {
-          timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false },
-        });
-      } catch (e) {
-        patch(id, { timelineCheck: { ...s.timelineCheck, fixing: false } });
+        abortedPipelines.add(id);
+        set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
+        rejectRegion(id);
+        rejectSubtitleStyle(id);
+        rejectTimelineCheck(id);
+        if (videoId) {
+          try {
+            await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
+          } catch {
+            // ignore
+          }
+        }
+      },
+      hydrate: (pipelines) => set({ pipelines }),
+      resolveTimelineCheck: async (id, action) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.timelineCheck?.waiting) return;
+        if (action === "fix") {
+          patch(id, { timelineCheck: { ...s.timelineCheck, fixing: true } });
+          try {
+            const videoId = s.videoId;
+            if (!videoId) throw new Error("Chưa có video");
+            const res = await fetch(`/api/srt/${videoId}/fix-timeline`, {
+              method: "POST",
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.detail || "Sửa timeline thất bại");
+            patch(id, {
+              timelineCheck: {
+                ...s.timelineCheck,
+                waiting: false,
+                fixing: false,
+              },
+            });
+          } catch (e) {
+            patch(id, { timelineCheck: { ...s.timelineCheck, fixing: false } });
+            const resolve = timelineCheckWaiters.get(id);
+            if (resolve) {
+              timelineCheckWaiters.delete(id);
+              resolve.reject(
+                e instanceof Error ? e : new Error("Sửa timeline thất bại"),
+              );
+            }
+            return;
+          }
+        } else {
+          patch(id, {
+            timelineCheck: {
+              ...s.timelineCheck,
+              waiting: false,
+              fixing: false,
+            },
+          });
+        }
         const resolve = timelineCheckWaiters.get(id);
         if (resolve) {
           timelineCheckWaiters.delete(id);
-          resolve.reject(e instanceof Error ? e : new Error("Sửa timeline thất bại"));
+          resolve.resolve(action);
         }
-        return;
-      }
-    } else {
-      patch(id, { timelineCheck: { ...s.timelineCheck, waiting: false, fixing: false } });
-    }
-    const resolve = timelineCheckWaiters.get(id);
-    if (resolve) {
-      timelineCheckWaiters.delete(id);
-      resolve.resolve(action);
-    }
-    // Restored pipeline (page reload): no live runner → finish step 6 and resume dub.
-    if (!liveRunners.has(id)) {
-      markStepEnd(id, 6);
-      patch(id, { timelineCheck: null });
-      enqueue(id, s.resumeStep ?? 7);
-    }
-  },
-  openTimelineCheck: (id) => {
-    const s = get().pipelines.find((p) => p.id === id);
-    if (!s || !s.timelineCheck?.waiting || s.timelineCheck.open) return;
-    patch(id, { timelineCheck: { ...s.timelineCheck, open: true } });
-  },
-  restorePaused: () => {
-    runRestorePaused();
-  },
+        // Restored pipeline (page reload): no live runner → finish step 6 and resume dub.
+        if (!liveRunners.has(id)) {
+          markStepEnd(id, 6);
+          patch(id, { timelineCheck: null });
+          enqueue(id, s.resumeStep ?? 7);
+        }
+      },
+      openTimelineCheck: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.timelineCheck?.waiting || s.timelineCheck.open) return;
+        patch(id, { timelineCheck: { ...s.timelineCheck, open: true } });
+      },
+      restorePaused: () => {
+        runRestorePaused();
+      },
     }),
     {
       name: "ste-pipelines",
       partialize: (s) => ({ pipelines: s.pipelines }),
       version: 1,
-    }
-  )
+    },
+  ),
 );
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -620,10 +744,16 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
 function stageForJobType(jobType?: string, phase?: string): Stage {
   const p = phase ?? "";
   if (p === "context") return "context";
-  if (["translate", "translating", "align", "extract_audio", "whisper"].includes(p)) return "translating";
+  if (
+    ["translate", "translating", "align", "extract_audio", "whisper"].includes(
+      p,
+    )
+  )
+    return "translating";
   if (["tts", "dub"].includes(p)) return "dub";
   if (["hardcode", "export"].includes(p)) return "muxing";
-  if (["frames", "ocr", "saving", "processing"].includes(p)) return "processing";
+  if (["frames", "ocr", "saving", "processing"].includes(p))
+    return "processing";
   const t = jobType ?? "";
   if (t === "context") return "context";
   if (t === "translate" || t === "align") return "translating";
@@ -710,10 +840,12 @@ async function pollRemoteVideo(id: string, videoId: string) {
       // pipeline state (exact stage / overall % / per-step progress) when the
       // video carries one; fall back to the single-job mapping otherwise.
       const ps = row.pipeline;
-      const stage = (ps?.stage as Stage) ?? stageForJobType(row.job_type, row.phase);
+      const stage =
+        (ps?.stage as Stage) ?? stageForJobType(row.job_type, row.phase);
       const progress = ps?.progress ?? row.progress ?? 0;
       const stepProgress =
-        Array.isArray(ps?.step_progress) && ps!.step_progress.length === STEPS.length
+        Array.isArray(ps?.step_progress) &&
+        ps!.step_progress.length === STEPS.length
           ? (ps!.step_progress as (number | null)[])
           : stepProgressFor(stage, progress);
       if (row.logs && Array.isArray(row.logs)) {
@@ -739,7 +871,9 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
       const r = await fetch(`/api/youtube/upload/${jobId}`);
       if (!r.ok) continue;
       const d = await r.json();
-      const lines: string[] = Array.isArray(d.output_lines) ? d.output_lines : [];
+      const lines: string[] = Array.isArray(d.output_lines)
+        ? d.output_lines
+        : [];
       const logs: LogEntry[] = lines.map((m: string) => ({
         message: m,
         ts: 0,
@@ -764,9 +898,18 @@ const abortedPipelines = new Set<string>();
 // After a page reload these are empty, so restored interactive waits must
 // resume the runner from resumeStep instead of relying on the (dead) coroutine.
 const liveRunners = new Set<string>();
-const regionWaiters = new Map<string, { resolve: (r: Region) => void; reject: () => void }>();
-const subtitleStyleWaiters = new Map<string, { resolve: (s: Partial<SubtitleStyle>) => void; reject: () => void }>();
-const timelineCheckWaiters = new Map<string, { resolve: (a: "fix" | "continue") => void; reject: (e: Error) => void }>();
+const regionWaiters = new Map<
+  string,
+  { resolve: (r: Region) => void; reject: () => void }
+>();
+const subtitleStyleWaiters = new Map<
+  string,
+  { resolve: (s: Partial<SubtitleStyle>) => void; reject: () => void }
+>();
+const timelineCheckWaiters = new Map<
+  string,
+  { resolve: (a: "fix" | "continue") => void; reject: (e: Error) => void }
+>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -854,14 +997,23 @@ async function ensureVoiceMap(videoId: string, id: string): Promise<boolean> {
     const vmCheck = await fetch(`/api/voice-map/${videoId}`);
     const vmData = await vmCheck.json();
     if (vmData.exists) {
-      appendLog(id, `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`);
+      appendLog(
+        id,
+        `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`,
+      );
       return true;
     }
-    appendLog(id, "Đang tạo voice_map.json (chọn giọng CapCut cho từng dòng bằng Gemini)...");
+    appendLog(
+      id,
+      "Đang tạo voice_map.json (chọn giọng CapCut cho từng dòng bằng Gemini)...",
+    );
     const vmRes = await fetch(`/api/voice-map/${videoId}`, { method: "POST" });
     const vmd = await vmRes.json();
     if (vmRes.ok && vmd.status === "done") {
-      appendLog(id, `Đã tạo voice_map.json: ${vmd.voices} dòng có giọng riêng.`);
+      appendLog(
+        id,
+        `Đã tạo voice_map.json: ${vmd.voices} dòng có giọng riêng.`,
+      );
       return true;
     }
     appendLog(id, `Không tạo được voice_map.json: ${vmd.detail || "lỗi"}`);
@@ -876,8 +1028,12 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
   if (!Array.isArray(entries) || entries.length === 0) return;
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  const seen = new Set(cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`));
-  const fresh = entries.filter((e) => !seen.has(`${Math.round(e.ts)}::${e.message}`));
+  const seen = new Set(
+    cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`),
+  );
+  const fresh = entries.filter(
+    (e) => !seen.has(`${Math.round(e.ts)}::${e.message}`),
+  );
   if (fresh.length === 0) return;
   patch(id, { logs: [...cur.logs, ...fresh] });
 }
@@ -885,7 +1041,9 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
 function setStepProgress(id: string, i: number, p: number) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
-  patch(id, { stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)) });
+  patch(id, {
+    stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? p : v)),
+  });
 }
 
 // ── Cross-tab pipeline sync ─────────────────────────────────────────────────
@@ -982,7 +1140,9 @@ async function runPrep(id: string, startStep = 0) {
   let thumbUrl = cur.thumbnail;
   let originalName = cur.originalName || "";
 
-  const stageForStart = ["resolving", "merging", "region", "subtitle_preview"][startStep] ?? "resolving";
+  const stageForStart =
+    ["resolving", "merging", "region", "subtitle_preview"][startStep] ??
+    "resolving";
 
   patch(id, {
     status: "running",
@@ -1009,9 +1169,12 @@ async function runPrep(id: string, startStep = 0) {
     // 0. Resolve link
     if (startStep <= 0) {
       const cleaned = extractUrl(rawUrl);
-      if (!cleaned) throw new Error("Không tìm thấy link (https://...) trong nội dung đã dán.");
+      if (!cleaned)
+        throw new Error(
+          "Không tìm thấy link (https://...) trong nội dung đã dán.",
+        );
       markStepStart(id, 0);
-if (isYouTubeUrl(cleaned)) {
+      if (isYouTubeUrl(cleaned)) {
         // YouTube: yt-dlp downloads + merges server-side → import directly.
         appendLog(id, "Đang tải video từ YouTube (yt-dlp)...");
         const yr = await fetch("/api/video-download/yt-import", {
@@ -1024,7 +1187,8 @@ if (isYouTubeUrl(cleaned)) {
         videoId = yd.video_id;
         sourceLang = cur.srcLang || detectSourceLang(cleaned);
         ocrLang = detectOcrLang(sourceLang);
-        originalName = sanitizeFilename(yd.title || yd.filename || "") || "youtube";
+        originalName =
+          sanitizeFilename(yd.title || yd.filename || "") || "youtube";
         patch(id, {
           videoId,
           videoUrl: null,
@@ -1035,7 +1199,10 @@ if (isYouTubeUrl(cleaned)) {
           ocrLang,
           ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
         });
-        appendLog(id, `Đã tải video YouTube: ${yd.title || yd.filename || videoId} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+        appendLog(
+          id,
+          `Đã tải video YouTube: ${yd.title || yd.filename || videoId} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`,
+        );
         markStepEnd(id, 0);
       } else {
         appendLog(id, "Đang phân tích link...");
@@ -1060,7 +1227,10 @@ if (isYouTubeUrl(cleaned)) {
           ocrLang,
           ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
         });
-        appendLog(id, `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`);
+        appendLog(
+          id,
+          `Đã lấy URL video${audioUrl ? " + audio" : ""} · ngôn ngữ: ${sourceLang} · OCR: ${ocrType}`,
+        );
         markStepEnd(id, 0);
 
         // Luồng puppeteer riêng lấy thumbnail (sau khi có URL video)
@@ -1104,7 +1274,8 @@ if (isYouTubeUrl(cleaned)) {
           const md = await mr.json();
           if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
           const ms = await pollMerge(md.job_id, tick(1));
-          if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
+          if (ms.status !== "done")
+            throw new Error(ms.error || "Merge thất bại");
           mergeId = (ms.filename || "").replace(/\.mp4$/, "");
           appendLog(id, "Merge xong.");
           markStepEnd(id, 1);
@@ -1165,10 +1336,16 @@ if (isYouTubeUrl(cleaned)) {
       } else {
         patch(id, { stage: "region", resumeStep: 3 });
         markStepStart(id, 2);
-        appendLog(id, "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...");
+        appendLog(
+          id,
+          "Kéo vùng quét lấy phụ đề trên video, nhấn Enter để xác nhận...",
+        );
         region = cur.region ?? (await waitForRegion(id));
         patch(id, { region });
-        appendLog(id, `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`);
+        appendLog(
+          id,
+          `Vùng quét: x ${region.x1}–${region.x2} · y ${region.y1}–${region.y2}`,
+        );
         markStepEnd(id, 2);
       }
     }
@@ -1181,7 +1358,10 @@ if (isYouTubeUrl(cleaned)) {
       } else {
         patch(id, { stage: "subtitle_preview", resumeStep: 4 });
         markStepStart(id, 3);
-        appendLog(id, "Chỉnh kích thước & vị trí phụ đề trên frame đầu tiên, nhấn Xác nhận để tiếp tục...");
+        appendLog(
+          id,
+          "Chỉnh kích thước & vị trí phụ đề trên frame đầu tiên, nhấn Xác nhận để tiếp tục...",
+        );
         let style = cur.subtitleStyle;
         if (!style) {
           style = await waitForSubtitleStyle(id);
@@ -1198,7 +1378,9 @@ if (isYouTubeUrl(cleaned)) {
     // Prep done → enqueue the heavy processing into the sequential queue.
     enqueue(id, 4);
   } catch (e) {
-    const stage = usePipelineStore.getState().pipelines.find((x) => x.id === id)?.stage;
+    const stage = usePipelineStore
+      .getState()
+      .pipelines.find((x) => x.id === id)?.stage;
     patch(id, {
       status: "error",
       stage: "error",
@@ -1229,7 +1411,17 @@ async function runPipeline(id: string, startStep = 4) {
     if (t.logs) appendBackendLogs(id, t.logs);
   };
 
-  const stageForStart = ["processing", "context", "translating", "dub", "muxing", "meta", "thumbnail", "youtube"][startStep - 4] ?? "processing";
+  const stageForStart =
+    [
+      "processing",
+      "context",
+      "translating",
+      "dub",
+      "muxing",
+      "meta",
+      "thumbnail",
+      "youtube",
+    ][startStep - 4] ?? "processing";
 
   patch(id, {
     status: "running",
@@ -1297,44 +1489,53 @@ async function runPipeline(id: string, startStep = 4) {
     // 5. Context
     if (startStep <= 5) {
       const translateSkipped =
-        cur.translateOn === false || sourceLang === (cur.translateTarget || "vi");
+        cur.translateOn === false ||
+        sourceLang === (cur.translateTarget || "vi");
       if (translateSkipped) {
         appendLog(id, "Bỏ qua phân tích ngữ cảnh (không dùng dịch tự động).");
         markStepSkipped(id, 5);
       } else {
-      patch(id, { stage: "context" });
-      markStepStart(id, 5);
-      // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
-      let ctxExists = false;
-      try {
-        const ctxCheck = await fetch(`/api/context/${videoId}`);
-        if (ctxCheck.ok) {
-          const ctxData = await ctxCheck.json();
-          ctxExists = Boolean(ctxData?.context?.trim());
-        }
-      } catch {
-        // ignore
-      }
-      if (ctxExists) {
-        appendLog(id, "Ngữ cảnh đã có sẵn — bỏ qua.");
-        markStepSkipped(id, 5);
-      } else {
-        appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
+        patch(id, { stage: "context" });
+        markStepStart(id, 5);
+        // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
+        let ctxExists = false;
         try {
-          const cr = await fetch(`/api/context/${videoId}/generate`, { method: "POST" });
-          const cd = await cr.json();
-          if (cr.ok && cd.job_id) {
-            patch(id, { contextOn: true });
-            const cs = await pollJob(cd.job_id, tick(5));
-            appendLog(id, cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.");
-          } else {
-            appendLog(id, "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.");
+          const ctxCheck = await fetch(`/api/context/${videoId}`);
+          if (ctxCheck.ok) {
+            const ctxData = await ctxCheck.json();
+            ctxExists = Boolean(ctxData?.context?.trim());
           }
         } catch {
-          appendLog(id, "Bỏ qua ngữ cảnh.");
+          // ignore
         }
-      }
-      markStepEnd(id, 5);
+        if (ctxExists) {
+          appendLog(id, "Ngữ cảnh đã có sẵn — bỏ qua.");
+          markStepSkipped(id, 5);
+        } else {
+          appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
+          try {
+            const cr = await fetch(`/api/context/${videoId}/generate`, {
+              method: "POST",
+            });
+            const cd = await cr.json();
+            if (cr.ok && cd.job_id) {
+              patch(id, { contextOn: true });
+              const cs = await pollJob(cd.job_id, tick(5));
+              appendLog(
+                id,
+                cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.",
+              );
+            } else {
+              appendLog(
+                id,
+                "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.",
+              );
+            }
+          } catch {
+            appendLog(id, "Bỏ qua ngữ cảnh.");
+          }
+        }
+        markStepEnd(id, 5);
       }
     }
 
@@ -1342,35 +1543,48 @@ async function runPipeline(id: string, startStep = 4) {
     if (startStep <= 6) {
       patch(id, { stage: "translating" });
       markStepStart(id, 6);
-const translateTarget = cur.translateTarget || "vi";
+      const translateTarget = cur.translateTarget || "vi";
 
       let translateSkipped = false;
       if (cur.translateOn === false) {
         appendLog(id, "Đã tắt dịch tự động — giữ nguyên phụ đề gốc.");
         translateSkipped = true;
       } else if (sourceLang === translateTarget) {
-        appendLog(id, `Ngôn ngữ đích (${langLabel(translateTarget)}) trùng ngôn ngữ gốc — giữ nguyên phụ đề gốc.`);
+        appendLog(
+          id,
+          `Ngôn ngữ đích (${langLabel(translateTarget)}) trùng ngôn ngữ gốc — giữ nguyên phụ đề gốc.`,
+        );
         translateSkipped = true;
       } else {
         // Resume: nếu bản dịch đúng ngôn ngữ đích đã tồn tại thì dùng thẳng kết quả.
         let translatedExists = false;
         try {
-          const trCheck = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+          const trCheck = await fetch(
+            `/api/download/translated/${videoId}?lang=${translateTarget}`,
+          );
           translatedExists = trCheck.ok;
         } catch {
           // ignore
         }
         if (!translatedExists) {
-          appendLog(id, `Dịch Gemini (${langLabel(sourceLang)} → ${langLabel(translateTarget)})...`);
+          appendLog(
+            id,
+            `Dịch Gemini (${langLabel(sourceLang)} → ${langLabel(translateTarget)})...`,
+          );
           const tr = await fetch(`/api/translate/${videoId}`, {
             method: "POST",
             headers: JSON_HEADERS,
-            body: JSON.stringify({ source_lang: sourceLang, target_lang: translateTarget, multi_voice: cur.multiVoice }),
+            body: JSON.stringify({
+              source_lang: sourceLang,
+              target_lang: translateTarget,
+              multi_voice: cur.multiVoice,
+            }),
           });
           const td = await tr.json();
           if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
           const ts = await pollJob(td.job_id, tick(6));
-          if (ts.status !== "done") throw new Error(ts.error || "Dịch thất bại");
+          if (ts.status !== "done")
+            throw new Error(ts.error || "Dịch thất bại");
           appendLog(id, "Dịch xong.");
         } else {
           appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
@@ -1378,7 +1592,9 @@ const translateTarget = cur.translateTarget || "vi";
 
         patch(id, { stage: "saving" });
         appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
-        const srtRes = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+        const srtRes = await fetch(
+          `/api/download/translated/${videoId}?lang=${translateTarget}`,
+        );
         const srtText = await srtRes.text();
         await fetch(`/api/srt/${videoId}`, {
           method: "PUT",
@@ -1395,13 +1611,18 @@ const translateTarget = cur.translateTarget || "vi";
             const checkData = await checkRes.json();
             const issues: TimelineIssue[] = checkData.issues ?? [];
             patch(id, {
-              timelineCheck: { waiting: true, open: false, issues, fixing: false },
+              timelineCheck: {
+                waiting: true,
+                open: false,
+                issues,
+                fixing: false,
+              },
             });
             appendLog(
               id,
               issues.length > 0
                 ? `Phát hiện ${issues.length} lỗi timeline — chờ bạn duyệt.`
-                : "Timeline hợp lệ — hiển thị popup để bạn duyệt."
+                : "Timeline hợp lệ — hiển thị popup để bạn duyệt.",
             );
             patch(id, { resumeStep: 7 });
             const choice = await waitForTimelineCheck(id);
@@ -1411,7 +1632,10 @@ const translateTarget = cur.translateTarget || "vi";
               appendLog(id, "Bỏ qua — giữ nguyên timeline hiện tại.");
             }
           } catch (e) {
-            appendLog(id, `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`);
+            appendLog(
+              id,
+              `Bỏ qua kiểm tra timeline: ${e instanceof Error ? e.message : "lỗi"}`,
+            );
           } finally {
             patch(id, { timelineCheck: null });
           }
@@ -1436,67 +1660,75 @@ const translateTarget = cur.translateTarget || "vi";
         appendLog(id, "Đã tắt lồng tiếng tự động — bỏ qua bước lồng tiếng.");
         markStepSkipped(id, 7);
       } else {
-      // Resume: nếu video lồng tiếng đã tồn tại thì bỏ qua.
-      let dubbedExists = false;
-      try {
-        const dubbedCheck = await fetch(`/api/download/dubbed/${videoId}`);
-        dubbedExists = dubbedCheck.ok;
-      } catch {
-        // ignore
-      }
-      if (dubbedExists) {
-        patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
-        appendLog(id, "Video lồng tiếng đã có sẵn — bỏ qua.");
-        markStepSkipped(id, 7);
-      } else {
-        const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
-        // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
-        // Google TTS with 400 "Voice does not exist". Only send dubVoice when the
-        // engine is CapCut; Google always uses a Google voice.
-        const voice =
-          engine === "capcut"
-            ? cur.dubVoice || "BV421_vivn_streaming"
-            : cur.dubVoice && !cur.dubVoice.startsWith("BV") && !cur.dubVoice.startsWith("AV")
-              ? cur.dubVoice
-              : "vi-VN-Standard-B";
-        appendLog(id, engine === "capcut"
-          ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
-          : "Tách giọng & lồng tiếng Việt (Google TTS)...");
-        // Multi-voice: phải chờ tạo xong voice_map.json rồi mới được lồng tiếng
-        // (kể cả khi chạy lại/resume từ bước này mà voice_map chưa có).
-        if (cur.multiVoice && engine === "capcut" && videoId) {
-          await ensureVoiceMap(videoId, id);
-        }
+        // Resume: nếu video lồng tiếng đã tồn tại thì bỏ qua.
+        let dubbedExists = false;
         try {
-          const dr = await fetch(`/api/dub/${videoId}`, {
-            method: "POST",
-            headers: JSON_HEADERS,
-            body: JSON.stringify({
-              voice,
-              engine,
-              mute_original: cur.muteOriginal,
-              original_gain_db: cur.originalGainDb,
-              multi_voice: cur.multiVoice && engine === "capcut",
-            }),
-          });
-          const dd = await dr.json();
-          if (dr.ok && dd.job_id) {
-            const ds = await pollJob(dd.job_id, tick(7));
-            if (ds.status === "done") {
-              patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
-              appendLog(id, "Lồng tiếng Việt xong.");
-            } else {
-              appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
-            }
-          } else {
-            appendLog(id, `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`);
-          }
+          const dubbedCheck = await fetch(`/api/download/dubbed/${videoId}`);
+          dubbedExists = dubbedCheck.ok;
         } catch {
-          appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
+          // ignore
         }
-        markStepEnd(id, 7);
+        if (dubbedExists) {
+          patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
+          appendLog(id, "Video lồng tiếng đã có sẵn — bỏ qua.");
+          markStepSkipped(id, 7);
+        } else {
+          const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
+          // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
+          // Google TTS with 400 "Voice does not exist". Only send dubVoice when the
+          // engine is CapCut; Google always uses a Google voice.
+          const voice =
+            engine === "capcut"
+              ? cur.dubVoice || "BV421_vivn_streaming"
+              : cur.dubVoice &&
+                  !cur.dubVoice.startsWith("BV") &&
+                  !cur.dubVoice.startsWith("AV")
+                ? cur.dubVoice
+                : "vi-VN-Standard-B";
+          appendLog(
+            id,
+            engine === "capcut"
+              ? `Tách giọng & lồng tiếng Việt (CapCut voice: ${voice})...`
+              : "Tách giọng & lồng tiếng Việt (Google TTS)...",
+          );
+          // Multi-voice: phải chờ tạo xong voice_map.json rồi mới được lồng tiếng
+          // (kể cả khi chạy lại/resume từ bước này mà voice_map chưa có).
+          if (cur.multiVoice && engine === "capcut" && videoId) {
+            await ensureVoiceMap(videoId, id);
+          }
+          try {
+            const dr = await fetch(`/api/dub/${videoId}`, {
+              method: "POST",
+              headers: JSON_HEADERS,
+              body: JSON.stringify({
+                voice,
+                engine,
+                mute_original: cur.muteOriginal,
+                original_gain_db: cur.originalGainDb,
+                multi_voice: cur.multiVoice && engine === "capcut",
+              }),
+            });
+            const dd = await dr.json();
+            if (dr.ok && dd.job_id) {
+              const ds = await pollJob(dd.job_id, tick(7));
+              if (ds.status === "done") {
+                patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
+                appendLog(id, "Lồng tiếng Việt xong.");
+              } else {
+                appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
+              }
+            } else {
+              appendLog(
+                id,
+                `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`,
+              );
+            }
+          } catch {
+            appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
+          }
+          markStepEnd(id, 7);
+        }
       }
-    }
     }
 
     // 8. Hardcode
@@ -1524,13 +1756,16 @@ const translateTarget = cur.translateTarget || "vi";
             region: cur.region ?? DEFAULT_REGION,
             style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
             watermark: cur.watermark,
-            watermark_preset: cur.watermark ? (cur.watermarkPreset || null) : null,
+            watermark_preset: cur.watermark
+              ? cur.watermarkPreset || null
+              : null,
           }),
         });
         const hd = await hr.json();
         if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
         const hs = await pollJob(hd.job_id, tick(8));
-        if (hs.status !== "done") throw new Error(hs.error || "Nhúng SRT thất bại");
+        if (hs.status !== "done")
+          throw new Error(hs.error || "Nhúng SRT thất bại");
         markStepEnd(id, 8);
       }
     }
@@ -1581,12 +1816,21 @@ const translateTarget = cur.translateTarget || "vi";
             patch(id, { updatedThumbnailUrl: d.thumbnail_url });
             appendLog(id, `Thumbnail mới (ChatGPT): ${d.thumbnail_url}`);
           } else if (d.status === "need_login") {
-            appendLog(id, `Cần đăng nhập ChatGPT: ${d.detail || "đăng nhập trong cửa sổ Chrome vừa mở rồi chạy lại."}`);
+            appendLog(
+              id,
+              `Cần đăng nhập ChatGPT: ${d.detail || "đăng nhập trong cửa sổ Chrome vừa mở rồi chạy lại."}`,
+            );
           } else {
-            appendLog(id, `Không cập nhật được thumbnail bằng ChatGPT: ${d.detail || "lỗi"}`);
+            appendLog(
+              id,
+              `Không cập nhật được thumbnail bằng ChatGPT: ${d.detail || "lỗi"}`,
+            );
           }
         } catch (e) {
-          appendLog(id, `Bỏ qua cập nhật thumbnail ChatGPT (lỗi): ${(e as Error)?.message || e}`);
+          appendLog(
+            id,
+            `Bỏ qua cập nhật thumbnail ChatGPT (lỗi): ${(e as Error)?.message || e}`,
+          );
         }
         markStepEnd(id, 10);
       } else if (!cur.useFalThumbnail) {
@@ -1607,7 +1851,9 @@ const translateTarget = cur.translateTarget || "vi";
 
           while (!done && Date.now() < deadline) {
             try {
-              const st = await fetch(`/api/thumbnail/${videoId}/status`).then((r) => r.json());
+              const st = await fetch(`/api/thumbnail/${videoId}/status`).then(
+                (r) => r.json(),
+              );
               if (st.status === "done" && st.thumbnail_url) {
                 thumbUrl = st.thumbnail_url;
                 done = true;
@@ -1630,7 +1876,10 @@ const translateTarget = cur.translateTarget || "vi";
             appendLog(id, "Hết thời gian chờ thumbnail (100s).");
           }
         } catch (e) {
-          appendLog(id, `Bỏ qua cập nhật thumbnail (lỗi): ${(e as Error)?.message || e}`);
+          appendLog(
+            id,
+            `Bỏ qua cập nhật thumbnail (lỗi): ${(e as Error)?.message || e}`,
+          );
         }
         markStepEnd(id, 10);
       }
@@ -1658,7 +1907,10 @@ const translateTarget = cur.translateTarget || "vi";
               appendLog(id, `Upload YouTube thất bại: ${us.error || "lỗi"}`);
             }
           } else {
-            appendLog(id, `Bỏ qua upload YouTube: ${ud.detail || "chưa cấu hình"}`);
+            appendLog(
+              id,
+              `Bỏ qua upload YouTube: ${ud.detail || "chưa cấu hình"}`,
+            );
           }
         } catch {
           appendLog(id, "Bỏ qua upload YouTube (lỗi).");
@@ -1678,7 +1930,9 @@ const translateTarget = cur.translateTarget || "vi";
     reportPipeline(id, true);
     cleanupTempForVideo(videoId);
   } catch (e) {
-    const stage = usePipelineStore.getState().pipelines.find((x) => x.id === id)?.stage;
+    const stage = usePipelineStore
+      .getState()
+      .pipelines.find((x) => x.id === id)?.stage;
     patch(id, {
       status: "error",
       stage: "error",
