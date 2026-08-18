@@ -420,7 +420,7 @@ export default function LibraryPage() {
 
       <footer className="max-w-7xl mx-auto mt-24 sm:mt-32 text-center">
         <p className="text-[11px] text-ink-light tracking-wide">
-          SubTitle Extractor &mdash; built with FastAPI &amp; Next.js
+          SubTitle Extractor
         </p>
       </footer>
     </main>

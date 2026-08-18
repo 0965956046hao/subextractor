@@ -41,16 +41,26 @@ function BentoStepIndicator({ current }: { current: Step }) {
                           state === "done"
                             ? "bg-emerald-500/15 text-emerald-600 ring-1 ring-emerald-500/30"
                             : state === "active"
-                            ? "bg-blue-600 text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]"
-                            : "bg-black/[0.02] text-ink-muted/40 ring-1 ring-black/[0.06]"
+                              ? "bg-blue-600 text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]"
+                              : "bg-black/[0.02] text-ink-muted/40 ring-1 ring-black/[0.06]"
                         }`}
                     >
                       {state === "done" ? (
-                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                        <svg
+                          className="w-5 h-5"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
                           <path d="M20 6L9 17l-5-5" />
                         </svg>
                       ) : (
-                        <span className="tracking-tight">{String(i + 1).padStart(2, "0")}</span>
+                        <span className="tracking-tight">
+                          {String(i + 1).padStart(2, "0")}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -60,8 +70,8 @@ function BentoStepIndicator({ current }: { current: Step }) {
                         state === "done"
                           ? "text-emerald-600/70"
                           : state === "active"
-                          ? "text-blue-600"
-                          : "text-ink-light"
+                            ? "text-blue-600"
+                            : "text-ink-light"
                       }`}
                   >
                     {step.label}
@@ -82,7 +92,13 @@ function BentoStepIndicator({ current }: { current: Step }) {
   );
 }
 
-function LangSelector({ value, onChange }: { value: OcrLang; onChange: (v: OcrLang) => void }) {
+function LangSelector({
+  value,
+  onChange,
+}: {
+  value: OcrLang;
+  onChange: (v: OcrLang) => void;
+}) {
   return (
     <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
       <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
@@ -108,7 +124,13 @@ function LangSelector({ value, onChange }: { value: OcrLang; onChange: (v: OcrLa
   );
 }
 
-function EngineSelector({ value, onChange }: { value: OcrType; onChange: (v: OcrType) => void }) {
+function EngineSelector({
+  value,
+  onChange,
+}: {
+  value: OcrType;
+  onChange: (v: OcrType) => void;
+}) {
   return (
     <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
       <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
@@ -158,7 +180,8 @@ export default function ExtractPage() {
     fetch("/api/config")
       .then((r) => r.json())
       .then((d) => {
-        if (d.auto_context_enabled !== undefined) setAutoContext(d.auto_context_enabled);
+        if (d.auto_context_enabled !== undefined)
+          setAutoContext(d.auto_context_enabled);
       })
       .catch(() => {});
   }, []);
@@ -185,8 +208,17 @@ export default function ExtractPage() {
           className="btn-island-secondary group !px-5 !py-2 text-[13px]"
         >
           <span className="btn-island-icon !w-7 !h-7">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 12H5" /><path d="M11 18l-6-6 6-6" />
+            <svg
+              className="w-3.5 h-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M19 12H5" />
+              <path d="M11 18l-6-6 6-6" />
             </svg>
           </span>
           <span className="tracking-tight">Back to library</span>
@@ -282,7 +314,7 @@ export default function ExtractPage() {
 
       <AnimatedBlock delay={500} className="mt-24 sm:mt-32 text-center">
         <p className="text-[11px] text-ink-light tracking-wide">
-          SubTitle Extractor &mdash; built with FastAPI &amp; Next.js
+          SubTitle Extractor
         </p>
       </AnimatedBlock>
     </main>

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="SubTitle Extractor">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e3a8a"/>
+      <stop offset="0.55" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+    <linearGradient id="play" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0b1f5c" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="3"/>
+  <ellipse cx="256" cy="118" rx="190" ry="66" fill="#ffffff" opacity="0.12"/>
+  <ellipse cx="256" cy="122" rx="120" ry="40" fill="#ffffff" opacity="0.10"/>
+
+  <rect x="118" y="118" width="276" height="200" rx="30" fill="#ffffff" filter="url(#shadow)"/>
+
+  <circle cx="256" cy="184" r="32" fill="url(#play)"/>
+  <path d="M247 170 L247 198 L272 184 Z" fill="#ffffff"/>
+
+  <rect x="150" y="258" width="212" height="46" rx="23" fill="#1e3a8a" opacity="0.92"/>
+  <rect x="176" y="268" width="110" height="10" rx="5" fill="#ffffff"/>
+  <rect x="176" y="288" width="150" height="10" rx="5" fill="#ffffff" opacity="0.62"/>
+</svg>
