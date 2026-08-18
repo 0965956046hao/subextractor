@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.dependencies import get_jobs, get_pipeline_states
 from app.services.video_processor import resolve_video_path
+from app.services.media_utils import _hardcoded_is_complete
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,11 @@ async def cleanup_video(video_id: str):
         raise HTTPException(400, "Invalid video_id")
     removed: list[str] = []
 
+    # Safety: only delete the source video once the hardcoded deliverable is a
+    # full-length encode. If it's missing or partial (previous crashed run), keep
+    # the source so the hardcode step can still be re-run.
+    hd_ok = _hardcoded_is_complete(video_id)
+
     # videos/: keep only meta.json (needed for download filename)
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():
@@ -207,8 +213,11 @@ async def cleanup_video(video_id: str):
                 continue
             if f.is_dir():
                 shutil.rmtree(f, ignore_errors=True)
-            else:
+            elif hd_ok:
                 f.unlink(missing_ok=True)
+            # else: keep source video — hardcoded output is not complete yet
+        if not hd_ok:
+            logger.info("cleanup %s: keeping source video (hardcoded output not complete)", video_id)
         removed.append("videos")
 
     # frames/: first frame + ocr_snapshots — intermediate

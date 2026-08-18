@@ -13,7 +13,7 @@ from app.services.subtitle_generator import generate_srt, sec_to_srt
 from app.services.hardcode_service import run_hardcode_sync
 from app.services.align_service import run_align_sync
 from app.services.job_utils import JobCancelled, notify_ws_sync
-from app.services.media_utils import _srt_path
+from app.services.media_utils import _srt_path, _duration_covers, _get_duration
 
 logger = logging.getLogger(__name__)
 
@@ -316,32 +316,54 @@ async def run_hardcode_job(
 
         out_dir = settings.temp_dir / "hardcoded" / video_id
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = str(out_dir / f"{Path(video_path).stem}_hardcoded.mp4")
+        final_path = out_dir / f"{Path(video_path).stem}_hardcoded.mp4"
+        # Burn into a .partial file, then rename on success: a crashed/killed
+        # burn (OOM, machine sleep, …) then never leaves a half-encoded file at
+        # the final path that later runs would mistake for a completed encode.
+        partial_path = out_dir / f"{Path(video_path).stem}_hardcoded.partial.mp4"
+        partial_path.unlink(missing_ok=True)
+        partial_path.with_suffix(".ass").unlink(missing_ok=True)
 
         if (
             not job.get("watermark")
-            and Path(out_path).exists()
-            and Path(out_path).stat().st_size > 0
+            and final_path.exists()
+            and final_path.stat().st_size > 0
+            and _duration_covers(video_path, str(final_path))
         ):
             job["status"] = "done"
             job["progress"] = 100
-            job["output_path"] = out_path
-            size_mb = Path(out_path).stat().st_size / (1024 * 1024)
+            job["output_path"] = str(final_path)
+            size_mb = final_path.stat().st_size / (1024 * 1024)
             await job_log_async(
                 job, ws_clients,
                 f"Video đã có phụ đề cứng từ lần chạy trước ({size_mb:.1f} MB) — bỏ qua encode.",
                 "success",
             )
             await notify_ws(ws_clients, job_id, {
-                "type": "done", "video_id": video_id, "filename": Path(out_path).name,
+                "type": "done", "video_id": video_id, "filename": final_path.name,
             })
             return
+
+        # Partial / damaged previous output → discard and re-encode.
+        if final_path.exists():
+            src_dur = _get_duration(video_path)
+            out_dur = _get_duration(str(final_path))
+            logger.warning(
+                "hardcode job %s: discarding incomplete previous output (src=%.1fs out=%.1fs)",
+                job_id, src_dur, out_dur,
+            )
+            await job_log_async(
+                job, ws_clients,
+                f"File phụ đề cứng cũ bị dở dang ({out_dur:.0f}s / {src_dur:.0f}s) — sẽ encode lại đầy đủ.",
+                "warn",
+            )
+            final_path.unlink(missing_ok=True)
 
         loop = asyncio.get_event_loop()
 
         fn = functools.partial(
             run_hardcode_sync,
-            video_path, srt_path, out_path,
+            video_path, srt_path, str(partial_path),
             job, ws_clients, loop, job_id,
         )
 
@@ -350,18 +372,25 @@ async def run_hardcode_job(
             timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
+        # Success → atomically publish the final file.
+        if not (partial_path.exists() and partial_path.stat().st_size > 0):
+            raise RuntimeError("Hardcode finished without producing an output file")
+        final_path.unlink(missing_ok=True)
+        partial_path.rename(final_path)
+        partial_path.with_suffix(".ass").unlink(missing_ok=True)
+
         job["status"] = "done"
         job["progress"] = 100
-        job["output_path"] = out_path
+        job["output_path"] = str(final_path)
 
-        size_mb = Path(out_path).stat().st_size / (1024 * 1024)
+        size_mb = final_path.stat().st_size / (1024 * 1024)
         await job_log_async(
             job, ws_clients,
             f"Hoàn tất! Video đã được gắn phụ đề cứng ({size_mb:.1f} MB).",
             "success",
         )
         await notify_ws(ws_clients, job_id, {
-            "type": "done", "video_id": video_id, "filename": Path(out_path).name,
+            "type": "done", "video_id": video_id, "filename": final_path.name,
         })
 
     except JobCancelled:

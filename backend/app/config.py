@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     subtitle_flash_seconds: float = 2.0
     max_upload_size: int = 0
     ocr_cache_max_streak: int = 15
+    # Hardcode (Pillow burn) parallelism: 0 = auto (min(4, cpu_count)); 1 = single process.
+    hardcode_workers: int = 0
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5
@@ -45,3 +47,4 @@ settings.temp_dir.mkdir(parents=True, exist_ok=True)
 (settings.temp_dir / "translated").mkdir(exist_ok=True)
 (settings.temp_dir / "projects").mkdir(exist_ok=True)
 (settings.temp_dir / "tts_preview").mkdir(exist_ok=True)
+(settings.temp_dir / "hardcode").mkdir(exist_ok=True)
