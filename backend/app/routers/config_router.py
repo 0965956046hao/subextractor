@@ -206,6 +206,7 @@ async def get_config():
         "google_tts_credentials": tts_json,
         "tts_credentials_info": tts_info,
         "has_fal_key": bool(cfg.get("fal_key")),
+        "fal_key": cfg.get("fal_key", ""),
         "auto_context_enabled": cfg.get("auto_context_enabled", True),
         "subtitle_style": get_subtitle_style(),
         "watermark_text": get_watermark().get("text", ""),
@@ -248,7 +249,7 @@ async def save_config(body: SaveConfigRequest):
         else:
             cfg["gemini_api_keys"] = keys
 
-    if body.fal_key:
+    if body.fal_key is not None:
         cfg["fal_key"] = body.fal_key.strip()
 
     if body.google_tts_json:

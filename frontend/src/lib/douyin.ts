@@ -1,12 +1,14 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { execSync } from "child_process";
 import puppeteer, {
   type Browser,
   type Page,
   type Cookie,
   type CookieParam,
 } from "puppeteer-core";
+import { resolveProfileDir } from "./subtitle-profile";
 
 export const CHROME_PATH =
   process.env.CHROME_PATH ||
@@ -19,9 +21,7 @@ const CDP_PORT = (() => {
   return m ? m[1] : "9222";
 })();
 
-export const PROFILE_DIR =
-  process.env.DOUYIN_PROFILE_DIR ||
-  path.join(os.homedir(), ".douyin-video-downloader");
+export const PROFILE_DIR = resolveProfileDir("douyin");
 
 export const COOKIE_FILE =
   process.env.DOUYIN_COOKIE_FILE ||
@@ -72,29 +72,79 @@ export const HEADLESS =
  * Attach to an already-running Chrome via CDP if it exposes the debugging
  * port; otherwise launch a fresh Chrome bound to that same port + persistent
  * profile, so every later call can `connect()` instead of re-launching.
+ *
+ * Douyin and ChatGPT share ONE profile dir, so if a Chrome (e.g. the ChatGPT
+ * instance on its port) is already running on that profile, reuse it instead
+ * of launching a second Chrome — Chrome can't open two instances of the same
+ * user-data-dir.
+ *
+ * When a visible window is requested (headless: false — login flow), we only
+ * reuse a Chrome that is actually visible (non-headless). A lingering headless
+ * instance from the download flow must NOT be reused, otherwise the login
+ * would silently drive an invisible browser. In that case we kill the headless
+ * instance on our profile and launch a fresh visible one.
  */
 export async function openBrowser(options?: {
   headless?: boolean;
 }): Promise<BrowserHandle> {
   const headless = options?.headless ?? HEADLESS;
+  const endpoints = [
+    CDP_URL,
+    process.env.CHATGPT_CDP_URL ||
+      `http://localhost:${process.env.CHATGPT_PORT || "9223"}`,
+  ];
+  for (const endpoint of endpoints) {
+    let browser: Browser | null = null;
+    try {
+      browser = await puppeteer.connect({
+        browserURL: endpoint,
+        defaultViewport: null,
+      });
+      if (headless) return { browser, persistent: true };
+      const version = await browser.version();
+      if (/headlesschrome/i.test(version)) {
+        await browser.disconnect().catch(() => {});
+        continue; // headless instance — not usable for a visible login
+      }
+      return { browser, persistent: true };
+    } catch {
+      await browser?.disconnect().catch(() => {});
+      // try next endpoint
+    }
+  }
+  // For a visible login, make sure no headless instance holds our profile lock.
+  if (!headless) killChromeOnProfile(PROFILE_DIR);
+  const browser = await puppeteer.launch({
+    executablePath: CHROME_PATH,
+    headless,
+    userDataDir: PROFILE_DIR,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      `--remote-debugging-port=${CDP_PORT}`,
+    ],
+    defaultViewport: null,
+  });
+  return { browser, persistent: false };
+}
+
+/** Kill any Chrome running with the given user-data-dir (profile lock). */
+export function killChromeOnProfile(profileDir: string): void {
   try {
-    const browser = await puppeteer.connect({
-      browserURL: CDP_URL,
-      defaultViewport: null,
+    const out = execSync(`pgrep -f "user-data-dir=${profileDir}"`, {
+      encoding: "utf8",
     });
-    return { browser, persistent: true };
+    for (const pid of out
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      try {
+        process.kill(Number(pid), "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
   } catch {
-    const browser = await puppeteer.launch({
-      executablePath: CHROME_PATH,
-      headless,
-      userDataDir: PROFILE_DIR,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        `--remote-debugging-port=${CDP_PORT}`,
-      ],
-      defaultViewport: null,
-    });
-    return { browser, persistent: false };
+    // no matches — nothing to kill
   }
 }
 

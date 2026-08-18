@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getAppConfig, saveAppConfig, getPipelineHealth, createWatermarkPreset, updateWatermarkPreset, deleteWatermarkPreset, setActiveWatermarkPreset, uploadPresetLogo, deletePresetLogo, presetLogoUrl } from "@/lib/api";
-import type { SubtitleStyle, WatermarkPreset } from "@/lib/api";
-import type { PipelineHealth } from "@/lib/api";
+import { getAppConfig, saveAppConfig, getPipelineHealth, getProfilesConfig, douyinLogin, chatgptLogin, createWatermarkPreset, updateWatermarkPreset, deleteWatermarkPreset, setActiveWatermarkPreset, uploadPresetLogo, deletePresetLogo, presetLogoUrl, getYoutubeConfig, saveYoutubeSecrets } from "@/lib/api";
+import type { SubtitleStyle, WatermarkPreset, ProfilesCheck } from "@/lib/api";
+import type { PipelineHealth, YoutubeConfig } from "@/lib/api";
 
 const FONT_OPTIONS = ["Arial", "Helvetica", "Verdana", "Times New Roman", "Courier New", "Georgia"];
 
@@ -186,6 +186,10 @@ export default function SettingsPage() {
   const [style, setStyle] = useState<SubtitleStyle>(DEFAULTS);
   const [hasGemini, setHasGemini] = useState(false);
   const [hasTts, setHasTts] = useState(false);
+  const [falKey, setFalKey] = useState("");
+  const [hasFal, setHasFal] = useState(false);
+  const [profileStatus, setProfileStatus] = useState<ProfilesCheck | null>(null);
+  const [profileBusy, setProfileBusy] = useState<"douyin" | "chatgpt" | null>(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [health, setHealth] = useState<PipelineHealth | null>(null);
@@ -198,20 +202,34 @@ export default function SettingsPage() {
   const [newPresetText, setNewPresetText] = useState("");
   const [editingPreset, setEditingPreset] = useState<string | null>(null);
   const [presetBusy, setPresetBusy] = useState(false);
+  const [youtube, setYoutube] = useState<YoutubeConfig | null>(null);
+  const [youtubeSecrets, setYoutubeSecrets] = useState("");
+  const [youtubeBusy, setYoutubeBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const [cfg, h] = await Promise.all([getAppConfig(), getPipelineHealth()]);
+        const [cfg, h, pc, yt] = await Promise.all([
+          getAppConfig(),
+          getPipelineHealth(),
+          getProfilesConfig().catch(() => null),
+          getYoutubeConfig().catch(() => null),
+        ]);
         setHasGemini(cfg.has_gemini_key);
         setHasTts(cfg.has_tts_credentials);
         setGeminiKeys(cfg.gemini_api_keys?.length ? cfg.gemini_api_keys : cfg.gemini_api_key ? [cfg.gemini_api_key] : []);
         setTtsJson(cfg.google_tts_credentials || "");
         setTtsInfo(cfg.tts_credentials_info || "");
+        setFalKey(cfg.fal_key || "");
+        setHasFal(cfg.has_fal_key);
+        if (pc) {
+          setProfileStatus(pc.resolved);
+        }
         setStyle({ ...DEFAULTS, ...cfg.subtitle_style });
         setWatermarkText(cfg.watermark_text || "");
         setPresets(cfg.watermark_presets || []);
         setActivePreset(cfg.active_watermark_preset || "");
+        setYoutube(yt);
         setHealth(h);
       } catch {
         setError("Không kết nối được backend.");
@@ -230,6 +248,7 @@ export default function SettingsPage() {
       const res = await saveAppConfig({
         gemini_api_keys: geminiKeys,
         google_tts_json: ttsJson || undefined,
+        fal_key: falKey,
         subtitle_style: style,
         watermark_text: watermarkText,
       });
@@ -239,15 +258,23 @@ export default function SettingsPage() {
         return;
       }
       setStatus("Đã lưu thành công!");
-      const cfg = await getAppConfig();
+      const [cfg, pc] = await Promise.all([
+        getAppConfig(),
+        getProfilesConfig().catch(() => null),
+      ]);
       setHasGemini(cfg.has_gemini_key);
       setHasTts(cfg.has_tts_credentials);
       setGeminiKeys(cfg.gemini_api_keys?.length ? cfg.gemini_api_keys : cfg.gemini_api_key ? [cfg.gemini_api_key] : []);
       setTtsJson(cfg.google_tts_credentials || "");
       setTtsInfo(cfg.tts_credentials_info || "");
+      setFalKey(cfg.fal_key || "");
+      setHasFal(cfg.has_fal_key);
       setWatermarkText(cfg.watermark_text || "");
       setPresets(cfg.watermark_presets || []);
       setActivePreset(cfg.active_watermark_preset || "");
+      if (pc) {
+        setProfileStatus(pc.resolved);
+      }
       setTimeout(() => setStatus(""), 2500);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
@@ -260,6 +287,68 @@ export default function SettingsPage() {
     setPresets(cfg.watermark_presets || []);
     setActivePreset(cfg.active_watermark_preset || "");
     setWatermarkText(cfg.watermark_text || "");
+  };
+
+  const handleProfileLogin = async (svc: "douyin" | "chatgpt") => {
+    setError("");
+    setProfileBusy(svc);
+    try {
+      if (svc === "douyin") {
+        await douyinLogin();
+      } else {
+        await chatgptLogin();
+      }
+      const pc = await getProfilesConfig();
+      setProfileStatus(pc.resolved);
+      setStatus(
+        svc === "douyin"
+          ? "Đã mở Chrome Douyin — đăng nhập xong là profile tự động được lưu."
+          : "Đã mở Chrome ChatGPT — đăng nhập xong là profile tự động được lưu."
+      );
+      setTimeout(() => setStatus(""), 4000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi mở Chrome để đăng nhập.");
+    } finally {
+      setProfileBusy(null);
+    }
+  };
+
+  const handleSaveFal = async () => {
+    setError("");
+    setStatus("Đang lưu...");
+    try {
+      await saveAppConfig({ fal_key: falKey });
+      setHasFal(!!falKey.trim());
+      setStatus("Đã lưu FAL key!");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi lưu FAL key.");
+      setStatus("");
+    }
+  };
+
+  const handleSaveYoutube = async () => {
+    setError("");
+    if (!youtubeSecrets.trim()) {
+      setError("Nhập nội dung client_secrets.json.");
+      return;
+    }
+    setYoutubeBusy(true);
+    try {
+      const res = await saveYoutubeSecrets(youtubeSecrets.trim());
+      if (res.status === "ok") {
+        setStatus("Đã lưu client_secrets.json!");
+        setYoutubeSecrets("");
+        setYoutube(await getYoutubeConfig());
+        setTimeout(() => setStatus(""), 2500);
+      } else {
+        setError("Lưu client_secrets.json thất bại.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lỗi lưu client_secrets.json.");
+    } finally {
+      setYoutubeBusy(false);
+    }
   };
 
   const handleAddPreset = async () => {
@@ -396,7 +485,15 @@ export default function SettingsPage() {
                 "Chưa cấu hình"
               )}{" "}
               <span className="text-ink-light">
-                Thêm nhiều key — khi 1 key báo hết quota/limit, hệ thống tự xoay vòng sang key khác và thử lại.
+                Thêm nhiều key — khi 1 key báo hết quota/limit, hệ thống tự xoay vòng sang key khác và thử lại.{" "}
+                <a
+                  href="https://aistudio.google.com/api-keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                >
+                  Lấy key tại aistudio.google.com/api-keys
+                </a>
               </span>
             </p>
 
@@ -474,6 +571,18 @@ export default function SettingsPage() {
                 </>
               )}
             </p>
+            <p className="text-[11px] text-ink-light mb-4">
+              Cách lấy: vào{" "}
+              <a
+                href="https://console.cloud.google.com/apis/credentials"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+              >
+                Google Cloud Console → Credentials
+              </a>{" "}
+              → tạo Service Account → bật API Text-to-Speech → tạo key JSON, dán nội dung vào ô bên dưới.
+            </p>
             <textarea
               value={ttsJson}
               onChange={(e) => setTtsJson(e.target.value)}
@@ -485,11 +594,199 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
+      <AnimatedBlock delay={230}>
+        <div className="double-bezel mb-6">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                3. FAL.ai API key
+              </p>
+              <span className="tag">
+                {hasFal ? "Đã cấu hình" : "Chưa có key"}
+              </span>
+            </div>
+            <p className="text-[11px] text-ink-light mb-4">
+              {hasFal ? (
+                <>Đã cấu hình ✓</>
+              ) : (
+                "Chưa cấu hình"
+              )}{" "}
+              <span className="text-ink-light">
+                Dùng cho bước tạo thumbnail bằng fal.ai (khi bật trong pipeline).{" "}
+                <a
+                  href="https://fal.ai/dashboard/keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                >
+                  Lấy key tại fal.ai/dashboard/keys
+                </a>
+              </span>
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={falKey}
+                onChange={(e) => setFalKey(e.target.value)}
+                placeholder={hasFal ? "Paste FAL key mới (để trống giữ nguyên)..." : "Paste FAL.ai API key..."}
+                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+              />
+              <button
+                type="button"
+                onClick={handleSaveFal}
+                className="btn-island-secondary whitespace-nowrap cursor-pointer"
+              >
+                Lưu key
+              </button>
+              {hasFal && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFalKey("");
+                    setHasFal(false);
+                    saveAppConfig({ fal_key: "" }).catch(() => {});
+                    setStatus("Đã xoá FAL key");
+                    setTimeout(() => setStatus(""), 2500);
+                  }}
+                  className="btn-island-secondary whitespace-nowrap cursor-pointer"
+                >
+                  Xoá
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
       <AnimatedBlock delay={250}>
         <div className="double-bezel mb-6">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
-              3. Kiểu dáng phụ đề
+              4. Profile Douyin & ChatGPT
+            </p>
+            <p className="text-[11px] text-ink-light mb-4">
+              Bấm mở Chrome để đăng nhập — puppeteer mở cửa sổ Chrome, bạn đăng nhập (Douyin / ChatGPT) một lần, thông tin được lưu vào profile và tái sử dụng sau này.
+            </p>
+
+            <div className="space-y-4">
+              {(["douyin", "chatgpt"] as const).map((svc) => {
+                const label = svc === "douyin" ? "Douyin" : "ChatGPT";
+                const status = profileStatus?.[svc];
+                const busy = profileBusy === svc;
+                return (
+                  <div
+                    key={svc}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px] font-medium text-ink">{label}</span>
+                        {status && (
+                          <span
+                            className={`text-[11px] font-medium ${status.exists ? "text-emerald-700" : "text-amber-700"}`}
+                          >
+                            {status.exists ? "Đã tạo profile ✓" : "Chưa có profile"}
+                          </span>
+                        )}
+                      </div>
+                      {status?.path && (
+                        <p className="text-[10px] font-mono text-ink-light truncate mt-0.5">
+                          {status.path}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleProfileLogin(svc)}
+                      className="btn-island-primary group text-[12px] !px-4 !py-2 whitespace-nowrap disabled:opacity-50"
+                    >
+                      <span className="tracking-tight">
+                        {busy ? "Đang mở Chrome..." : `Mở Chrome đăng nhập ${label}`}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={280}>
+        <div className="double-bezel mb-6">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
+              5. YouTube upload
+            </p>
+            <p className="text-[11px] text-ink-light mb-4">
+              Dán nội dung file <span className="font-mono">client_secrets.json</span> để upload video lên YouTube.
+            </p>
+            <p className="text-[11px] text-ink-light mb-4">
+              Cách lấy: vào{" "}
+              <a
+                href="https://console.developers.google.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+              >
+                Google Developers Console
+              </a>{" "}
+              → tạo project mới → bật "YouTube Data API v3" → tạo OAuth consent screen (thêm email test) → tạo Credentials → "OAuth client ID" (Web application) → thêm redirect URI{" "}
+              <span className="font-mono text-ink">http://localhost:8080/oauth2callback</span> → tải file JSON và dán vào ô bên dưới.
+            </p>
+
+            <div className="mb-4 space-y-1.5">
+              {([
+                ["client_secrets.json", youtube?.has_client_secrets],
+                ["request.token (OAuth)", youtube?.has_request_token],
+                ["youtubeuploader binary", youtube?.has_binary],
+              ] as const).map(([label, ok]) => (
+                <div key={label} className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-2.5">
+                  <span className="text-[12px] text-ink-muted">{label}</span>
+                  <span className={`text-[11px] font-medium ${ok ? "text-emerald-700" : "text-amber-700"}`}>
+                    {ok ? "✓ Sẵn sàng" : "Chưa có"}
+                  </span>
+                </div>
+              ))}
+              {youtube?.has_client_secrets && youtube.secrets_path && (
+                <p className="text-[10px] font-mono text-ink-light px-1 truncate">
+                  {youtube.secrets_path}
+                </p>
+              )}
+            </div>
+
+            <textarea
+              value={youtubeSecrets}
+              onChange={(e) => setYoutubeSecrets(e.target.value)}
+              placeholder='{"web": { "client_id": "...", "client_secret": "..." }}'
+              rows={6}
+              className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
+            />
+
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={handleSaveYoutube}
+                disabled={youtubeBusy}
+                className="btn-island-primary group text-[12px] !px-5 !py-2 disabled:opacity-50"
+              >
+                <span className="tracking-tight">{youtubeBusy ? "Đang lưu..." : "Lưu client_secrets.json"}</span>
+              </button>
+              {youtube?.has_client_secrets && !youtube.has_request_token && (
+                <span className="text-[11px] text-ink-light">
+                  Đã có secrets — lần upload đầu sẽ mở trình duyệt để đăng nhập Google.
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={280}>
+        <div className="double-bezel mb-6">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
+              6. Kiểu dáng phụ đề
             </p>
             <p className="text-[11px] text-ink-light mb-4">
               Áp dụng khi nhúng phụ đề cứng (hardcode) vào video output.
@@ -541,11 +838,11 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
-      <AnimatedBlock delay={280}>
+      <AnimatedBlock delay={320}>
         <div className="double-bezel mb-6">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
-              4. Watermark (logo + chữ)
+              7. Watermark (logo + chữ)
             </p>
             <p className="text-[11px] text-ink-light mb-5">
               Tạo nhiều bộ watermark — mỗi bộ gồm một cặp dòng chữ + logo. Khi bật watermark trong pipeline, bạn chọn bộ nào sẽ được sử dụng.
@@ -696,7 +993,7 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
-      <AnimatedBlock delay={300}>
+      <AnimatedBlock delay={350}>
         <div className="flex items-center gap-3">
           <button
             onClick={handleSave}

@@ -298,6 +298,61 @@ export async function getPipelineHealth(): Promise<PipelineHealth> {
   return res.data;
 }
 
+export interface ProfileCheck {
+  exists: boolean;
+  path: string;
+}
+
+export interface ProfilesCheck {
+  douyin: ProfileCheck;
+  chatgpt: ProfileCheck;
+}
+
+export async function getProfilesCheck(): Promise<ProfilesCheck> {
+  const res = await api.get<ProfilesCheck>("/profiles/check");
+  return res.data;
+}
+
+export interface ProfileConfig {
+  douyin?: string;
+  chatgpt?: string;
+}
+
+export interface ProfilesConfigResponse {
+  config: ProfileConfig;
+  resolved: {
+    douyin: ProfileCheck;
+    chatgpt: ProfileCheck;
+  };
+}
+
+export async function getProfilesConfig(): Promise<ProfilesConfigResponse> {
+  const res = await api.get<ProfilesConfigResponse>("/profiles/config");
+  return res.data;
+}
+
+export async function saveProfilesConfig(
+  cfg: ProfileConfig
+): Promise<{ status: string; config: ProfileConfig }> {
+  const res = await api.post<{ status: string; config: ProfileConfig }>(
+    "/profiles/config",
+    cfg
+  );
+  return res.data;
+}
+
+export async function douyinLogin(): Promise<{ status: string; mode: string }> {
+  const res = await api.post<{ status: string; mode: string }>(
+    "/video-download/login"
+  );
+  return res.data;
+}
+
+export async function chatgptLogin(): Promise<{ status: string; mode: string }> {
+  const res = await api.post<{ status: string; mode: string }>("/chatgpt/login");
+  return res.data;
+}
+
 export interface CapCutVoice {
   voice_type: string;
   display_name: string;
@@ -373,6 +428,8 @@ export interface AppConfig {
   has_tts_credentials: boolean;
   google_tts_credentials: string;
   tts_credentials_info: string;
+  has_fal_key: boolean;
+  fal_key: string;
   auto_context_enabled: boolean;
   subtitle_style: SubtitleStyle;
   watermark_text: string;
@@ -391,6 +448,7 @@ export async function saveAppConfig(body: {
   gemini_api_key?: string;
   gemini_api_keys?: string[];
   google_tts_json?: string;
+  fal_key?: string;
   auto_context_enabled?: boolean;
   subtitle_style?: Partial<SubtitleStyle>;
   watermark_text?: string;
@@ -451,4 +509,23 @@ export async function deletePresetLogo(presetId: string): Promise<{ status: stri
 
 export function presetLogoUrl(presetId: string): string {
   return `/api/config/watermark/presets/${presetId}/logo`;
+}
+
+// ── YouTube uploader (client_secrets.json) ──
+
+export interface YoutubeConfig {
+  has_client_secrets: boolean;
+  has_request_token: boolean;
+  has_binary: boolean;
+  secrets_path: string;
+}
+
+export async function getYoutubeConfig(): Promise<YoutubeConfig> {
+  const res = await api.get<YoutubeConfig>("/youtube/config");
+  return res.data;
+}
+
+export async function saveYoutubeSecrets(content: string): Promise<{ status: string; path?: string }> {
+  const res = await api.post("/youtube/config", { content });
+  return res.data;
 }

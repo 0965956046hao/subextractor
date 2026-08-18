@@ -1,7 +1,6 @@
-import os from "os";
-import path from "path";
-import puppeteer, { type ElementHandle, type Page } from "puppeteer-core";
-import { CHROME_PATH, type BrowserHandle } from "./douyin";
+import puppeteer, { type Browser, type ElementHandle, type Page } from "puppeteer-core";
+import { CHROME_PATH, killChromeOnProfile, type BrowserHandle } from "./douyin";
+import { resolveProfileDir } from "./subtitle-profile";
 
 /**
  * Drive chatgpt.com from the user's browser to generate/edit an image.
@@ -17,9 +16,7 @@ export const CHATGPT_URL =
 
 export const CHATGPT_PORT = Number(process.env.CHATGPT_PORT || "9223");
 
-export const CHATGPT_PROFILE_DIR =
-  process.env.CHATGPT_PROFILE_DIR ||
-  path.join(os.homedir(), ".chatgpt-profile");
+export const CHATGPT_PROFILE_DIR = resolveProfileDir("chatgpt");
 
 // Visible by default — the user must be able to complete login / a Cloudflare
 // check the first time. Set CHATGPT_HEADLESS=false to force headless.
@@ -31,27 +28,44 @@ export const CHATGPT_HEADLESS =
 const LOGIN_TIMEOUT_MS = 35_000;
 const GENERATE_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATE_TIMEOUT || "240000");
 
-/** Reuse the already-running ChatGPT Chrome (persistent profile) or launch it. */
+/** Reuse an already-running visible Chrome (shared profile) or launch a new one. */
 export async function openChatGptBrowser(): Promise<BrowserHandle> {
-  try {
-    const browser = await puppeteer.connect({
-      browserURL: `http://localhost:${CHATGPT_PORT}`,
-      defaultViewport: null,
-    });
-    return { browser, persistent: true };
-  } catch {
-    const browser = await puppeteer.launch({
-      executablePath: CHROME_PATH,
-      headless: CHATGPT_HEADLESS,
-      userDataDir: CHATGPT_PROFILE_DIR,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        `--remote-debugging-port=${CHATGPT_PORT}`,
-      ],
-      defaultViewport: null,
-    });
-    return { browser, persistent: false };
+  const endpoints = [
+    `http://localhost:${CHATGPT_PORT}`,
+    process.env.DOUYIN_CDP_URL || "http://localhost:9222",
+  ];
+  for (const endpoint of endpoints) {
+    let browser: Browser | null = null;
+    try {
+      browser = await puppeteer.connect({
+        browserURL: endpoint,
+        defaultViewport: null,
+      });
+      const version = await browser.version();
+      if (/headlesschrome/i.test(version)) {
+        await browser.disconnect().catch(() => {});
+        continue; // headless instance — not usable for a visible login
+      }
+      return { browser, persistent: true };
+    } catch {
+      await browser?.disconnect().catch(() => {});
+      // try next endpoint
+    }
   }
+  // Kill any headless instance holding our profile lock so we can open a
+  // visible window for login.
+  killChromeOnProfile(CHATGPT_PROFILE_DIR);
+  const browser = await puppeteer.launch({
+    executablePath: CHROME_PATH,
+    headless: CHATGPT_HEADLESS,
+    userDataDir: CHATGPT_PROFILE_DIR,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      `--remote-debugging-port=${CHATGPT_PORT}`,
+    ],
+    defaultViewport: null,
+  });
+  return { browser, persistent: false };
 }
 
 /** Detach but leave the ChatGPT Chrome (and its profile) running. */
