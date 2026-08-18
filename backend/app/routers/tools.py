@@ -652,6 +652,33 @@ async def dub_subtitles(video_id: str, request: Request):
     if not tts_voice:
         tts_voice = "vi-VN-Standard-B"
 
+    # Multi-voice: BẮT BUỘC có voice_map.json trước khi bắt đầu lồng tiếng.
+    # Nếu chưa có thì tạo đồng bộ tại đây và CHỜ xong; không tạo được thì từ chối
+    # bắt đầu job (không lồng tiếng thiếu giọng). Không để việc tạo rơi vào job dub.
+    if multi_voice and tts_engine == "capcut":
+        from app.services.translation_service import load_voice_map, generate_voice_map
+        from fastapi.concurrency import run_in_threadpool
+
+        if not load_voice_map(video_id):
+            srt_path = _srt_path(video_id)
+            entries = (
+                parse_srt(srt_path.read_text(encoding="utf-8"))
+                if srt_path.exists()
+                else []
+            )
+            if not entries:
+                raise HTTPException(
+                    400,
+                    "Bật nhiều giọng nói nhưng chưa có phụ đề để tạo voice_map.json — hãy chạy OCR/dịch trước.",
+                )
+            voice_map = await run_in_threadpool(generate_voice_map, video_id, entries, None)
+            if not voice_map:
+                raise HTTPException(
+                    400,
+                    "Bật nhiều giọng nói nhưng không tạo được voice_map.json "
+                    "(kiểm tra Gemini key / CapCut voice catalog) — chưa bắt đầu lồng tiếng.",
+                )
+
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)

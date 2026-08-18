@@ -185,7 +185,12 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
         return {}
 
     context = load_video_context(video_id) or "Không có"
-    model = _get_gemini_client()
+
+    if not configured_gemini_keys():
+        logger.warning("Gemini API key not configured — voice map skipped")
+        if log_fn:
+            log_fn("Chưa cấu hình Gemini API key — không tạo được voice_map.json.", "warning")
+        return {}
 
     if log_fn:
         log_fn(f"Đang tạo voice_map.json: chọn giọng CapCut cho {len(entries)} dòng phụ đề (Gemini)...")
@@ -208,7 +213,8 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
         if log_fn:
             log_fn(f"  Chọn giọng đọc batch {bi + 1}/{total_batches} ({len(batch)} dòng)...")
         try:
-            response = gemini_retry(model.models.generate_content)(
+            response = gemini_call_rotating(
+                genai_generate_content_factory,
                 model=settings.gemini_model,
                 contents=prompt,
                 config={
