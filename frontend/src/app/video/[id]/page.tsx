@@ -389,22 +389,7 @@ export default function VideoDetailPage() {
                   Đang xử lý… {meta?.progress ?? 0}%
                 </span>
               )}
-              {entries !== null && !isActive && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">
-                  <svg
-                    className="w-3 h-3"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                  >
-                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
-                  </svg>
-                  {entries} subtitle lines
-                </span>
-              )}
+
               {meta?.created_at && (
                 <span className="text-[11px] text-ink-light tabular-nums">
                   Extracted {formatDate(meta.created_at)}
@@ -415,14 +400,14 @@ export default function VideoDetailPage() {
                   href={`/extract?video_id=${videoId}`}
                   className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
                 >
-                  Xử lý lại
+                  Retry
                 </Link>
               )}
               <button
                 onClick={() => setReloadKey((k) => k + 1)}
                 className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
               >
-                Làm mới trạng thái
+                Refesh
               </button>
             </div>
           </div>
@@ -501,11 +486,6 @@ export default function VideoDetailPage() {
               >
                 Transcript
               </button>
-            </div>
-            <div className="px-3 py-1 rounded-full bg-black/[0.02] ring-1 ring-black/[0.04]">
-              <span className="text-[10px] font-mono text-ink-light tabular-nums">
-                {meta.entries} dòng phụ đề
-              </span>
             </div>
           </div>
           <TranscriptPlayer videoId={videoId} />
