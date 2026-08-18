@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response
 from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
-from app.services.media_utils import _srt_path, _video_path
+from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _video_playable
 from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 
@@ -400,6 +400,10 @@ async def download_hardcoded(video_id: str):
     if not files:
         raise HTTPException(404, "Hardcoded file not found. Run hardcode first.")
     path = files[0]
+    # A previous crashed run can leave a partial encode at the final name. Refuse
+    # to serve it so the frontend doesn't mistake a half-video for a done job.
+    if not _hardcoded_is_complete(video_id):
+        raise HTTPException(404, "Hardcoded file is incomplete. Run hardcode again.")
     return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_hardcoded"))
 
 
@@ -413,6 +417,8 @@ async def preview_hardcoded(video_id: str):
     files = list(hd_dir.glob("*_hardcoded.mp4"))
     if not files:
         raise HTTPException(404, "Hardcoded file not found")
+    if not _hardcoded_is_complete(video_id):
+        raise HTTPException(404, "Hardcoded file is incomplete. Run hardcode again.")
     return FileResponse(str(files[0]), media_type="video/mp4")
 
 
@@ -600,6 +606,8 @@ async def download_dubbed(video_id: str):
     if not files:
         raise HTTPException(404, "Dubbed video not found. Run TTS first.")
     path = files[0]
+    if not _video_playable(str(path)):
+        raise HTTPException(404, "Dubbed video is incomplete. Run TTS again.")
     return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_dubbed"))
 
 
@@ -613,6 +621,8 @@ async def preview_dubbed(video_id: str):
     files = list(tts_dir.glob("dubbed_video.mp4"))
     if not files:
         raise HTTPException(404, "Dubbed video not found")
+    if not _video_playable(str(files[0])):
+        raise HTTPException(404, "Dubbed video is incomplete. Run TTS again.")
     return FileResponse(str(files[0]), media_type="video/mp4")
 
 

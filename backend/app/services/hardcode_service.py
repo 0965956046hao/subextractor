@@ -6,9 +6,14 @@ Supports two engines:
 """
 
 import logging
+import os
 import shlex
+import shutil
 import subprocess
+import threading
 import time
+from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from app.config import settings
@@ -391,10 +396,19 @@ def _overlay_subtitle(frame, overlay_rgba):
     import cv2
     import numpy as np
 
-    alpha = overlay_rgba[:, :, 3:4].astype(np.float32) / 255.0
-    overlay_bgr = cv2.cvtColor(overlay_rgba[:, :, :3], cv2.COLOR_RGB2BGR).astype(np.float32)
-    blended = frame.astype(np.float32) * (1.0 - alpha) + overlay_bgr * alpha
-    return blended.astype(np.uint8)
+    # uint16 math (instead of float32) keeps transient memory roughly half and
+    # avoids the per-frame float32 churn that piled up during long burns.
+    a = overlay_rgba[:, :, 3].astype(np.uint16)
+    if not np.any(a):
+        return frame
+    inv = 255 - a
+    ov = cv2.cvtColor(overlay_rgba[:, :, :3], cv2.COLOR_RGB2BGR).astype(np.uint16)
+    base = frame.astype(np.uint16)
+    base *= inv[..., None]
+    base += ov * a[..., None]
+    base //= 255
+    frame[:] = base.astype(np.uint8)
+    return frame
 
 
 def _render_watermark_frame(
@@ -481,18 +495,29 @@ def burn_subtitles_pillow(
     srt_path_str: str,
     out_path: str,
     progress_callback=None,
+    chunk_log_fn=None,
     audio_source: str | None = None,
     style: dict | None = None,
     fixed_size: bool = False,
     watermark: dict | None = None,
     target_size: tuple[int, int] | None = None,
+    workers: int = 0,
 ):
     """Burn subtitles using OpenCV + Pillow (no libass required).
 
     Frames are upscaled to ``target_size`` (>=1080 short edge) BEFORE the
     subtitle/watermark are drawn, so text and logo are rendered crisply at the
-    final resolution instead of being upscaled afterwards. Frames are piped
-    straight into FFmpeg (single H.264 pass) — no lossy MPEG-4 intermediate.
+    final resolution instead of being upscaled afterwards.
+
+    Execution modes:
+    - ``workers`` <= 1: single process; frames piped straight into one ffmpeg
+      H.264 encode (no lossy intermediate).
+    - ``workers`` > 1 (auto when 0): the video is split into contiguous
+      segments; each segment is burned + encoded in a separate process (so the
+      CPU-heavy decode/render/blend work spreads across cores), then the
+      segments are concatenated with ``-c copy`` (lossless) and audio muxed.
+      More segments than workers are submitted so ``progress_callback``/``chunk_log_fn``
+      fire on finer granularity while only ``workers`` processes run at once.
     """
     import cv2
 
@@ -515,8 +540,64 @@ def burn_subtitles_pillow(
     vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = (total / fps) if fps and total else 0.0
-
     tw, th = target_size if target_size else target_dims_min1080(vw, vh)
+    cap.release()
+
+    if workers <= 0:
+        # Auto: 2 concurrent processes — a safe ceiling for laptop/thermal
+        # limits and 1440p HEVC decode. Set STE_hardcode_workers to override.
+        workers = min(2, os.cpu_count() or 2)
+
+    # Parallel burn only pays off on videos that are long enough — each spawned
+    # process costs a few seconds of startup, so keep short clips on the simple
+    # single-process path.
+    use_parallel = workers >= 2 and total > 0 and (total / fps) >= 30
+
+    if use_parallel:
+        return _burn_parallel(
+            video_path_str, srt_path_str, out_path,
+            workers=workers, total=total, fps=fps, tw=tw, th=th,
+            duration=duration, font_path=font_path, style=style,
+            fixed_size=fixed_size, watermark=watermark,
+            audio_source=audio_source, progress_callback=progress_callback,
+            chunk_log_fn=chunk_log_fn,
+        )
+
+    return _burn_single(
+        video_path_str, srt_path_str, out_path,
+        total=total, fps=fps, vw=vw, vh=vh, tw=tw, th=th,
+        font_path=font_path, style=style, fixed_size=fixed_size,
+        watermark=watermark, audio_source=audio_source,
+        progress_callback=progress_callback,
+    )
+
+
+def _burn_single(
+    video_path_str: str,
+    srt_path_str: str,
+    out_path: str,
+    *,
+    total: int,
+    fps: float,
+    vw: int,
+    vh: int,
+    tw: int,
+    th: int,
+    font_path: str | None,
+    style: dict | None,
+    fixed_size: bool,
+    watermark: dict | None,
+    audio_source: str | None,
+    progress_callback,
+):
+    import cv2
+
+    entries = _resolve_overlaps(parse_srt(Path(srt_path_str).read_text(encoding="utf-8")))
+    duration = (total / fps) if fps and total else 0.0
+
+    cap = cv2.VideoCapture(video_path_str)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path_str}")
 
     # Single-pass H.264 encode: raw BGR frames piped into ffmpeg + muxed audio.
     audio_in = audio_source or video_path_str
@@ -528,7 +609,7 @@ def burn_subtitles_pillow(
         "-i", audio_in,
         "-map", "0:v:0",
         "-map", "1:a:0?",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-c:v", "libx264", "-preset", "faster", "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
@@ -540,15 +621,22 @@ def burn_subtitles_pillow(
         stderr=subprocess.PIPE,
     )
 
-    cache = {}
-    wm_cache = {}
+    # Overlay caches are LRU-bounded so memory stays flat no matter how many
+    # unique subtitle lines appear. A full-frame RGBA overlay is ~8 MB at 1080p;
+    # unbounded growth here was silently killing the worker (OOM) on long videos.
+    MAX_OVERLAY_CACHE = 32
+    cache = OrderedDict()
+    # Subtitle text is drawn at the target resolution, so the background
+    # interpolation only affects the underlying video frame — a fast kernel is
+    # fine (AREA for downscale, LINEAR for upscale).
+    interp = cv2.INTER_AREA if (tw < vw or th < vh) else cv2.INTER_LINEAR
     idx = 0
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         if tw != vw or th != vh:
-            frame = cv2.resize(frame, (tw, th), interpolation=cv2.INTER_LANCZOS4)
+            frame = cv2.resize(frame, (tw, th), interpolation=interp)
         ts = idx / fps
         active = [e for e in entries if e.start <= ts < e.end]
         if active:
@@ -558,13 +646,14 @@ def burn_subtitles_pillow(
             e = max(active, key=lambda x: (x.start, x.end))
             text = e.text
             if text not in cache:
+                if len(cache) >= MAX_OVERLAY_CACHE:
+                    cache.popitem(last=False)
                 cache[text] = _render_subtitle(text, tw, th, font_path, style, fixed_size)
+            else:
+                cache.move_to_end(text)
             frame = _overlay_subtitle(frame, cache[text])
         if watermark:
-            wm_key = f"{int(ts * 10)}"
-            if wm_key not in wm_cache:
-                wm_cache[wm_key] = _render_watermark_frame(tw, th, ts, duration, watermark)
-            wm = wm_cache[wm_key]
+            wm = _render_watermark_frame(tw, th, ts, duration, watermark)
             if wm is not None:
                 frame = _overlay_subtitle(frame, wm)
         try:
@@ -587,6 +676,256 @@ def burn_subtitles_pillow(
     if progress_callback:
         progress_callback(100)
     return Path(out_path)
+
+
+def _burn_segment(
+    video_path: str,
+    srt_path: str,
+    start: int,
+    end: int,
+    *,
+    tw: int,
+    th: int,
+    fps: float,
+    duration: float,
+    font_path: str | None,
+    style: dict | None,
+    fixed_size: bool,
+    watermark: dict | None,
+    out_seg: str,
+    progress_file: str | None = None,
+) -> int:
+    """Burn frames [start, end) to a standalone video-only segment.
+
+    Top-level function so it can be pickled into a ProcessPoolExecutor worker
+    (macOS uses spawn). Returns the number of frames written.
+
+    When ``progress_file`` is set, the worker periodically writes its running
+    frame count there (a tiny int) so the parent can report smooth progress
+    even while the segment is still encoding.
+    """
+    import cv2
+
+    entries = _resolve_overlaps(parse_srt(Path(srt_path).read_text(encoding="utf-8")))
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+    vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Seek ~1.5s before the segment start so H.264 keyframe seeking lands
+    # correctly; warm-up frames are decoded then discarded.
+    warm = max(0, start - max(1, int(fps * 1.5)))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, warm)
+
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-s", f"{tw}x{th}", "-r", f"{fps}",
+        "-i", "-",
+        "-c:v", "libx264", "-preset", "faster", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        out_seg,
+    ]
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+    MAX_OVERLAY_CACHE = 32
+    cache = OrderedDict()
+    interp = cv2.INTER_AREA if (tw < vw or th < vh) else cv2.INTER_LINEAR
+
+    idx = warm
+    written = 0
+    write_every = max(1, int(fps * 0.5))  # progress tick every ~0.5s
+    while idx < end:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if idx < start:
+            idx += 1
+            continue
+        if tw != vw or th != vh:
+            frame = cv2.resize(frame, (tw, th), interpolation=interp)
+        ts = idx / fps
+        active = [e for e in entries if e.start <= ts < e.end]
+        if active:
+            e = max(active, key=lambda x: (x.start, x.end))
+            text = e.text
+            if text not in cache:
+                if len(cache) >= MAX_OVERLAY_CACHE:
+                    cache.popitem(last=False)
+                cache[text] = _render_subtitle(text, tw, th, font_path, style, fixed_size)
+            else:
+                cache.move_to_end(text)
+            frame = _overlay_subtitle(frame, cache[text])
+        if watermark:
+            wm = _render_watermark_frame(tw, th, ts, duration, watermark)
+            if wm is not None:
+                frame = _overlay_subtitle(frame, wm)
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(frame.tobytes())
+        except BrokenPipeError:
+            break
+        idx += 1
+        written += 1
+        if progress_file and written % write_every == 0:
+            Path(progress_file).write_text(str(written))
+
+    cap.release()
+    assert proc.stdin is not None
+    proc.stdin.close()
+    err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+    ret = proc.wait()
+    if ret != 0:
+        raise RuntimeError(f"FFmpeg segment encode failed (code {ret}): {err[:500]}")
+    return written
+
+
+def _run_ffmpeg(cmd):
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    _, err = proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"FFmpeg failed (code {proc.returncode}): "
+            f"{err.decode('utf-8', 'replace')[:1000]}"
+        )
+
+
+def _burn_parallel(
+    video_path_str: str,
+    srt_path_str: str,
+    out_path: str,
+    *,
+    workers: int,
+    total: int,
+    fps: float,
+    tw: int,
+    th: int,
+    duration: float,
+    font_path: str | None,
+    style: dict | None,
+    fixed_size: bool,
+    watermark: dict | None,
+    audio_source: str | None,
+    progress_callback,
+    chunk_log_fn=None,
+):
+    import numpy as np
+
+    seg_dir = settings.temp_dir / "hardcode" / f"burn_{Path(out_path).stem}_{int(time.time() * 1000)}"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # Submit more chunks than workers so the UI gets progress/log updates on
+        # finer granularity while only `workers` processes run concurrently.
+        n_chunks = max(workers * 2, 4)
+        bounds = np.linspace(0, total, n_chunks + 1, dtype=int)
+        chunks = [(int(bounds[i]), int(bounds[i + 1])) for i in range(n_chunks)]
+        chunks = [(s, e) for s, e in chunks if e > s]
+        n = len(chunks)
+
+        done_frames = 0
+        prog_files = [seg_dir / f"seg_{i:03d}.progress" for i in range(n)]
+        stop_evt = threading.Event()
+        last_reported = {"pct": 0}
+
+        # Background thread polls every segment's progress file (~0.5s ticks
+        # written by each child) and reports smooth overall progress. Without
+        # this the bar would sit frozen at the kick value until the FIRST
+        # segment of a long video finally completes.
+        def _reporter():
+            while not stop_evt.is_set():
+                frames = 0
+                for pf in prog_files:
+                    try:
+                        frames += int(pf.read_text())
+                    except Exception:
+                        pass
+                if progress_callback and total:
+                    pct = min(90, int(frames / total * 90))
+                    if pct > last_reported["pct"]:
+                        last_reported["pct"] = pct
+                        progress_callback(pct)
+                stop_evt.wait(0.5)
+
+        reporter = threading.Thread(target=_reporter, daemon=True)
+        reporter.start()
+
+        with ProcessPoolExecutor(max_workers=min(workers, n)) as ex:
+            futures = {}
+            for i, (s, e) in enumerate(chunks):
+                seg_out = str(seg_dir / f"seg_{i:03d}.mp4")
+                fut = ex.submit(
+                    _burn_segment,
+                    video_path_str, srt_path_str, s, e,
+                    tw=tw, th=th, fps=fps, duration=duration,
+                    font_path=font_path, style=style, fixed_size=fixed_size,
+                    watermark=watermark, out_seg=seg_out,
+                    progress_file=str(prog_files[i]),
+                )
+                futures[fut] = (s, e, i)
+
+            for fut in as_completed(futures):
+                fut.result()  # propagate worker errors
+                s, e, i = futures[fut]
+                done_frames += (e - s)
+                try:
+                    prog_files[i].write_text(str(e - s))  # finalize its count
+                except Exception:
+                    pass
+                completed = [1 for f in futures if f.done()]
+                if chunk_log_fn:
+                    chunk_log_fn(
+                        f"Đã encode xong đoạn {len(completed)}/{n} của video — đang tiếp tục..."
+                    )
+
+        stop_evt.set()
+        reporter.join(timeout=3)
+        if progress_callback and total:
+            progress_callback(min(90, int(done_frames / total * 90)))
+
+        seg_files = sorted(seg_dir.glob("seg_*.mp4"))
+        if not seg_files:
+            raise RuntimeError("No segments produced")
+
+        if chunk_log_fn:
+            chunk_log_fn("Ghép các đoạn đã encode (không giảm chất lượng)...")
+        list_file = seg_dir / "concat.txt"
+        list_file.write_text(
+            "".join(f"file '{seg.name}'\n" for seg in seg_files),
+            encoding="utf-8",
+        )
+
+        if audio_source:
+            joined = seg_dir / "joined.mp4"
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error", "-fflags", "+genpts",
+                "-f", "concat", "-safe", "0", "-i", str(list_file),
+                "-c", "copy", str(joined),
+            ])
+            if chunk_log_fn:
+                chunk_log_fn("Ghép audio lồng tiếng vào video...")
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", str(joined), "-i", audio_source,
+                "-map", "0:v:0", "-map", "1:a:0?",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-shortest", out_path,
+            ])
+        else:
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error", "-fflags", "+genpts",
+                "-f", "concat", "-safe", "0", "-i", str(list_file),
+                "-c", "copy", out_path,
+            ])
+
+        if progress_callback:
+            progress_callback(100)
+        return Path(out_path)
+    finally:
+        shutil.rmtree(seg_dir, ignore_errors=True)
 
 
 def run_hardcode_sync(
@@ -642,11 +981,22 @@ def run_hardcode_sync(
     video_id = Path(video_path_str).parent.name
     full_audio_path = settings.temp_dir / "tts" / video_id / "full_audio.m4a"
     dubbed_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
-    if full_audio_path.exists():
+
+    def _valid_audio(p: Path) -> bool:
+        # A file can exist yet be corrupt (e.g. mux killed before finalize, no moov
+        # atom). Never feed a broken source to ffmpeg — fall back to original audio.
+        return p.exists() and p.stat().st_size > 0 and _get_duration(str(p)) > 0
+
+    if _valid_audio(full_audio_path):
         audio_src = full_audio_path
-    elif dubbed_path.exists():
+    elif _valid_audio(dubbed_path):
         audio_src = dubbed_path
     else:
+        if full_audio_path.exists() or dubbed_path.exists():
+            logger.warning(
+                "hardcode job %s: dubbed audio invalid/corrupt, falling back to original audio", job_id
+            )
+            _log("Audio lồng tiếng bị lỗi — dùng audio gốc của video.")
         audio_src = None
     use_dubbed = audio_src is not None
     if use_dubbed:
@@ -693,15 +1043,27 @@ def run_hardcode_sync(
                 last_pillow_log["pct"] = pct
                 _log(f"Đang vẽ phụ đề khung hình... {pct}%")
 
+        w = settings.hardcode_workers or min(3, os.cpu_count() or 2)
+        if w >= 2 and total_dur and total_dur >= 30:
+            _log(f"Burn phụ đề song song trên {w} luồng xử lý — rút ngắn thời gian encode.")
+        else:
+            _log("Burn phụ đề xử lý tuần tự (video ngắn, không đáng bật đa luồng).")
+
+        # Kick progress so the bar isn't frozen at 0% while the first parallel
+        # segment (the slowest start) encodes.
+        progress_cb(2)
+
         burn_subtitles_pillow(
             video_path_str, srt_path_str, out_path,
             progress_callback=_pillow_log_cb,
+            chunk_log_fn=_log,
             audio_source=str(audio_src) if use_dubbed else None,
             style=style,
             # auto-fit or manual style must render at the exact size chosen.
             fixed_size=bool(job.get("auto_fit")) or bool(job.get("style")),
             watermark=watermark,
             target_size=(tw, th),
+            workers=settings.hardcode_workers,
         )
         job["progress"] = 100
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
