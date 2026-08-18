@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List
 
 from app.config import settings
-from app.services.srt_utils import parse_srt
+from app.services.srt_utils import _texts_similar, parse_srt
 from app.services.media_utils import _srt_path
 from app.services.job_utils import notify_ws_sync, job_log_sync
 
@@ -211,6 +211,8 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
 
     synth_ok = 0
     reused = 0
+    silenced = 0
+    prev_text = ""
     for i, entry in enumerate(entries):
         if progress_callback:
             progress_callback(i, total)
@@ -222,20 +224,28 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
             reused += 1
             if log_fn:
                 log_fn(f"  ✓ Dòng {i + 1}/{total}: đã có (tái sử dụng)", level="success")
-            continue
-
-        # Retry with increasing delay until success — no silent placeholder.
-        try:
-            path = _synthesize_with_retry(client, entry, out_dir, i + 1, voice_name=voice_name, log_fn=log_fn)
-        except Exception as e:
+        elif prev_text and _texts_similar(prev_text, entry.text.strip()):
+            # Nội dung giống dòng trước ≥80% → không gọi API gen voice, chèn khoảng lặng.
+            _create_silence(out_path, max(entry.end - entry.start, 0.5))
+            audio_files.append(out_path)
+            silenced += 1
             if log_fn:
-                log_fn(f"  ✗ Dòng {i + 1}/{total}: thất bại ({e})", level="error")
-            raise
-        if path:
-            audio_files.append(path)
-            synth_ok += 1
-            if log_fn:
-                log_fn(f"  ✓ Dòng {i + 1}/{total}: thành công", level="success")
+                log_fn(f"  ⏭ Dòng {i + 1}/{total}: giống dòng trước ≥80% — chèn khoảng lặng (không gọi API)", level="warning")
+        else:
+            # Retry with increasing delay until success — no silent placeholder.
+            try:
+                path = _synthesize_with_retry(client, entry, out_dir, i + 1, voice_name=voice_name, log_fn=log_fn)
+            except Exception as e:
+                if log_fn:
+                    log_fn(f"  ✗ Dòng {i + 1}/{total}: thất bại ({e})", level="error")
+                raise
+            if path:
+                audio_files.append(path)
+                synth_ok += 1
+                if log_fn:
+                    log_fn(f"  ✓ Dòng {i + 1}/{total}: thành công", level="success")
+        if entry.text.strip():
+            prev_text = entry.text.strip()
 
     if progress_callback:
         progress_callback(total, total)
@@ -245,7 +255,9 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         ok_note = f"TTS xong: {synth_ok} file giọng nói."
         if reused:
             ok_note += f" ({reused} dòng đã có sẵn, không gọi API.)"
-        log_fn(ok_note, level="success")
+        if silenced:
+            ok_note += f" {silenced} dòng giống dòng trước ≥80% (chèn khoảng lặng)."
+        log_fn(ok_note, level="success" if silenced == 0 else "warning")
     return audio_files
 
 
@@ -287,17 +299,28 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
 
     # Resume: only submit lines whose MP3 is not yet on disk. Already-generated
     # files are reused as-is, so a retry continues from where it left off.
+    # Lines whose content is ≥80% similar to the previous line are skipped:
+    # no voice API call — a silent placeholder is created instead.
     missing_indices: List[int] = []
     missing_texts: List[str] = []
+    silent_indices: set[int] = set()
+    prev_text = ""
     for i, entry in enumerate(entries):
         idx = i + 1
         target = out_dir / f"{idx:04d}.mp3"
         if not entry.text.strip():
             continue
         if target.exists() and target.stat().st_size > 0:
+            prev_text = entry.text.strip()
+            continue
+        if prev_text and _texts_similar(prev_text, entry.text.strip()):
+            _create_silence(target, max(entry.end - entry.start, 0.5))
+            silent_indices.add(idx)
+            prev_text = entry.text.strip()
             continue
         missing_indices.append(idx)
         missing_texts.append(entry.text.strip())
+        prev_text = entry.text.strip()
 
     written_names = set()
     if missing_texts:
@@ -325,6 +348,7 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
     audio_files: List[Path] = []
     synth_ok = 0
     synth_fail = 0
+    silenced = 0
     for i, entry in enumerate(entries):
         idx = i + 1
         target = out_dir / f"{idx:04d}.mp3"
@@ -335,9 +359,14 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
             continue
         if target.exists() and target.stat().st_size > 0:
             audio_files.append(target)
-            synth_ok += 1
-            if log_fn:
-                log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
+            if idx in silent_indices:
+                silenced += 1
+                if log_fn:
+                    log_fn(f"  ⏭ Dòng {idx}/{total}: giống dòng trước ≥80% — khoảng lặng (không gọi API)", level="warning")
+            else:
+                synth_ok += 1
+                if log_fn:
+                    log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
             continue
         # Try the service-named file (segment_0001.mp3) if present
         seg = out_dir / f"segment_{idx:04d}.mp3"
@@ -362,9 +391,11 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
     logger.info("CapCut TTS complete: %d audio files in %s", len(audio_files), out_dir)
     if log_fn:
         ok_note = f"CapCut TTS xong: {synth_ok} file giọng nói."
+        if silenced:
+            ok_note += f" {silenced} dòng giống dòng trước ≥80% (khoảng lặng)."
         if synth_fail:
             ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
-        log_fn(ok_note, level="success" if synth_fail == 0 else "warning")
+        log_fn(ok_note, level="success" if (synth_fail == 0 and silenced == 0) else "warning")
     return audio_files
 
 

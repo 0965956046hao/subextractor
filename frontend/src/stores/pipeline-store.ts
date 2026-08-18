@@ -1305,6 +1305,32 @@ async function runPipeline(id: string, startStep = 4) {
           body: JSON.stringify({ content: srtText }),
         });
 
+        // Auto-fix: quét toàn bộ SRT theo số thứ tự dòng — nếu end của một dòng
+        // dài hơn start của dòng sau thì kéo end về trước start dòng sau; nếu
+        // start của một dòng bé hơn end của dòng trước thì đẩy start ra sau end
+        // của dòng trước. Chạy bằng code (không tốn Gemini), xong mới tới bước
+        // kiểm tra timeline thủ công.
+        appendLog(id, "Tự động kiểm tra & sửa overlap timeline phụ đề...");
+        try {
+          const fixRes = await fetch(`/api/srt/${videoId}/auto-fix-overlaps`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+          });
+          const fixData = await fixRes.json();
+          if (!fixRes.ok) throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
+          const fixes: { index: number; from: string; to: string }[] = fixData.fixes ?? [];
+          if (fixes.length > 0) {
+            appendLog(id, `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`);
+            for (const f of fixes) {
+              appendLog(id, `  #${f.index}: ${f.from}  →  ${f.to}`);
+            }
+          } else {
+            appendLog(id, "Không phát hiện dòng nào chồng lấn — SRT hợp lệ.");
+          }
+        } catch (e) {
+          appendLog(id, `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`);
+        }
+
         // Optional: always pause for the user to review the translated SRT in the
         // timeline-check popup (only when checkSubs is on). No auto-skip.
         if (cur.checkSubs && videoId) {

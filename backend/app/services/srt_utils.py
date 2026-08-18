@@ -124,6 +124,50 @@ def validate_timeline(entries: list[SrtEntry]) -> list[dict]:
     return issues
 
 
+def shift_overlaps(entries: list[SrtEntry]) -> tuple[list[SrtEntry], list[dict]]:
+    """Auto-fix overlapping timelines by code (no LLM).
+
+    Scan the SRT in line order and fix both directions of an overlap:
+    - if a line's END time is LATER than the following line's START time,
+      clamp its end back to the following line's start (shorten the current
+      line) so a subtitle never bleeds into the one after it;
+    - if a line's START time is EARLIER than the previous line's END time,
+      push its start forward to the previous line's end (delay the current
+      line) so every line starts after the one before it ends.
+    Returns (fixed_entries, fixes).
+    """
+    fixes: list[dict] = []
+    fixed = [e.model_copy(deep=True) for e in entries]
+    for i in range(len(fixed)):
+        cur = fixed[i]
+        # Clamp end to the following line's start (skip if it would give the
+        # current line a zero/negative duration).
+        if i + 1 < len(fixed):
+            nxt = fixed[i + 1]
+            if cur.end > nxt.start and nxt.start > cur.start:
+                new_end = nxt.start
+                fixes.append({
+                    "index": cur.index,
+                    "from": f"{cur.startLabel} --> {cur.endLabel}",
+                    "to": f"{cur.startLabel} --> {_fmt(new_end)}",
+                })
+                cur.end = new_end
+                cur.endLabel = _fmt(new_end)
+        # Push start past the previous line's end.
+        if i > 0:
+            prev = fixed[i - 1]
+            if cur.start < prev.end:
+                new_start = prev.end
+                fixes.append({
+                    "index": cur.index,
+                    "from": f"{cur.startLabel} --> {cur.endLabel}",
+                    "to": f"{_fmt(new_start)} --> {cur.endLabel}",
+                })
+                cur.start = new_start
+                cur.startLabel = _fmt(new_start)
+    return fixed, fixes
+
+
 def fix_timeline(entries: list[SrtEntry]) -> tuple[list[SrtEntry], list[dict]]:
     """Auto-fix illogical timelines.
 
