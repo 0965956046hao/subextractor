@@ -230,14 +230,10 @@ def build_full_audio(
                 generate_voice_map(video_id, entries, log_fn=log_fn)
                 voice_map = load_voice_map(video_id)
             if not voice_map:
-                if log_fn:
-                    log_fn("Không tạo được voice_map.json — bỏ qua nhiều giọng, dùng giọng mặc định.", level="warning")
-                audio_files = synthesize_srt_capcut(
-                    video_id,
-                    progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-                    voice_name=voice_name,
-                    rate=settings.capcut_tts_default_rate,
-                    log_fn=log_fn,
+                raise RuntimeError(
+                    "Bật nhiều giọng nói nhưng không tạo được voice_map.json "
+                    "(cần Gemini key + CapCut voice catalog). Chạy lại bước Dịch "
+                    "hoặc kiểm tra cấu hình rồi thử lại."
                 )
             else:
                 if log_fn:
@@ -282,6 +278,11 @@ def build_full_audio(
         if log_fn:
             log_fn("Đã gộp giọng nói hoàn chỉnh (full_voice.mp3).")
     cb(85)
+
+    # Guard: the full voice track MUST exist before we mix it with the
+    # background and mux into the video (auto-dub contract).
+    if not full_voice.exists() or full_voice.stat().st_size == 0:
+        raise RuntimeError("full_voice.mp3 chưa được tạo — không thể trộn audio lồng tiếng.")
 
     full_audio = out_dir / "full_audio.m4a"
     instrumental_mtime = instrumental.stat().st_mtime if instrumental.exists() else 0.0

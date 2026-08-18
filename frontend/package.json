@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "next build && rm -rf .next-prod && cp -r .next/standalone .next-prod && cp -r .next/static .next-prod/.next/static",
+    "start": "node .next-prod/server.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

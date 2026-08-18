@@ -180,10 +180,15 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
     catalog = _load_capcut_voice_catalog()
     if not catalog:
         logger.warning("CapCut voice catalog unavailable — voice map skipped")
+        if log_fn:
+            log_fn("Không đọc được CapCut voice catalog — bỏ qua tạo voice_map.json.", "warning")
         return {}
 
     context = load_video_context(video_id) or "Không có"
     model = _get_gemini_client()
+
+    if log_fn:
+        log_fn(f"Đang tạo voice_map.json: chọn giọng CapCut cho {len(entries)} dòng phụ đề (Gemini)...")
 
     base_prompt = VOICE_MAP_PROMPT.format(
         context=context,
@@ -226,6 +231,8 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
                 log_fn(f"  Batch {bi + 1}: chọn giọng thất bại ({e}), bỏ qua.", level="warning")
 
     if not voice_map:
+        if log_fn:
+            log_fn("Gemini không trả về kết quả chọn giọng — không tạo được voice_map.json.", "warning")
         return {}
 
     p = _voice_map_path(video_id)
@@ -233,7 +240,7 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
     p.write_text(json.dumps({str(k): v for k, v in voice_map.items()}, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Voice map saved for %s: %d voices", video_id, len(voice_map))
     if log_fn:
-        log_fn(f"Đã chọn giọng cho {len(voice_map)}/{total} dòng phụ đề.", level="success")
+        log_fn(f"Đã tạo voice_map.json: {len(voice_map)}/{total} dòng có giọng riêng.", "success")
     return voice_map
 
 
@@ -397,7 +404,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     # Multi-voice: ask Gemini to assign a CapCut voice to each line → voice_map.json
     if multi_voice:
         if log_fn:
-            log_fn("Bật nhiều giọng nói — đang chọn giọng cho từng dòng phụ đề...")
+            log_fn("Bật nhiều giọng nói — tạo voice_map.json ngay trong bước Dịch Gemini...")
         generate_voice_map(video_id, translated_entries, log_fn=log_fn)
 
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)

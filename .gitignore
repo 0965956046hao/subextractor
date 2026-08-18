@@ -1,7 +1,9 @@
 backend/temp/
 backend/.venv/
 frontend/node_modules/
+frontend/build/
 frontend/.next/
+frontend/.next-prod/
 *.pyc
 __pycache__/
 .env
@@ -10,5 +12,7 @@ __pycache__/
 *.token
 !test/*.token
 youtubeuploader/youtubeuploader
-
+src-tauri/*
+*/build/
+*/dist/
 

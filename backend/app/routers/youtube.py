@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -17,8 +19,18 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-YOUTUBE_UPLOADER_DIR = Path(__file__).resolve().parent.parent.parent.parent / "youtubeuploader"
-YOUTUBE_UPLOADER_BIN = YOUTUBE_UPLOADER_DIR / "youtubeuploader"
+_YOUTUBE_SOURCE_DIR = Path(__file__).resolve().parent.parent.parent.parent / "youtubeuploader"
+
+if getattr(sys, "frozen", False):
+    # Packaged app: binary is bundled on PATH (tools/youtubeuploader); runtime
+    # files (client_secrets.json, request.token) live in the writable data dir.
+    YOUTUBE_UPLOADER_BIN = Path(shutil.which("youtubeuploader") or "")
+    YOUTUBE_UPLOADER_DIR = settings.base_dir / "youtube"
+    YOUTUBE_UPLOADER_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    YOUTUBE_UPLOADER_BIN = _YOUTUBE_SOURCE_DIR / "youtubeuploader"
+    YOUTUBE_UPLOADER_DIR = _YOUTUBE_SOURCE_DIR
+
 CLIENT_SECRETS_PATH = YOUTUBE_UPLOADER_DIR / "client_secrets.json"
 REQUEST_TOKEN_PATH = YOUTUBE_UPLOADER_DIR / "request.token"
 
@@ -226,7 +238,7 @@ async def setup_youtube_environment():
     output_lines = []
 
     def run(cmd: list[str], cwd=None):
-        proc = subprocess.run(cmd, cwd=cwd or str(YOUTUBE_UPLOADER_DIR),
+        proc = subprocess.run(cmd, cwd=cwd or str(_YOUTUBE_SOURCE_DIR),
                               capture_output=True, text=True, timeout=300)
         output_lines.append(f"$ {' '.join(cmd)}")
         if proc.stdout.strip():

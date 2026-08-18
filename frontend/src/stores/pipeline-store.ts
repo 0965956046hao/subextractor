@@ -1392,6 +1392,29 @@ const translateTarget = cur.translateTarget || "vi";
           }
         }
 
+        // Multi-voice: đảm bảo voice_map.json tồn tại ngay trong bước Dịch
+        // (kể cả khi dịch bị bỏ qua do bản dịch đã có sẵn).
+        if (cur.multiVoice && videoId) {
+          try {
+            const vmCheck = await fetch(`/api/voice-map/${videoId}`);
+            const vmData = await vmCheck.json();
+            if (vmData.exists) {
+              appendLog(id, `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`);
+            } else {
+              appendLog(id, "Đang tạo voice_map.json (chọn giọng CapCut cho từng dòng bằng Gemini)...");
+              const vmRes = await fetch(`/api/voice-map/${videoId}`, { method: "POST" });
+              const vmd = await vmRes.json();
+              if (vmRes.ok && vmd.status === "done") {
+                appendLog(id, `Đã tạo voice_map.json: ${vmd.voices} dòng có giọng riêng.`);
+              } else {
+                appendLog(id, `Không tạo được voice_map.json: ${vmd.detail || "lỗi"}`);
+              }
+            }
+          } catch {
+            appendLog(id, "Bỏ qua tạo voice_map.json (lỗi).");
+          }
+        }
+
         markStepEnd(id, 6);
       }
     }

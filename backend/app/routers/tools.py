@@ -492,6 +492,36 @@ async def translate_subtitles(video_id: str, request: Request):
     return {"job_id": job_id, "status": "queued", "phase": "translate", "progress": 0, "error": None, "logs": []}
 
 
+# ── GET /api/voice-map/{video_id} ──
+
+@router.get("/api/voice-map/{video_id}")
+async def get_voice_map(video_id: str):
+    """Return whether voice_map.json exists and how many lines it covers."""
+    from app.services.translation_service import load_voice_map
+
+    voice_map = load_voice_map(video_id)
+    return {"exists": bool(voice_map), "voices": len(voice_map)}
+
+
+# ── POST /api/voice-map/{video_id} ──
+
+@router.post("/api/voice-map/{video_id}")
+async def generate_voice_map_now(video_id: str):
+    """Generate (or regenerate) the CapCut voice_map.json for multi-voice dubbing."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.translation_service import generate_voice_map as _gen_voice_map
+
+    srt_path = _srt_path(video_id)
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    if not entries:
+        raise HTTPException(400, "No SRT entries")
+
+    voice_map = await run_in_threadpool(_gen_voice_map, video_id, entries, None)
+    if not voice_map:
+        raise HTTPException(500, "Không tạo được voice_map.json (kiểm tra Gemini key / CapCut voice catalog).")
+    return {"status": "done", "voices": len(voice_map)}
+
+
 # ── GET /api/download/translated/{video_id} ──
 
 @router.get("/api/download/translated/{video_id}")

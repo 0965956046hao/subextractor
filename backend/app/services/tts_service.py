@@ -455,7 +455,9 @@ def synthesize_srt_capcut_multi(
     if failed:
         retry_idxs = [i for i in failed if entries[i].text.strip()]
         if log_fn:
-            log_fn(f"  {len(retry_idxs)} dòng thất bại với giọng đã chọn — thử lại bằng giọng mặc định {default_voice}...")
+            log_fn(
+                f"  {len(retry_idxs)} dòng lỗi khi map giọng đã chọn — chuyển về giọng mặc định {default_voice}..."
+            )
         retry_texts = [entries[i].text.strip() for i in retry_idxs]
         prefix = "mv_" + re.sub(r"[^A-Za-z0-9_]", "_", default_voice)[:40]
         try:
