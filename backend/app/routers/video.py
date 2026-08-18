@@ -194,6 +194,9 @@ async def cleanup_video(video_id: str):
     - tts/{video_id}/dubbed_video.mp4 (dubbed video)
     - videos/{video_id}/meta.json  (original filename)
     - projects/{video_id}/         (editor project state)
+
+    Also removes meta/, thumb/ and the risk_check result, which are
+    intermediate and regenerated on demand.
     """
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
@@ -247,6 +250,24 @@ async def cleanup_video(video_id: str):
         shutil.rmtree(muxed_dir, ignore_errors=True)
         removed.append("muxed")
 
+    # meta/: Gemini-generated title/description/tags — intermediate
+    meta_dir = settings.temp_dir / "meta" / video_id
+    if meta_dir.exists():
+        shutil.rmtree(meta_dir, ignore_errors=True)
+        removed.append("meta")
+
+    # thumb/: generated thumbnail images — intermediate
+    thumb_dir = settings.temp_dir / "thumb" / video_id
+    if thumb_dir.exists():
+        shutil.rmtree(thumb_dir, ignore_errors=True)
+        removed.append("thumb")
+
+    # risk_check/: flat result file temp/risk_check/{video_id}.json
+    risk_file = settings.temp_dir / "risk_check" / f"{video_id}.json"
+    if risk_file.exists():
+        risk_file.unlink(missing_ok=True)
+        removed.append("risk_check")
+
     return {"cleaned": video_id, "removed": removed}
 
 
@@ -273,6 +294,12 @@ async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeli
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
             removed.append(name)
+    # risk_check is stored as a flat file (temp/risk_check/{video_id}.json),
+    # not a per-video subdir, so clear it explicitly.
+    risk_file = settings.temp_dir / "risk_check" / f"{video_id}.json"
+    if risk_file.exists():
+        risk_file.unlink(missing_ok=True)
+        removed.append("risk_check")
     if merge_id:
         merged_dir = settings.temp_dir / "merged"
         for suffix in ("", "_video", "_audio"):
@@ -313,6 +340,7 @@ async def abort_video(video_id: str, jobs: dict = Depends(get_jobs), pipeline_st
 TEMP_DATA_SUBDIRS = (
     "videos", "frames", "srt", "muxed", "hardcoded", "tts",
     "translated", "merged", "context", "projects",
+    "meta", "thumb", "risk_check",
 )
 
 

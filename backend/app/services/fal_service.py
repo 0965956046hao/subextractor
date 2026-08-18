@@ -65,7 +65,7 @@ def _resolve_fal_key() -> str:
     return key.strip()
 
 
-def _build_prompt(context: str, title: str) -> str:
+def build_thumbnail_prompt(context: str, title: str) -> str:
     parts = []
     if context:
         parts.append(context)
@@ -81,6 +81,21 @@ def _build_prompt(context: str, title: str) -> str:
         "font chữ phù hợp với font chữ của tiêu đề gốc"
     )
     return "\n".join(parts)
+
+
+def get_thumbnail_prompt(video_id: str) -> tuple[str, str]:
+    """Return (prompt, thumb_url) for the GPT-based thumbnail generation flow.
+
+    Shares the exact same prompt-building logic as the fal.ai flow so both
+    engines produce the same style of edit.
+    """
+    thumb_url = load_thumbnail(video_id)
+    if not thumb_url:
+        raise RuntimeError("Thumbnail URL not saved — run resolve first.")
+
+    context = load_video_context(video_id) or ""
+    title = _load_meta_title(video_id)
+    return build_thumbnail_prompt(context, title), thumb_url
 
 
 def update_thumbnail(video_id: str) -> Path:
@@ -109,7 +124,7 @@ def update_thumbnail(video_id: str) -> Path:
 
     os.environ["FAL_KEY"] = api_key
 
-    prompt = _build_prompt(context, title)
+    prompt = build_thumbnail_prompt(context, title)
     logger.info("fal.ai gpt-image-2 edit for %s (16:9)", video_id)
 
     try:

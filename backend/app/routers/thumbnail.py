@@ -1,9 +1,10 @@
 """Thumbnail endpoints: save URL, fal.ai regenerate (async), status, serve file."""
 
 import logging
+import os
 import threading
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import settings
@@ -54,6 +55,39 @@ async def start_thumbnail(video_id: str):
 
     threading.Thread(target=_run, daemon=True).start()
     return {"status": "processing"}
+
+
+@router.get("/api/thumbnail/{video_id}/prompt")
+def thumbnail_prompt(video_id: str):
+    """Return the thumbnail-edit prompt + source image URL for the GPT flow.
+
+    Uses the same prompt-building logic as the fal.ai flow so both engines
+    produce the same kind of 16:9 edit.
+    """
+    from app.services.fal_service import get_thumbnail_prompt
+
+    try:
+        prompt, thumb_url = get_thumbnail_prompt(video_id)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    return {"prompt": prompt, "thumb_url": thumb_url}
+
+
+@router.post("/api/thumbnail/{video_id}/gpt-result")
+async def save_gpt_result(video_id: str, file: UploadFile = File(...)):
+    """Save a ChatGPT-generated thumbnail image to the standard thumbnail path."""
+    out_dir = settings.temp_dir / "thumb" / video_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "thumbnail.png"
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file")
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, out_path)
+    logger.info("GPT thumbnail saved for %s → %s", video_id, out_path)
+    return {"status": "done", "thumbnail_url": f"/api/thumbnail/{video_id}"}
 
 
 @router.get("/api/thumbnail/{video_id}/status")

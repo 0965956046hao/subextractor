@@ -24,7 +24,7 @@ export const STEPS = [
   { label: "Lồng tiếng Việt", detail: "Tách giọng + TTS Việt + giữ nhạc nền (có thể tắt)" },
   { label: "Nhúng SRT vào video", detail: "FFmpeg gộp SRT mới vào MP4" },
   { label: "Tạo meta", detail: "Gemini tạo tiêu đề/mô tả/tags từ ngữ cảnh" },
-  { label: "Cập nhật thumbnail", detail: "fal.ai chỉnh lại thumbnail 16:9 + tiêu đề" },
+  { label: "Cập nhật thumbnail", detail: "fal.ai / ChatGPT chỉnh lại thumbnail 16:9 + tiêu đề" },
   { label: "Upload YouTube", detail: "Đăng video lên YouTube kèm meta" },
 ];
 
@@ -113,6 +113,7 @@ export interface Pipeline {
   autoFit: boolean;
   watermark: boolean;
 useFalThumbnail: boolean;
+useGptThumbnail: boolean;
   autoUploadYoutube: boolean;
   watermarkPreset: string;
   checkSubs: boolean;
@@ -151,7 +152,7 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
-addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, autoUploadYoutube?: boolean, useFalThumbnail?: boolean, srcLang?: string, translateOn?: boolean, translateTarget?: string, dubOn?: boolean) => string;
+addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOptions>, autoFit?: boolean, watermark?: boolean, watermarkPreset?: string, checkSubs?: boolean, autoUploadYoutube?: boolean, useFalThumbnail?: boolean, useGptThumbnail?: boolean, srcLang?: string, translateOn?: boolean, translateTarget?: string, dubOn?: boolean) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
     filename: string;
@@ -162,6 +163,8 @@ addPipeline: (url: string, regionMode?: "manual" | "auto", dub?: Partial<DubOpti
     watermark?: boolean;
     watermarkPreset?: string;
     checkSubs?: boolean;
+    useFalThumbnail?: boolean;
+    useGptThumbnail?: boolean;
     translateOn?: boolean;
     translateTarget?: string;
     dubOn?: boolean;
@@ -196,6 +199,7 @@ function newPipeline(
   checkSubs = false,
 autoUploadYoutube = false,
   useFalThumbnail = true,
+  useGptThumbnail = false,
   srcLang = "",
   translateOn = true,
   translateTarget = "vi",
@@ -249,6 +253,7 @@ autoUploadYoutube = false,
     timelineCheck: null,
     resumeStep: null,
     useFalThumbnail,
+    useGptThumbnail,
     autoUploadYoutube,
   };
 }
@@ -271,9 +276,9 @@ export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
   pipelines: [],
-addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, autoUploadYoutube = false, useFalThumbnail = true, srcLang = "", translateOn = true, translateTarget = "vi", dubOn = true) => {
+addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = false, watermarkPreset = "", checkSubs = false, autoUploadYoutube = false, useFalThumbnail = true, useGptThumbnail = false, srcLang = "", translateOn = true, translateTarget = "vi", dubOn = true) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, autoUploadYoutube, useFalThumbnail, srcLang, translateOn, translateTarget, dubOn)] }));
+    set((s) => ({ pipelines: [...s.pipelines, newPipeline(id, url, regionMode, dub, autoFit, watermark, watermarkPreset, checkSubs, autoUploadYoutube, useFalThumbnail, useGptThumbnail, srcLang, translateOn, translateTarget, dubOn)] }));
     runPrep(id);
     schedulePersist();
     return id;
@@ -290,7 +295,8 @@ addPipeline: (url, regionMode = "manual", dub = {}, autoFit = true, watermark = 
       input.watermarkPreset ?? "",
       input.checkSubs ?? false,
       false,
-      true,
+      input.useFalThumbnail ?? true,
+      input.useGptThumbnail ?? false,
       input.srcLang ?? "zh",
       input.translateOn ?? true,
       input.translateTarget ?? "vi",
@@ -1525,7 +1531,28 @@ const translateTarget = cur.translateTarget || "vi";
         // ignore
       }
 
-      if (!cur.useFalThumbnail) {
+      if (cur.useGptThumbnail) {
+        appendLog(id, "Cập nhật thumbnail (ChatGPT)...");
+        try {
+          const r = await fetch("/api/chatgpt-thumbnail", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_id: videoId }),
+          });
+          const d = await r.json();
+          if (d.status === "done" && d.thumbnail_url) {
+            patch(id, { updatedThumbnailUrl: d.thumbnail_url });
+            appendLog(id, `Thumbnail mới (ChatGPT): ${d.thumbnail_url}`);
+          } else if (d.status === "need_login") {
+            appendLog(id, `Cần đăng nhập ChatGPT: ${d.detail || "đăng nhập trong cửa sổ Chrome vừa mở rồi chạy lại."}`);
+          } else {
+            appendLog(id, `Không cập nhật được thumbnail bằng ChatGPT: ${d.detail || "lỗi"}`);
+          }
+        } catch (e) {
+          appendLog(id, `Bỏ qua cập nhật thumbnail ChatGPT (lỗi): ${(e as Error)?.message || e}`);
+        }
+        markStepEnd(id, 10);
+      } else if (!cur.useFalThumbnail) {
         appendLog(id, "Bỏ qua cập nhật thumbnail (tắt fal.ai edit thumbnail).");
         markStepSkipped(id, 10);
       } else if (!hasFalKey) {

@@ -127,6 +127,7 @@ const [muteOriginal, setMuteOriginal] = useState(true);
   const [autoFitSubs, setAutoFitSubs] = useState(true);
   const [watermarkOn, setWatermarkOn] = useState(false);
 const [useFalThumbnail, setUseFalThumbnail] = useState(true);
+  const [useGptThumbnail, setUseGptThumbnail] = useState(false);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
   const [watermarkPreset, setWatermarkPreset] = useState("");
   const [checkSubs, setCheckSubs] = useState(false);
@@ -399,7 +400,7 @@ const [useFalThumbnail, setUseFalThumbnail] = useState(true);
       muteOriginal,
       originalGainDb,
 multiVoice: multiVoice && dubEngine === "capcut",
-    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs, autoUploadYoutube, useFalThumbnail, srcLang, translateOn, translateTarget, dubOn);
+    }, autoFitSubs, watermarkOn, watermarkOn ? watermarkPreset : "", checkSubs, autoUploadYoutube, useFalThumbnail, useGptThumbnail, srcLang, translateOn, translateTarget, dubOn);
     setUrl("");
     setSelectedId(id);
     setTab("detail");
@@ -1168,7 +1169,7 @@ multiVoice: multiVoice && dubEngine === "capcut",
                 </div>
               </div>
 
-              <div className="mt-4 border-t border-black/[0.05] pt-4">
+              <div className="mt-4 border-t border-black/[0.05] pt-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1180,7 +1181,10 @@ multiVoice: multiVoice && dubEngine === "capcut",
                   </div>
                   <button
                     type="button"
-                    onClick={() => setUseFalThumbnail(!useFalThumbnail)}
+                    onClick={() => {
+                      setUseFalThumbnail(!useFalThumbnail);
+                      if (!useFalThumbnail) setUseGptThumbnail(false);
+                    }}
                     className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
                       useFalThumbnail ? "bg-blue-600" : "bg-black/10"
                     }`}
@@ -1188,6 +1192,33 @@ multiVoice: multiVoice && dubEngine === "capcut",
                     <span
                       className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
                         useFalThumbnail ? "left-[22px]" : "left-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      ChatGPT Edit thumbnail
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      Mở chatgpt.com, gửi ảnh + prompt (giống fal.ai) cho ChatGPT tạo thumbnail mới (mở Chrome để đăng nhập lần đầu).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUseGptThumbnail(!useGptThumbnail);
+                      if (!useGptThumbnail) setUseFalThumbnail(false);
+                    }}
+                    className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                      useGptThumbnail ? "bg-blue-600" : "bg-black/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                        useGptThumbnail ? "left-[22px]" : "left-0.5"
                       }`}
                     />
                   </button>

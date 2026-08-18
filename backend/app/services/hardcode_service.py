@@ -652,6 +652,9 @@ def run_hardcode_sync(
     if use_dubbed:
         logger.info("hardcode job %s: using dubbed audio (%s)", job_id, audio_src.name)
         _log("Dùng audio đã lồng tiếng Việt (full_audio/dubbed).")
+    else:
+        logger.warning("hardcode job %s: no dubbed audio found → original audio", job_id)
+        _log("Không tìm thấy audio lồng tiếng Việt (chạy bước Lồng tiếng trước) — dùng audio gốc của video.", "warning")
 
     # Watermark (logo + scrolling text) is rendered only by the Pillow path, so
     # when a watermark is configured we use Pillow even if libass is available.
