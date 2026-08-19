@@ -28,7 +28,6 @@ pub fn run() {
 
             for (name, result) in [
                 ("backend", manager.spawn_backend(&base, &data_dir)),
-                ("ds2api", manager.spawn_ds2api(&base, &data_dir)),
                 ("capcut", manager.spawn_capcut(&base, &data_dir)),
             ] {
                 match result {

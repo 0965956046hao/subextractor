@@ -16,122 +16,155 @@ from app.services.job_utils import notify_ws_sync, job_log_sync
 logger = logging.getLogger(__name__)
 
 
-def _get_tts_client():
-    """Lazy-load Google Cloud TTS client."""
-    try:
-        from google.cloud import texttospeech
-    except ImportError:
-        raise ImportError(
-            "google-cloud-texttospeech not installed. Run: pip install google-cloud-texttospeech"
-        )
+import base64
+import httpx
+from google.oauth2 import service_account
+import google.auth.transport.requests
 
-    # Check env vars first, then user config
+def _get_tts_client():
+    """Lazy-load Google Cloud TTS access token."""
     creds_path = settings.google_tts_credentials or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    creds_info = None
+
     if not creds_path:
-        # Read from user config JSON
         cf = settings.temp_dir / "user_config.json"
         if cf.exists():
             try:
                 cfg = json.loads(cf.read_text(encoding="utf-8"))
                 creds_json = cfg.get("google_tts_credentials", "")
                 if isinstance(creds_json, dict):
-                    creds_json = json.dumps(creds_json, ensure_ascii=False)
-                if creds_json:
-                    # Write to temp file and point to it
-                    creds_file = settings.temp_dir / "tts_service_account.json"
-                    creds_file.write_text(creds_json, encoding="utf-8")
-                    creds_path = str(creds_file)
+                    creds_info = creds_json
+                elif isinstance(creds_json, str) and creds_json:
+                    creds_info = json.loads(creds_json)
             except Exception:
                 pass
+    else:
+        try:
+            creds_info = json.loads(Path(creds_path).read_text(encoding="utf-8"))
+        except Exception:
+            pass
 
-    if not creds_path:
+    if not creds_info:
         raise ValueError("Google TTS credentials not set. Vào Settings (⚙️) để nhập Service Account JSON.")
 
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
-    return texttospeech.TextToSpeechClient()
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+    request = google.auth.transport.requests.Request()
+    creds.refresh(request)
+    return creds.token
 
 
-def synthesize_entry(client, entry, out_dir: Path, index: int, voice_name: str = "vi-VN-Standard-A") -> Path:
-    """Synthesize a single SRT entry to MP3."""
-    try:
-        from google.cloud import texttospeech
-    except ImportError:
-        raise ImportError("google-cloud-texttospeech not installed")
-
+def synthesize_entry(token: str, entry, out_dir: Path, index: int, voice_name: str = "vi-VN-Standard-A") -> Path:
+    """Synthesize a single SRT entry to MP3 using Google TTS REST API."""
     text = entry.text.strip()
     if not text:
         return None
 
-    synthesis_input = texttospeech.SynthesisInput(text=text)
-    voice = texttospeech.VoiceSelectionParams(
-        language_code="vi-VN",
-        name=voice_name,
-        ssml_gender=texttospeech.SsmlVoiceGender.FEMALE,
-    )
-    audio_config = texttospeech.AudioConfig(
-        audio_encoding=texttospeech.AudioEncoding.MP3,
-        speaking_rate=1.0,
-        pitch=0.0,
-    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    body = {
+        "input": {"text": text},
+        "voice": {
+            "languageCode": "vi-VN",
+            "name": voice_name,
+        },
+        "audioConfig": {
+            "audioEncoding": "MP3",
+            "speakingRate": 1.0,
+            "pitch": 0.0
+        }
+    }
 
-    response = client.synthesize_speech(
-        input=synthesis_input, voice=voice, audio_config=audio_config
-    )
+    res = httpx.post("https://texttospeech.googleapis.com/v1/text:synthesize", json=body, headers=headers, timeout=30.0)
+    if res.status_code != 200:
+        detail = res.text
+        try:
+            detail = res.json().get("error", {}).get("message", res.text)
+        except Exception:
+            pass
+        err = RuntimeError(f"Google TTS API error {res.status_code}: {detail}")
+        setattr(err, "status_code", res.status_code)
+        raise err
 
+    data = res.json()
+    if "audioContent" not in data:
+        raise RuntimeError(f"Google TTS API response missing audioContent: {data}")
+
+    audio_bytes = base64.b64decode(data["audioContent"])
     out_path = out_dir / f"{index:04d}.mp3"
-    out_path.write_bytes(response.audio_content)
+    out_path.write_bytes(audio_bytes)
     logger.debug("Synthesized %d: %s → %s", index, text[:50], out_path.name)
     return out_path
 
 
 def list_google_voices(lang: str = "vi-VN", max_results: int = 100) -> List[dict]:
-    """List available Google TTS voices for a language (for the UI dropdown)."""
-    try:
-        from google.cloud import texttospeech
-    except ImportError:
-        raise ImportError("google-cloud-texttospeech not installed")
+    """List available Google TTS voices for a language (for the UI dropdown) using REST."""
+    token = _get_tts_client()
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    res = httpx.get(f"https://texttospeech.googleapis.com/v1/voices?languageCode={lang}", headers=headers, timeout=30.0)
+    if res.status_code != 200:
+        detail = res.text
+        try:
+            detail = res.json().get("error", {}).get("message", res.text)
+        except Exception:
+            pass
+        raise RuntimeError(f"Google TTS API error {res.status_code}: {detail}")
 
-    client = _get_tts_client()
-    response = client.list_voices(language_code=lang)
+    data = res.json()
     voices = []
-    for v in response.voices:
+    for v in data.get("voices", []):
+        name = v.get("name", "")
+        language_codes = v.get("languageCodes", [])
+        gender = v.get("ssmlGender", "")
         voices.append({
-            "voice_type": v.name,
-            "display_name": f"{v.name}",
-            "language_codes": list(v.language_codes or []),
-            "gender": v.ssml_gender.name if v.ssml_gender else "",
+            "voice_type": name,
+            "display_name": name,
+            "language_codes": language_codes,
+            "gender": gender,
         })
-    # Google sorts by code; prefer the requested language first, keep stable.
     voices.sort(key=lambda x: (x["voice_type"]))
     return voices[:max_results]
 
 
 def synthesize_preview(voice_name: str, text: str, out_path: Path) -> Path:
-    """Synthesize a short preview MP3 for a voice (one-shot, no file reuse)."""
-    try:
-        from google.cloud import texttospeech
-    except ImportError:
-        raise ImportError("google-cloud-texttospeech not installed")
-
+    """Synthesize a short preview MP3 for a voice using REST."""
     if not voice_name:
         raise ValueError("Chưa chọn giọng.")
 
-    client = _get_tts_client()
-    synthesis_input = texttospeech.SynthesisInput(text=text)
-    voice = texttospeech.VoiceSelectionParams(
-        language_code="vi-VN",
-        name=voice_name,
-        ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
-    )
-    audio_config = texttospeech.AudioConfig(
-        audio_encoding=texttospeech.AudioEncoding.MP3,
-        speaking_rate=1.0,
-        pitch=0.0,
-    )
-    response = client.synthesize_speech(
-        input=synthesis_input, voice=voice, audio_config=audio_config
-    )
-    out_path.write_bytes(response.audio_content)
+    token = _get_tts_client()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    body = {
+        "input": {"text": text},
+        "voice": {
+            "languageCode": "vi-VN",
+            "name": voice_name,
+        },
+        "audioConfig": {
+            "audioEncoding": "MP3",
+            "speakingRate": 1.0,
+            "pitch": 0.0
+        }
+    }
+
+    res = httpx.post("https://texttospeech.googleapis.com/v1/text:synthesize", json=body, headers=headers, timeout=30.0)
+    if res.status_code != 200:
+        detail = res.text
+        try:
+            detail = res.json().get("error", {}).get("message", res.text)
+        except Exception:
+            pass
+        raise RuntimeError(f"Google TTS API error {res.status_code}: {detail}")
+
+    data = res.json()
+    audio_bytes = base64.b64decode(data["audioContent"])
+    out_path.write_bytes(audio_bytes)
     logger.info("Google TTS preview %s → %s", voice_name, out_path.name)
     return out_path
 

@@ -35,8 +35,6 @@
       "../frontend/.next-prod": "frontend/.next/standalone",
       "../backend/dist/backend": "backend",
       "../capcut-tts-api/dist/capcut-tts-api": "capcut-tts-api",
-      "../ds2api/ds2api": "ds2api/ds2api",
-      "../ds2api/config.example.json": "ds2api/config.example.json",
       "../youtubeuploader/client_secrets.json": "youtubeuploader.client_secrets.json"
     },
     "icon": [

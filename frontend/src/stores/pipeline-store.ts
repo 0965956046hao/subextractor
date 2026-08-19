@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import type {
   Region,
   SubtitleStyle,
@@ -631,7 +631,8 @@ export const usePipelineStore = create<PipelineState>()(
               fixing: false,
             },
           });
-          if (s.videoId) reportTimelineAction(s.videoId, "continue").catch(() => {});
+          if (s.videoId)
+            reportTimelineAction(s.videoId, "continue").catch(() => {});
         }
         const resolve = timelineCheckWaiters.get(id);
         if (resolve) {
@@ -888,7 +889,12 @@ async function pollRemoteVideo(id: string, videoId: string) {
       const tc = row.pipeline?.timeline_check;
       if (tc?.waiting) {
         patch(id, {
-          timelineCheck: { waiting: true, open: !!tc.open, issues: tc.issues ?? [], fixing: !!tc.fixing },
+          timelineCheck: {
+            waiting: true,
+            open: !!tc.open,
+            issues: tc.issues ?? [],
+            fixing: !!tc.fixing,
+          },
         });
       } else if (cur.timelineCheck) {
         patch(id, { timelineCheck: null });
@@ -991,7 +997,11 @@ function rejectTimelineCheck(id: string) {
 // Watches the backend for a timeline-review decision made from another
 // tab/browser, so a remote "Tiếp tục xử lý" / "Sửa timeline" can unblock the
 // driving tab's runner. Also mirrors "open" so the big modal expands everywhere.
-function pollBackendTimelineDecision(videoId: string, id: string, signal: AbortSignal): Promise<"fix" | "continue"> {
+function pollBackendTimelineDecision(
+  videoId: string,
+  id: string,
+  signal: AbortSignal,
+): Promise<"fix" | "continue"> {
   return new Promise((resolve) => {
     const step = async () => {
       if (signal.aborted) return;
@@ -1003,7 +1013,9 @@ function pollBackendTimelineDecision(videoId: string, id: string, signal: AbortS
           return;
         }
         if (tc?.open) {
-          const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+          const cur = usePipelineStore
+            .getState()
+            .pipelines.find((x) => x.id === id);
           if (cur?.timelineCheck && !cur.timelineCheck.open) {
             patch(id, { timelineCheck: { ...cur.timelineCheck, open: true } });
           }
@@ -1678,10 +1690,15 @@ async function runPipeline(id: string, startStep = 4) {
             headers: JSON_HEADERS,
           });
           const fixData = await fixRes.json();
-          if (!fixRes.ok) throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
-          const fixes: { index: number; from: string; to: string }[] = fixData.fixes ?? [];
+          if (!fixRes.ok)
+            throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
+          const fixes: { index: number; from: string; to: string }[] =
+            fixData.fixes ?? [];
           if (fixes.length > 0) {
-            appendLog(id, `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`);
+            appendLog(
+              id,
+              `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`,
+            );
             for (const f of fixes) {
               appendLog(id, `  #${f.index}: ${f.from}  →  ${f.to}`);
             }
@@ -1689,7 +1706,10 @@ async function runPipeline(id: string, startStep = 4) {
             appendLog(id, "Không phát hiện dòng nào chồng lấn — SRT hợp lệ.");
           }
         } catch (e) {
-          appendLog(id, `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`);
+          appendLog(
+            id,
+            `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`,
+          );
         }
 
         // Optional: always pause for the user to review the translated SRT in the

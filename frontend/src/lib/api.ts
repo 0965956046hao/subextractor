@@ -14,20 +14,21 @@ api.interceptors.response.use(
       error.message ||
       "An unexpected error occurred";
     return Promise.reject(new Error(msg));
-  }
+  },
 );
 
 export async function uploadVideo(
   file: File,
   onProgress?: (pct: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<string> {
   const form = new FormData();
   form.append("file", file);
   const res = await api.post<{ video_id: string }>("/upload", form, {
     headers: { "Content-Type": "multipart/form-data" },
     onUploadProgress: (e) => {
-      if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
+      if (onProgress && e.total)
+        onProgress(Math.round((e.loaded * 100) / e.total));
     },
     signal,
   });
@@ -42,7 +43,13 @@ export function getFrameUrl(videoId: string): string {
   return `/api/frame/${videoId}`;
 }
 
-export type VideoStatus = "uploaded" | "queued" | "processing" | "done" | "error" | "cancelled";
+export type VideoStatus =
+  | "uploaded"
+  | "queued"
+  | "processing"
+  | "done"
+  | "error"
+  | "cancelled";
 
 export interface PipelineTimelineCheck {
   waiting: boolean;
@@ -83,11 +90,16 @@ export async function listVideos(): Promise<VideoMeta[]> {
   return res.data.videos;
 }
 
-export async function reportPipelineState(videoId: string, state: PipelineProgress): Promise<void> {
+export async function reportPipelineState(
+  videoId: string,
+  state: PipelineProgress,
+): Promise<void> {
   await api.post(`/pipeline/${videoId}`, state);
 }
 
-export async function getPipelineState(videoId: string): Promise<PipelineProgress> {
+export async function getPipelineState(
+  videoId: string,
+): Promise<PipelineProgress> {
   const res = await api.get<PipelineProgress>(`/pipeline/${videoId}`);
   return res.data;
 }
@@ -95,7 +107,7 @@ export async function getPipelineState(videoId: string): Promise<PipelineProgres
 export async function reportTimelineAction(
   videoId: string,
   action: "wait" | "open" | "close" | "continue" | "fix",
-  issues: TimelineIssue[] = []
+  issues: TimelineIssue[] = [],
 ): Promise<void> {
   await api.post(`/pipeline/${videoId}/timeline`, { action, issues });
 }
@@ -146,12 +158,12 @@ export async function startProcess(
   region: Region,
   lang: OcrLang = "ch",
   ocrType: OcrType = "apple",
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<JobStatus> {
   const res = await api.post<JobStatus>(
     "/process",
     { video_id: videoId, region, lang, ocr_type: ocrType },
-    { signal }
+    { signal },
   );
   return res.data;
 }
@@ -170,7 +182,10 @@ export function createWsUrl(jobId: string): string {
   return `${proto}//${window.location.host}/api/ws/${jobId}`;
 }
 
-export function getDownloadUrl(videoId: string, format: "srt" | "txt" = "srt"): string {
+export function getDownloadUrl(
+  videoId: string,
+  format: "srt" | "txt" = "srt",
+): string {
   return `/api/download/${videoId}?format=${format}`;
 }
 
@@ -193,7 +208,10 @@ export async function getSrtEntries(videoId: string): Promise<SrtEntry[]> {
   return res.data.entries;
 }
 
-export async function updateSrt(videoId: string, content: string): Promise<void> {
+export async function updateSrt(
+  videoId: string,
+  content: string,
+): Promise<void> {
   await api.put(`/srt/${videoId}`, { content });
 }
 
@@ -214,20 +232,22 @@ export interface TimelineFix {
 }
 
 export async function validateSrtTimeline(
-  videoId: string
+  videoId: string,
 ): Promise<{ issues: TimelineIssue[]; count: number }> {
   const res = await api.get<{ issues: TimelineIssue[]; count: number }>(
-    `/srt/${videoId}/validate`
+    `/srt/${videoId}/validate`,
   );
   return res.data;
 }
 
 export async function fixSrtTimeline(
-  videoId: string
+  videoId: string,
 ): Promise<{ entries: SrtEntry[]; fixes: TimelineFix[]; count: number }> {
-  const res = await api.post<{ entries: SrtEntry[]; fixes: TimelineFix[]; count: number }>(
-    `/srt/${videoId}/fix-timeline`
-  );
+  const res = await api.post<{
+    entries: SrtEntry[];
+    fixes: TimelineFix[];
+    count: number;
+  }>(`/srt/${videoId}/fix-timeline`);
   return res.data;
 }
 
@@ -243,17 +263,23 @@ export type SubtitleRiskProblem =
   | "TIMELINE_OVERLAP"
   | "ADJACENT_SIMILAR";
 
-export async function startSrtRiskCheck(videoId: string, lang = "vi"): Promise<{ job_id: string }> {
-  const res = await api.post<{ job_id: string }>(`/srt/${videoId}/risk-check`, { lang });
+export async function startSrtRiskCheck(
+  videoId: string,
+  lang = "vi",
+): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>(`/srt/${videoId}/risk-check`, {
+    lang,
+  });
   return res.data;
 }
 
 export async function getSrtRiskResult(
-  videoId: string
+  videoId: string,
 ): Promise<{ risks: SubtitleRisk[]; checked_at?: number | null }> {
-  const res = await api.get<{ risks: SubtitleRisk[]; checked_at?: number | null }>(
-    `/srt/${videoId}/risk-check`
-  );
+  const res = await api.get<{
+    risks: SubtitleRisk[];
+    checked_at?: number | null;
+  }>(`/srt/${videoId}/risk-check`);
   return res.data;
 }
 
@@ -354,24 +380,29 @@ export async function getProfilesConfig(): Promise<ProfilesConfigResponse> {
 }
 
 export async function saveProfilesConfig(
-  cfg: ProfileConfig
+  cfg: ProfileConfig,
 ): Promise<{ status: string; config: ProfileConfig }> {
   const res = await api.post<{ status: string; config: ProfileConfig }>(
     "/profiles/config",
-    cfg
+    cfg,
   );
   return res.data;
 }
 
 export async function douyinLogin(): Promise<{ status: string; mode: string }> {
   const res = await api.post<{ status: string; mode: string }>(
-    "/video-download/login"
+    "/video-download/login",
   );
   return res.data;
 }
 
-export async function chatgptLogin(): Promise<{ status: string; mode: string }> {
-  const res = await api.post<{ status: string; mode: string }>("/chatgpt/login");
+export async function chatgptLogin(): Promise<{
+  status: string;
+  mode: string;
+}> {
+  const res = await api.post<{ status: string; mode: string }>(
+    "/chatgpt/login",
+  );
   return res.data;
 }
 
@@ -384,34 +415,49 @@ export interface CapCutVoice {
 }
 
 export async function getCapCutVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
-  const res = await api.get<CapCutVoice[]>("/capcut/voices", { params: { lang } });
+  const res = await api.get<CapCutVoice[]>("/capcut/voices", {
+    params: { lang },
+  });
   return res.data;
 }
 
-export async function capCutPreview(voice: string, text?: string): Promise<Blob> {
+export async function capCutPreview(
+  voice: string,
+  text?: string,
+): Promise<Blob> {
   const res = await api.post<Blob>(
     "/capcut/preview",
     { voice, text },
-    { responseType: "blob" }
+    { responseType: "blob" },
   );
   return res.data;
 }
 
-export async function getGoogleTtsVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
-  const res = await api.get<CapCutVoice[]>("/google-tts/voices", { params: { lang } });
+export async function getGoogleTtsVoices(
+  lang = "vi-VN",
+): Promise<CapCutVoice[]> {
+  const res = await api.get<CapCutVoice[]>("/google-tts/voices", {
+    params: { lang },
+  });
   return res.data;
 }
 
-export async function googleTtsPreview(voice: string, text?: string): Promise<Blob> {
+export async function googleTtsPreview(
+  voice: string,
+  text?: string,
+): Promise<Blob> {
   const res = await api.post<Blob>(
     "/google-tts/preview",
     { voice, text },
-    { responseType: "blob" }
+    { responseType: "blob" },
   );
   return res.data;
 }
 
-export async function clearTempData(): Promise<{ cleared: boolean; subdirs_wiped: number }> {
+export async function clearTempData(): Promise<{
+  cleared: boolean;
+  subdirs_wiped: number;
+}> {
   const res = await api.post("/temp/clear");
   return res.data;
 }
@@ -479,14 +525,19 @@ export async function saveAppConfig(body: {
   return res.data;
 }
 
-export async function uploadWatermarkLogo(file: File): Promise<{ status: string; watermark_logo_name?: string }> {
+export async function uploadWatermarkLogo(
+  file: File,
+): Promise<{ status: string; watermark_logo_name?: string }> {
   const fd = new FormData();
   fd.append("file", file);
   const res = await api.post("/config/logo", fd);
   return res.data;
 }
 
-export async function deleteWatermarkLogo(): Promise<{ status: string; removed?: boolean }> {
+export async function deleteWatermarkLogo(): Promise<{
+  status: string;
+  removed?: boolean;
+}> {
   const res = await api.delete("/config/logo");
   return res.data;
 }
@@ -497,34 +548,51 @@ export function watermarkLogoUrl(): string {
 
 // ── Watermark presets (nhiều bộ text + logo) ──
 
-export async function createWatermarkPreset(body: { name: string; text: string }): Promise<{ status: string; preset_id?: string }> {
+export async function createWatermarkPreset(body: {
+  name: string;
+  text: string;
+}): Promise<{ status: string; preset_id?: string }> {
   const res = await api.post("/config/watermark/presets", body);
   return res.data;
 }
 
-export async function updateWatermarkPreset(presetId: string, body: { name?: string; text?: string }): Promise<{ status: string }> {
+export async function updateWatermarkPreset(
+  presetId: string,
+  body: { name?: string; text?: string },
+): Promise<{ status: string }> {
   const res = await api.put(`/config/watermark/presets/${presetId}`, body);
   return res.data;
 }
 
-export async function deleteWatermarkPreset(presetId: string): Promise<{ status: string; removed?: boolean }> {
+export async function deleteWatermarkPreset(
+  presetId: string,
+): Promise<{ status: string; removed?: boolean }> {
   const res = await api.delete(`/config/watermark/presets/${presetId}`);
   return res.data;
 }
 
-export async function setActiveWatermarkPreset(presetId: string): Promise<{ status: string }> {
-  const res = await api.post("/config/watermark/active", { preset_id: presetId });
+export async function setActiveWatermarkPreset(
+  presetId: string,
+): Promise<{ status: string }> {
+  const res = await api.post("/config/watermark/active", {
+    preset_id: presetId,
+  });
   return res.data;
 }
 
-export async function uploadPresetLogo(presetId: string, file: File): Promise<{ status: string; watermark_logo_name?: string }> {
+export async function uploadPresetLogo(
+  presetId: string,
+  file: File,
+): Promise<{ status: string; watermark_logo_name?: string }> {
   const fd = new FormData();
   fd.append("file", file);
   const res = await api.post(`/config/watermark/presets/${presetId}/logo`, fd);
   return res.data;
 }
 
-export async function deletePresetLogo(presetId: string): Promise<{ status: string; removed?: boolean }> {
+export async function deletePresetLogo(
+  presetId: string,
+): Promise<{ status: string; removed?: boolean }> {
   const res = await api.delete(`/config/watermark/presets/${presetId}/logo`);
   return res.data;
 }
@@ -547,7 +615,9 @@ export async function getYoutubeConfig(): Promise<YoutubeConfig> {
   return res.data;
 }
 
-export async function saveYoutubeSecrets(content: string): Promise<{ status: string; path?: string }> {
+export async function saveYoutubeSecrets(
+  content: string,
+): Promise<{ status: string; path?: string }> {
   const res = await api.post("/youtube/config", { content });
   return res.data;
 }

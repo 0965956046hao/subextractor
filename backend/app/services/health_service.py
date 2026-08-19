@@ -133,19 +133,39 @@ def check_tts() -> dict:
         }
 
     try:
-        from google.cloud import texttospeech
+        import httpx
         from google.oauth2 import service_account
+        import google.auth.transport.requests
 
-        creds = service_account.Credentials.from_service_account_info(parsed)
-        client = texttospeech.TextToSpeechClient(credentials=creds)
-        voices = client.list_voices(language_code="vi-VN")
-        count = len(voices.voices) if voices else 0
-        return {
-            "service": "tts",
-            "configured": True,
-            "healthy": True,
-            "message": f"Google TTS hoạt động ({count} giọng tiếng Việt)",
-        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+        creds = service_account.Credentials.from_service_account_info(parsed, scopes=scopes)
+        request = google.auth.transport.requests.Request()
+        creds.refresh(request)
+        token = creds.token
+
+        headers = {"Authorization": f"Bearer {token}"}
+        res = httpx.get("https://texttospeech.googleapis.com/v1/voices?languageCode=vi-VN", headers=headers, timeout=15.0)
+        if res.status_code == 200:
+            voices = res.json().get("voices", [])
+            count = len(voices)
+            return {
+                "service": "tts",
+                "configured": True,
+                "healthy": True,
+                "message": f"Google TTS hoạt động ({count} giọng tiếng Việt)",
+            }
+        else:
+            detail = res.text
+            try:
+                detail = res.json().get("error", {}).get("message", res.text)
+            except Exception:
+                pass
+            return {
+                "service": "tts",
+                "configured": True,
+                "healthy": False,
+                "message": f"Google TTS API trả về lỗi {res.status_code}: {detail}",
+            }
     except Exception as e:
         logger.warning("TTS health check failed: %s", e)
         return {

@@ -23,11 +23,12 @@ export async function POST(req: NextRequest) {
   }
 
   const url = (body.url || "").trim();
-  if (!url) return NextResponse.json({ detail: "URL is required" }, { status: 400 });
+  if (!url)
+    return NextResponse.json({ detail: "URL is required" }, { status: 400 });
 
   let handle: BrowserHandle;
   try {
-    handle = await openBrowser();
+    handle = await openBrowser({ headless: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
           `Không mở được Chrome: ${msg}. ` +
           "Đảm bảo Google Chrome đã cài, hoặc đang chạy với --remote-debugging-port=9222.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -115,7 +116,10 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     await closeBrowser(handle).catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ detail: `Không thể mở link: ${msg}` }, { status: 500 });
+    return NextResponse.json(
+      { detail: `Không thể mở link: ${msg}` },
+      { status: 500 },
+    );
   }
 
   await closeBrowser(handle).catch(() => {});
@@ -125,12 +129,11 @@ export async function POST(req: NextRequest) {
   if (all.length === 0) {
     return NextResponse.json(
       { detail: "Không tìm thấy URL video. Hãy đăng nhập Douyin rồi thử lại." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  const audioUrl =
-    all.find((u) => classifyTrack(u) === "audio") ?? null;
+  const audioUrl = all.find((u) => classifyTrack(u) === "audio") ?? null;
   const videoUrl =
     all.find((u) => classifyTrack(u) === "video") ?? all[0] ?? null;
 

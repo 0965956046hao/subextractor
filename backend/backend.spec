@@ -1,11 +1,11 @@
+# -*- mode: python ; coding: utf-8 -*-
 import os
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
 hiddenimports = []
-hiddenimports += collect_submodules("service")
-hiddenimports += collect_submodules("capcut_tts_api")
+hiddenimports += collect_submodules("app")
 hiddenimports += [
     "uvicorn.logging",
     "uvicorn.loops",
@@ -20,21 +20,32 @@ hiddenimports += [
     "uvicorn.lifespan.on",
 ]
 
+datas = []
+datas += collect_data_files("rapidocr")
+
 a = Analysis(
     ["entry.py"],
     pathex=[os.path.abspath(".")],
     binaries=[],
-    datas=[
-        (os.path.join(os.path.abspath("."), "Voice.json"), "."),
-    ],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "torch", "demucs"],
+    excludes=[
+        "tkinter", "scipy", "pandas", "matplotlib", "notebook", "IPython",
+        "grpc", "grpcio", "google.cloud", "sqlite3", "unittest", "test",
+        "pydoc", "ensurepip"
+    ],
     noarchive=False,
     optimize=0,
 )
+
+# Dylib dedup happens in build-backend.sh: PyInstaller collects FFmpeg dylibs
+# both in a.binaries (root _internal, where @rpath resolves) and as package
+# data (cv2/.dylibs etc). build-backend.sh promotes the root symlinks to real
+# files and drops the redundant .dylibs copies so the Tauri bundler doesn't
+# re-materialize them.
 
 pyz = PYZ(a.pure)
 
@@ -43,7 +54,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="capcut-tts-api",
+    name="backend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -63,5 +74,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="capcut-tts-api",
+    name="backend",
 )

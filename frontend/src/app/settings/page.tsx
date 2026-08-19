@@ -3,12 +3,35 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
-import { getAppConfig, saveAppConfig, getPipelineHealth, getProfilesConfig, douyinLogin, chatgptLogin, createWatermarkPreset, updateWatermarkPreset, deleteWatermarkPreset, setActiveWatermarkPreset, uploadPresetLogo, deletePresetLogo, presetLogoUrl, getYoutubeConfig, saveYoutubeSecrets } from "@/lib/api";
+import {
+  getAppConfig,
+  saveAppConfig,
+  getPipelineHealth,
+  getProfilesConfig,
+  douyinLogin,
+  chatgptLogin,
+  createWatermarkPreset,
+  updateWatermarkPreset,
+  deleteWatermarkPreset,
+  setActiveWatermarkPreset,
+  uploadPresetLogo,
+  deletePresetLogo,
+  presetLogoUrl,
+  getYoutubeConfig,
+  saveYoutubeSecrets,
+} from "@/lib/api";
 import type { SubtitleStyle, WatermarkPreset, ProfilesCheck } from "@/lib/api";
 import type { PipelineHealth, YoutubeConfig } from "@/lib/api";
 import { useI18n, type Dict } from "@/lib/i18n";
 
-const FONT_OPTIONS = ["Arial", "Helvetica", "Verdana", "Times New Roman", "Courier New", "Georgia"];
+const FONT_OPTIONS = [
+  "Arial",
+  "Helvetica",
+  "Verdana",
+  "Times New Roman",
+  "Courier New",
+  "Georgia",
+];
 
 const STYLE_KEYS: Record<string, keyof Dict> = {
   font_family: "style.fontFamily",
@@ -149,7 +172,13 @@ function PreviewBadge({ style }: { style: SubtitleStyle }) {
   const italic = style.italic ? "italic" : "";
   return (
     <div className="relative h-40 rounded-xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 overflow-hidden">
-      <div className="absolute inset-0 opacity-30" style={{ background: "repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0 2px, transparent 2px 24px)" }} />
+      <div
+        className="absolute inset-0 opacity-30"
+        style={{
+          background:
+            "repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0 2px, transparent 2px 24px)",
+        }}
+      />
       <div className="absolute inset-0 flex items-end justify-center pb-8 px-6">
         <span
           className={`px-4 py-2 text-2xl tracking-tight ${weight} ${italic}`}
@@ -159,7 +188,10 @@ function PreviewBadge({ style }: { style: SubtitleStyle }) {
               ? `rgba(${hexToRgb(style.box_color)}, ${opacity})`
               : "transparent",
             borderRadius: radius,
-            border: borderW > 0 ? `${borderW}px solid ${style.box_border_color}` : "none",
+            border:
+              borderW > 0
+                ? `${borderW}px solid ${style.box_border_color}`
+                : "none",
             WebkitTextStroke:
               style.outline_width > 0
                 ? `${style.outline_width}px ${style.outline_color}`
@@ -169,14 +201,22 @@ function PreviewBadge({ style }: { style: SubtitleStyle }) {
           {t("settings.style.hello")}
         </span>
       </div>
-      <span className="absolute top-2 right-2 text-[10px] font-mono text-white/40">{t("settings.style.preview")}</span>
+      <span className="absolute top-2 right-2 text-[10px] font-mono text-white/40">
+        {t("settings.style.preview")}
+      </span>
     </div>
   );
 }
 
 function hexToRgb(hex: string): string {
   const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h;
   const n = parseInt(full.slice(0, 6), 16);
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
@@ -191,8 +231,12 @@ export default function SettingsPage() {
   const [hasTts, setHasTts] = useState(false);
   const [falKey, setFalKey] = useState("");
   const [hasFal, setHasFal] = useState(false);
-  const [profileStatus, setProfileStatus] = useState<ProfilesCheck | null>(null);
-  const [profileBusy, setProfileBusy] = useState<"douyin" | "chatgpt" | null>(null);
+  const [profileStatus, setProfileStatus] = useState<ProfilesCheck | null>(
+    null,
+  );
+  const [profileBusy, setProfileBusy] = useState<"douyin" | "chatgpt" | null>(
+    null,
+  );
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [health, setHealth] = useState<PipelineHealth | null>(null);
@@ -220,7 +264,13 @@ export default function SettingsPage() {
         ]);
         setHasGemini(cfg.has_gemini_key);
         setHasTts(cfg.has_tts_credentials);
-        setGeminiKeys(cfg.gemini_api_keys?.length ? cfg.gemini_api_keys : cfg.gemini_api_key ? [cfg.gemini_api_key] : []);
+        setGeminiKeys(
+          cfg.gemini_api_keys?.length
+            ? cfg.gemini_api_keys
+            : cfg.gemini_api_key
+              ? [cfg.gemini_api_key]
+              : [],
+        );
         setTtsJson(cfg.google_tts_credentials || "");
         setTtsInfo(cfg.tts_credentials_info || "");
         setFalKey(cfg.fal_key || "");
@@ -242,7 +292,8 @@ export default function SettingsPage() {
     })();
   }, []);
 
-  const set = (patch: Partial<SubtitleStyle>) => setStyle((s) => ({ ...s, ...patch }));
+  const set = (patch: Partial<SubtitleStyle>) =>
+    setStyle((s) => ({ ...s, ...patch }));
 
   const handleSave = async () => {
     setStatus(t("btn.saving"));
@@ -267,7 +318,13 @@ export default function SettingsPage() {
       ]);
       setHasGemini(cfg.has_gemini_key);
       setHasTts(cfg.has_tts_credentials);
-      setGeminiKeys(cfg.gemini_api_keys?.length ? cfg.gemini_api_keys : cfg.gemini_api_key ? [cfg.gemini_api_key] : []);
+      setGeminiKeys(
+        cfg.gemini_api_keys?.length
+          ? cfg.gemini_api_keys
+          : cfg.gemini_api_key
+            ? [cfg.gemini_api_key]
+            : [],
+      );
       setTtsJson(cfg.google_tts_credentials || "");
       setTtsInfo(cfg.tts_credentials_info || "");
       setFalKey(cfg.fal_key || "");
@@ -306,7 +363,7 @@ export default function SettingsPage() {
       setStatus(
         svc === "douyin"
           ? t("settings.profile.openedDouyin")
-          : t("settings.profile.openedChatgpt")
+          : t("settings.profile.openedChatgpt"),
       );
       setTimeout(() => setStatus(""), 4000);
     } catch (e) {
@@ -377,7 +434,10 @@ export default function SettingsPage() {
   const handleRenamePreset = async (id: string, name: string, text: string) => {
     setError("");
     try {
-      await updateWatermarkPreset(id, { name: name.trim() || undefined, text: text.trim() });
+      await updateWatermarkPreset(id, {
+        name: name.trim() || undefined,
+        text: text.trim(),
+      });
       setEditingPreset(null);
       await reloadPresets();
       setStatus(t("settings.wm.updated"));
@@ -438,17 +498,33 @@ export default function SettingsPage() {
     <main className="min-h-[100dvh] max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
       <AnimatedBlock delay={0}>
         <div className="flex items-center justify-between gap-4 flex-wrap mb-10">
-          <Link href="/" className="btn-island-secondary group !px-5 !py-2 text-[13px]">
+          <Link
+            href="/"
+            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
+          >
             <span className="btn-island-icon !w-7 !h-7">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 12H5" /><path d="M11 18l-6-6 6-6" />
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M19 12H5" />
+                <path d="M11 18l-6-6 6-6" />
               </svg>
             </span>
             <span className="tracking-tight">{t("back.library")}</span>
           </Link>
           {health && (
-            <span className={`tag ${health.healthy ? "!bg-emerald-500/10 !text-emerald-700" : "!bg-amber-500/10 !text-amber-700"}`}>
-              {health.healthy ? t("settings.health.ready") : t("settings.health.needConfig")}
+            <span
+              className={`tag ${health.healthy ? "!bg-emerald-500/10 !text-emerald-700" : "!bg-amber-500/10 !text-amber-700"}`}
+            >
+              {health.healthy
+                ? t("settings.health.ready")
+                : t("settings.health.needConfig")}
             </span>
           )}
         </div>
@@ -478,7 +554,9 @@ export default function SettingsPage() {
                 {t("settings.gemini.title")}
               </p>
               <span className="tag">
-                {geminiKeys.length > 0 ? t("settings.gemini.count", { count: geminiKeys.length }) : t("status.noKey")}
+                {geminiKeys.length > 0
+                  ? t("settings.gemini.count", { count: geminiKeys.length })
+                  : t("status.noKey")}
               </span>
             </div>
             <p className="text-[11px] text-ink-light mb-4">
@@ -563,9 +641,13 @@ export default function SettingsPage() {
                 <>
                   {t("status.configured")}{" "}
                   {ttsInfo && (
-                    <span className="font-mono text-emerald-700">{ttsInfo}</span>
+                    <span className="font-mono text-emerald-700">
+                      {ttsInfo}
+                    </span>
                   )}{" "}
-                  <span className="text-ink-light">{t("settings.tts.editHint")}</span>
+                  <span className="text-ink-light">
+                    {t("settings.tts.editHint")}
+                  </span>
                 </>
               ) : (
                 <>
@@ -631,7 +713,9 @@ export default function SettingsPage() {
                 type="password"
                 value={falKey}
                 onChange={(e) => setFalKey(e.target.value)}
-                placeholder={hasFal ? t("settings.fal.pasteNew") : t("settings.fal.paste")}
+                placeholder={
+                  hasFal ? t("settings.fal.pasteNew") : t("settings.fal.paste")
+                }
                 className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
               />
               <button
@@ -683,12 +767,16 @@ export default function SettingsPage() {
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-[13px] font-medium text-ink">{label}</span>
+                        <span className="text-[13px] font-medium text-ink">
+                          {label}
+                        </span>
                         {status && (
                           <span
                             className={`text-[11px] font-medium ${status.exists ? "text-emerald-700" : "text-amber-700"}`}
                           >
-                            {status.exists ? t("settings.profile.exists") : t("settings.profile.missing")}
+                            {status.exists
+                              ? t("settings.profile.exists")
+                              : t("settings.profile.missing")}
                           </span>
                         )}
                       </div>
@@ -705,7 +793,9 @@ export default function SettingsPage() {
                       className="btn-island-primary group text-[12px] !px-4 !py-2 whitespace-nowrap disabled:opacity-50"
                     >
                       <span className="tracking-tight">
-                        {busy ? t("settings.profile.opening") : t("settings.profile.open", { label })}
+                        {busy
+                          ? t("settings.profile.opening")
+                          : t("settings.profile.open", { label })}
                       </span>
                     </button>
                   </div>
@@ -736,19 +826,30 @@ export default function SettingsPage() {
                 {t("settings.youtube.console")}
               </a>{" "}
               {t("settings.youtube.steps")}
-              <span className="font-mono text-ink">http://localhost:8080/oauth2callback</span>
+              <span className="font-mono text-ink">
+                http://localhost:8080/oauth2callback
+              </span>
             </p>
 
             <div className="mb-4 space-y-1.5">
-              {([
-                ["client_secrets.json", youtube?.has_client_secrets],
-                ["request.token (OAuth)", youtube?.has_request_token],
-                ["youtubeuploader binary", youtube?.has_binary],
-              ] as const).map(([label, ok]) => (
-                <div key={label} className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-2.5">
+              {(
+                [
+                  ["client_secrets.json", youtube?.has_client_secrets],
+                  ["request.token (OAuth)", youtube?.has_request_token],
+                  ["youtubeuploader binary", youtube?.has_binary],
+                ] as const
+              ).map(([label, ok]) => (
+                <div
+                  key={label}
+                  className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-2.5"
+                >
                   <span className="text-[12px] text-ink-muted">{label}</span>
-                  <span className={`text-[11px] font-medium ${ok ? "text-emerald-700" : "text-amber-700"}`}>
-                    {ok ? t("settings.youtube.ready") : t("settings.youtube.missing")}
+                  <span
+                    className={`text-[11px] font-medium ${ok ? "text-emerald-700" : "text-amber-700"}`}
+                  >
+                    {ok
+                      ? t("settings.youtube.ready")
+                      : t("settings.youtube.missing")}
                   </span>
                 </div>
               ))}
@@ -773,7 +874,9 @@ export default function SettingsPage() {
                 disabled={youtubeBusy}
                 className="btn-island-primary group text-[12px] !px-5 !py-2 disabled:opacity-50"
               >
-                <span className="tracking-tight">{youtubeBusy ? t("btn.saving") : t("settings.youtube.save")}</span>
+                <span className="tracking-tight">
+                  {youtubeBusy ? t("btn.saving") : t("settings.youtube.save")}
+                </span>
               </button>
               {youtube?.has_client_secrets && !youtube.has_request_token && (
                 <span className="text-[11px] text-ink-light">
@@ -801,40 +904,114 @@ export default function SettingsPage() {
 
             <div className="space-y-5">
               <label className="flex items-center justify-between gap-3">
-                <span className="text-[12px] text-ink-muted">{t("style.fontFamily")}</span>
+                <span className="text-[12px] text-ink-muted">
+                  {t("style.fontFamily")}
+                </span>
                 <select
                   value={style.font_family}
                   onChange={(e) => set({ font_family: e.target.value })}
                   className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
                   {FONT_OPTIONS.map((f) => (
-                    <option key={f} value={f}>{f}</option>
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
                   ))}
                 </select>
               </label>
 
-              <SliderField label={t("style.fontSize")} value={style.font_size} min={16} max={96} suffix="px" onChange={(v) => set({ font_size: v })} />
-              <ColorField label={t("style.textColor")} value={style.text_color} onChange={(v) => set({ text_color: v })} />
-              <ColorField label={t("style.outlineColor")} value={style.outline_color} onChange={(v) => set({ outline_color: v })} />
-              <SliderField label={t("style.outlineWidth")} value={style.outline_width} min={0} max={8} suffix="px" onChange={(v) => set({ outline_width: v })} />
-              <ToggleField label={t("style.bold")} value={style.bold} onChange={(v) => set({ bold: v })} />
-              <ToggleField label={t("style.italic")} value={style.italic} onChange={(v) => set({ italic: v })} />
+              <SliderField
+                label={t("style.fontSize")}
+                value={style.font_size}
+                min={16}
+                max={96}
+                suffix="px"
+                onChange={(v) => set({ font_size: v })}
+              />
+              <ColorField
+                label={t("style.textColor")}
+                value={style.text_color}
+                onChange={(v) => set({ text_color: v })}
+              />
+              <ColorField
+                label={t("style.outlineColor")}
+                value={style.outline_color}
+                onChange={(v) => set({ outline_color: v })}
+              />
+              <SliderField
+                label={t("style.outlineWidth")}
+                value={style.outline_width}
+                min={0}
+                max={8}
+                suffix="px"
+                onChange={(v) => set({ outline_width: v })}
+              />
+              <ToggleField
+                label={t("style.bold")}
+                value={style.bold}
+                onChange={(v) => set({ bold: v })}
+              />
+              <ToggleField
+                label={t("style.italic")}
+                value={style.italic}
+                onChange={(v) => set({ italic: v })}
+              />
 
               <div className="border-t border-black/[0.05] pt-5 space-y-5">
-                <ToggleField label={t("style.boxEnabled")} value={style.box_enabled} onChange={(v) => set({ box_enabled: v })} />
+                <ToggleField
+                  label={t("style.boxEnabled")}
+                  value={style.box_enabled}
+                  onChange={(v) => set({ box_enabled: v })}
+                />
                 {style.box_enabled && (
                   <div className="space-y-5">
-                    <ColorField label={t("style.boxColor")} value={style.box_color} onChange={(v) => set({ box_color: v })} />
-                    <SliderField label={t("style.boxOpacity")} value={style.box_opacity} min={0} max={255} suffix="" onChange={(v) => set({ box_opacity: v })} />
-                    <SliderField label={t("style.boxRadius")} value={style.box_radius} min={0} max={60} suffix="px" onChange={(v) => set({ box_radius: v })} />
-                    <ColorField label={t("style.boxBorderColor")} value={style.box_border_color} onChange={(v) => set({ box_border_color: v })} />
-                    <SliderField label={t("style.boxBorderWidth")} value={style.box_border_width} min={0} max={8} suffix="px" onChange={(v) => set({ box_border_width: v })} />
+                    <ColorField
+                      label={t("style.boxColor")}
+                      value={style.box_color}
+                      onChange={(v) => set({ box_color: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxOpacity")}
+                      value={style.box_opacity}
+                      min={0}
+                      max={255}
+                      suffix=""
+                      onChange={(v) => set({ box_opacity: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxRadius")}
+                      value={style.box_radius}
+                      min={0}
+                      max={60}
+                      suffix="px"
+                      onChange={(v) => set({ box_radius: v })}
+                    />
+                    <ColorField
+                      label={t("style.boxBorderColor")}
+                      value={style.box_border_color}
+                      onChange={(v) => set({ box_border_color: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxBorderWidth")}
+                      value={style.box_border_width}
+                      min={0}
+                      max={8}
+                      suffix="px"
+                      onChange={(v) => set({ box_border_width: v })}
+                    />
                   </div>
                 )}
               </div>
 
               <div className="pt-2">
-                <SliderField label={t("style.marginV")} value={style.margin_v} min={0} max={200} suffix="px" onChange={(v) => set({ margin_v: v })} />
+                <SliderField
+                  label={t("style.marginV")}
+                  value={style.margin_v}
+                  min={0}
+                  max={200}
+                  suffix="px"
+                  onChange={(v) => set({ margin_v: v })}
+                />
               </div>
             </div>
           </div>
@@ -854,7 +1031,10 @@ export default function SettingsPage() {
             {presets.map((p) => {
               const isActive = p.id === activePreset;
               return (
-                <div key={p.id} className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-blue-500/40 bg-blue-500/[0.03]" : "ring-black/[0.06] bg-white/50"}`}>
+                <div
+                  key={p.id}
+                  className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-blue-500/40 bg-blue-500/[0.03]" : "ring-black/[0.06] bg-white/50"}`}
+                >
                   <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-2 min-w-0">
                       {isActive && (
@@ -862,14 +1042,20 @@ export default function SettingsPage() {
                           {t("settings.wm.active")}
                         </span>
                       )}
-                      <span className="text-[13px] font-medium text-ink truncate">{p.name}</span>
+                      <span className="text-[13px] font-medium text-ink truncate">
+                        {p.name}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button
-                        onClick={() => setEditingPreset(editingPreset === p.id ? null : p.id)}
+                        onClick={() =>
+                          setEditingPreset(editingPreset === p.id ? null : p.id)
+                        }
                         className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
                       >
-                        {editingPreset === p.id ? t("settings.wm.close") : t("settings.wm.edit")}
+                        {editingPreset === p.id
+                          ? t("settings.wm.close")
+                          : t("settings.wm.edit")}
                       </button>
                       {!isActive && (
                         <button
@@ -892,7 +1078,9 @@ export default function SettingsPage() {
                   {editingPreset === p.id && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                       <div>
-                        <p className="text-[11px] text-ink-muted mb-1.5">{t("settings.wm.name")}</p>
+                        <p className="text-[11px] text-ink-muted mb-1.5">
+                          {t("settings.wm.name")}
+                        </p>
                         <input
                           type="text"
                           defaultValue={p.name}
@@ -902,7 +1090,9 @@ export default function SettingsPage() {
                         />
                       </div>
                       <div>
-                        <p className="text-[11px] text-ink-muted mb-1.5">{t("settings.wm.text")}</p>
+                        <p className="text-[11px] text-ink-muted mb-1.5">
+                          {t("settings.wm.text")}
+                        </p>
                         <input
                           type="text"
                           defaultValue={p.text}
@@ -918,11 +1108,17 @@ export default function SettingsPage() {
                     {p.has_logo ? (
                       <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-black/[0.08] bg-white flex items-center justify-center shrink-0">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={`${presetLogoUrl(p.id)}?t=${Date.now()}`} alt="Logo" className="max-w-full max-h-full object-contain" />
+                        <img
+                          src={`${presetLogoUrl(p.id)}?t=${Date.now()}`}
+                          alt="Logo"
+                          className="max-w-full max-h-full object-contain"
+                        />
                       </div>
                     ) : (
                       <div className="w-16 h-16 rounded-lg border border-dashed border-black/15 bg-white/60 flex items-center justify-center shrink-0">
-                        <span className="text-[9px] text-ink-light px-2 text-center leading-tight">{t("settings.wm.noLogo")}</span>
+                        <span className="text-[9px] text-ink-light px-2 text-center leading-tight">
+                          {t("settings.wm.noLogo")}
+                        </span>
                       </div>
                     )}
                     <div className="flex flex-col gap-1.5">
@@ -938,7 +1134,11 @@ export default function SettingsPage() {
                             e.target.value = "";
                           }}
                         />
-                        <span className="tracking-tight">{p.has_logo ? t("settings.wm.replaceLogo") : t("settings.wm.uploadLogo")}</span>
+                        <span className="tracking-tight">
+                          {p.has_logo
+                            ? t("settings.wm.replaceLogo")
+                            : t("settings.wm.uploadLogo")}
+                        </span>
                       </label>
                       {p.has_logo && (
                         <button
@@ -952,9 +1152,17 @@ export default function SettingsPage() {
                     {editingPreset === p.id && (
                       <button
                         onClick={() => {
-                          const nameEl = document.getElementById(`preset-name-${p.id}`) as HTMLInputElement | null;
-                          const textEl = document.getElementById(`preset-text-${p.id}`) as HTMLInputElement | null;
-                          handleRenamePreset(p.id, nameEl?.value ?? p.name, textEl?.value ?? p.text);
+                          const nameEl = document.getElementById(
+                            `preset-name-${p.id}`,
+                          ) as HTMLInputElement | null;
+                          const textEl = document.getElementById(
+                            `preset-text-${p.id}`,
+                          ) as HTMLInputElement | null;
+                          handleRenamePreset(
+                            p.id,
+                            nameEl?.value ?? p.name,
+                            textEl?.value ?? p.text,
+                          );
                         }}
                         className="btn-island-primary group !px-4 !py-1.5 text-[12px] ml-auto"
                       >
@@ -967,7 +1175,9 @@ export default function SettingsPage() {
             })}
 
             <div className="mt-5 pt-4 border-t border-black/[0.06]">
-              <p className="text-[12px] text-ink-muted mb-2">{t("settings.wm.addNew")}</p>
+              <p className="text-[12px] text-ink-muted mb-2">
+                {t("settings.wm.addNew")}
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input
                   type="text"
@@ -989,7 +1199,9 @@ export default function SettingsPage() {
                 disabled={presetBusy}
                 className="btn-island-primary group text-[12px] !px-5 !py-2 mt-3 disabled:opacity-50"
               >
-                <span className="tracking-tight">{presetBusy ? t("btn.saving") : t("settings.wm.add")}</span>
+                <span className="tracking-tight">
+                  {presetBusy ? t("btn.saving") : t("settings.wm.add")}
+                </span>
               </button>
             </div>
           </div>
@@ -1004,8 +1216,16 @@ export default function SettingsPage() {
           >
             <span className="tracking-tight">{t("settings.save")}</span>
           </button>
-          {status && <span className="text-[12px] text-emerald-700 font-medium">{status}</span>}
-          {loading && <span className="text-[12px] text-ink-light">{t("status.loading")}</span>}
+          {status && (
+            <span className="text-[12px] text-emerald-700 font-medium">
+              {status}
+            </span>
+          )}
+          {loading && (
+            <span className="text-[12px] text-ink-light">
+              {t("status.loading")}
+            </span>
+          )}
         </div>
       </AnimatedBlock>
     </main>

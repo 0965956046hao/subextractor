@@ -67,38 +67,6 @@ impl SidecarManager {
         self.spawn(cmd)
     }
 
-    pub fn spawn_ds2api(&self, base: &Path, data_dir: &Path) -> Result<(), String> {
-        let dir = resolve(base, "ds2api");
-        let bin = dir.join("ds2api");
-        if !bin.exists() {
-            let status = Command::new("go")
-                .args(["build", "-o", "ds2api", "./cmd/ds2api"])
-                .current_dir(&dir)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if !status.success() {
-                return Err("go build ds2api failed".into());
-            }
-        }
-
-        let cfg_dir = data_dir.join("ds2api");
-        std::fs::create_dir_all(&cfg_dir).map_err(|e| e.to_string())?;
-        let cfg_path = cfg_dir.join("config.json");
-        if !cfg_path.exists() {
-            let example = dir.join("config.example.json");
-            if example.exists() {
-                let _ = std::fs::copy(&example, &cfg_path);
-            }
-        }
-
-        let mut cmd = Command::new(&bin);
-        cmd.current_dir(&dir)
-            .env("PORT", "5001")
-            .env("DS2API_ADMIN_KEY", "test-admin")
-            .env("DS2API_CONFIG_PATH", &cfg_path);
-        self.spawn(cmd)
-    }
-
     pub fn spawn_capcut(&self, base: &Path, data_dir: &Path) -> Result<(), String> {
         let mut cmd = if resolve(base, "capcut-tts-api/capcut-tts-api").is_file() {
             let mut c = Command::new(resolve(base, "capcut-tts-api/capcut-tts-api"));

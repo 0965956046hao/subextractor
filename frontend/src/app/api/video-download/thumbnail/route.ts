@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
   let handle: BrowserHandle;
   try {
-    handle = await openBrowser();
+    handle = await openBrowser({ headless: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
