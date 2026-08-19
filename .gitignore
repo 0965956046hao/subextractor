@@ -12,7 +12,15 @@ __pycache__/
 *.token
 !test/*.token
 youtubeuploader/youtubeuploader
-# src-tauri/*
+# =========================
+# Tauri
+# =========================
+src-tauri/dist/
+src-tauri/target/
+
+# Tauri generated/bundled output
+src-tauri/gen/
+
 */build/
 */dist/
 .playwright-mcp
