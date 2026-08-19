@@ -1,0 +1,187 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e5]:
+      - link "Back to library" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - button "Xoá job đã xong" [ref=e11] [cursor=pointer]
+      - button "Dọn sạch dữ liệu tạm" [ref=e12] [cursor=pointer]
+      - link "Cài đặt (API key, TTS, style phụ đề)" [ref=e13] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e17]:
+      - generic [ref=e18]: Auto Pipeline
+      - heading "Link / Video → Video có phụ đề Việt" [level=1] [ref=e19]
+      - paragraph [ref=e20]: "Dán link Douyin/YouTube hoặc tải video từ máy, hệ thống tự động: tải → merge audio/video → OCR → ngữ cảnh → dịch Gemini → nhúng phụ đề mới vào video."
+    - generic [ref=e23]:
+      - paragraph [ref=e24]: 1. Chọn nguồn video
+      - generic [ref=e25]: Đang kiểm tra Gemini API + engine lồng tiếng...
+      - generic [ref=e30]:
+        - button "Link Douyin" [ref=e31] [cursor=pointer]
+        - button "Link YouTube" [ref=e32] [cursor=pointer]
+        - button "Upload từ máy" [ref=e33] [cursor=pointer]
+      - generic [ref=e34]:
+        - textbox "Đang kiểm tra kết nối..." [disabled] [ref=e35]
+        - button "Bắt đầu" [disabled] [ref=e36]
+      - generic [ref=e38]:
+        - generic [ref=e39]: "Ngôn ngữ gốc:"
+        - generic [ref=e40]:
+          - button "Tiếng Trung" [ref=e41] [cursor=pointer]
+          - button "Tiếng Anh" [ref=e42] [cursor=pointer]
+          - button "Tiếng Việt" [ref=e43] [cursor=pointer]
+        - paragraph [ref=e44]: Dùng cho nhận dạng phụ đề (OCR) và dịch Gemini.
+      - generic [ref=e45]:
+        - generic [ref=e46]: "Vùng quét phụ đề:"
+        - generic [ref=e47]:
+          - button "Tự động (vùng mặc định)" [ref=e48] [cursor=pointer]
+          - button "Chọn vùng thủ công" [ref=e49] [cursor=pointer]
+        - paragraph [ref=e50]: Pipeline sẽ dừng lại ở bước Chọn vùng quét để bạn kéo vùng lấy phụ đề.
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - generic [ref=e53]: "Lồng tiếng:"
+          - generic [ref=e54]:
+            - button "Tiếng Việt" [ref=e55] [cursor=pointer]
+            - button "Tiếng Anh" [ref=e56] [cursor=pointer]
+          - generic [ref=e57]:
+            - button "Google TTS" [ref=e58] [cursor=pointer]
+            - button "CapCut" [ref=e59] [cursor=pointer]
+          - generic [ref=e60]: Đang tải giọng CapCut...
+        - paragraph [ref=e64]: Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100).
+        - generic [ref=e65]:
+          - generic [ref=e66]: "Voice gốc:"
+          - generic [ref=e67]:
+            - button "Tắt (tách bằng Demucs)" [ref=e68] [cursor=pointer]
+            - button "Giữ lại (giảm âm lượng)" [ref=e69] [cursor=pointer]
+          - generic [ref=e70]:
+            - generic [ref=e71]: "Giảm giọng gốc:"
+            - 'slider "Giảm giọng gốc: -13 dB" [ref=e72]': "13"
+            - generic [ref=e73]: "-13 dB"
+        - paragraph [ref=e74]: Giọng nói và nhạc nền gốc sẽ giảm 13 dB để giọng đọc Việt nổi bật hơn.
+        - generic [ref=e75]:
+          - generic [ref=e76]: "Căn chỉnh phụ đề:"
+          - generic [ref=e77]:
+            - button "Tự động khớp vị trí sub gốc" [ref=e78] [cursor=pointer]
+            - button "Tự chỉnh kích thước & vị trí" [ref=e79] [cursor=pointer]
+          - paragraph [ref=e80]: Thêm bước xem trước trong pipeline để bạn chỉnh cỡ chữ và vị trí phụ đề trước khi nhúng.
+        - generic [ref=e81]:
+          - generic [ref=e82]:
+            - generic [ref=e83]:
+              - paragraph [ref=e84]: Dịch sub tự động
+              - paragraph [ref=e85]: Bật để pipeline dịch phụ đề sang ngôn ngữ bạn chọn; tắt để giữ nguyên phụ đề gốc (không dịch).
+            - button [ref=e86] [cursor=pointer]
+          - generic [ref=e88]:
+            - generic [ref=e89]: "Dịch sang:"
+            - generic [ref=e90]:
+              - button "Tiếng Trung" [ref=e91] [cursor=pointer]
+              - button "Tiếng Anh" [ref=e92] [cursor=pointer]
+              - button "Tiếng Việt" [ref=e93] [cursor=pointer]
+            - paragraph [ref=e94]: Nếu ngôn ngữ đích trùng ngôn ngữ gốc, pipeline sẽ giữ nguyên phụ đề gốc.
+        - generic [ref=e95]:
+          - generic [ref=e96]:
+            - generic [ref=e97]:
+              - paragraph [ref=e98]: Tự động lồng tiếng
+              - paragraph [ref=e99]: Bật để pipeline tách giọng gốc và lồng tiếng Việt vào video; tắt để bỏ qua bước lồng tiếng.
+            - button [ref=e100] [cursor=pointer]
+          - paragraph [ref=e102]: Giọng đọc dùng cấu hình mục "Lồng tiếng" phía trên (CapCut/Google TTS + giọng đã chọn).
+        - generic [ref=e104]:
+          - generic [ref=e105]:
+            - paragraph [ref=e106]: Logo + Watermark
+            - paragraph [ref=e107]: Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo bộ text + logo trong Settings ⚙️).
+          - button [ref=e108] [cursor=pointer]
+        - generic [ref=e111]:
+          - generic [ref=e112]:
+            - paragraph [ref=e113]: Kiểm tra timeline phụ đề
+            - paragraph [ref=e114]: Sau khi dịch xong, pipeline dừng lại để kiểm tra timeline vô lý (end ≤ start, chồng lấn) và hiển thị popup cho bạn duyệt trước khi tiếp tục.
+          - button [ref=e115] [cursor=pointer]
+    - generic [ref=e119]:
+      - button "Tiến trình" [ref=e120] [cursor=pointer]
+      - button "Đang xử lý" [ref=e121] [cursor=pointer]
+      - button "Đã xử lý1" [ref=e122] [cursor=pointer]
+    - generic [ref=e125]:
+      - generic [ref=e126]:
+        - generic [ref=e127]:
+          - generic [ref=e128]:
+            - paragraph [ref=e129]: Video test tab
+            - generic [ref=e130]: Lỗi ở bước 9
+          - paragraph
+        - button "Xoá" [ref=e135] [cursor=pointer]
+      - generic [ref=e137]:
+        - generic [ref=e138]: Tổng tiến độ
+        - generic [ref=e139]: 0%
+      - generic [ref=e141]:
+        - generic [ref=e147]:
+          - generic [ref=e148]:
+            - paragraph [ref=e149]: Phân tích link
+            - generic [ref=e150]: 100%
+          - paragraph [ref=e151]: Lấy URL / tải video theo nguồn (Douyin/YouTube)
+        - generic [ref=e159]:
+          - generic [ref=e160]:
+            - paragraph [ref=e161]: Merge video + audio
+            - generic [ref=e162]: 100%
+          - paragraph [ref=e163]: Gộp 2 file nếu có audio riêng
+        - generic [ref=e171]:
+          - generic [ref=e172]:
+            - paragraph [ref=e173]: Chọn vùng quét sub
+            - generic [ref=e174]: 100%
+          - paragraph [ref=e175]: Kéo vùng trên video để lấy phụ đề
+        - generic [ref=e183]:
+          - generic [ref=e184]:
+            - paragraph [ref=e185]: Chỉnh kích thước & vị trí sub
+            - generic [ref=e186]: 100%
+          - paragraph [ref=e187]: Xem trước, chỉnh cỡ chữ và vị trí
+        - generic [ref=e190]:
+          - generic [ref=e195]:
+            - generic [ref=e196]:
+              - paragraph [ref=e197]: OCR trích phụ đề
+              - generic [ref=e198]: 100%
+            - paragraph [ref=e199]: Nhận dạng chữ trong vùng đã chọn
+          - button "Chạy lại" [ref=e203] [cursor=pointer]
+        - generic [ref=e207]:
+          - generic [ref=e212]:
+            - generic [ref=e213]:
+              - paragraph [ref=e214]: Phân tích ngữ cảnh
+              - generic [ref=e215]: 100%
+            - paragraph [ref=e216]: Gemini Vision phân tích video
+          - button "Chạy lại" [ref=e220] [cursor=pointer]
+        - generic [ref=e224]:
+          - generic [ref=e229]:
+            - generic [ref=e230]:
+              - paragraph [ref=e231]: Dịch Gemini
+              - generic [ref=e232]: 100%
+            - paragraph [ref=e233]: Dịch tự động sang Trung / Anh / Việt (có thể tắt)
+          - button "Chạy lại" [ref=e237] [cursor=pointer]
+        - generic [ref=e241]:
+          - generic [ref=e246]:
+            - generic [ref=e247]:
+              - paragraph [ref=e248]: Lồng tiếng Việt
+              - generic [ref=e249]: 100%
+            - paragraph [ref=e250]: Tách giọng + TTS Việt + giữ nhạc nền (có thể tắt)
+          - generic [ref=e253]:
+            - generic [ref=e254]: 0s
+            - button "Chạy lại" [ref=e255] [cursor=pointer]
+        - generic [ref=e259]:
+          - generic [ref=e264]:
+            - generic [ref=e265]:
+              - paragraph [ref=e266]: Nhúng SRT vào video
+              - generic [ref=e267]: Lỗi
+            - paragraph [ref=e268]: FFmpeg nhúng SRT (ASS BlackBox) vào MP4
+          - generic [ref=e269]:
+            - generic [ref=e270]: 7h 16m 36s
+            - button "Chạy lại" [ref=e271] [cursor=pointer]
+      - generic [ref=e275]:
+        - generic [ref=e276]:
+          - generic [ref=e277]: Nhật ký chi tiết · 4 dòng
+          - generic [ref=e278]: "Thời gian: 4h 35m 29s"
+        - generic [ref=e279]:
+          - generic [ref=e280]:
+            - generic [ref=e281]: 11:13:29
+            - generic [ref=e282]: Chờ duyệt timeline.
+          - generic [ref=e283]:
+            - generic [ref=e284]: 15:47:58
+            - generic [ref=e285]: "Tách giọng & lồng tiếng Việt (CapCut voice: BV421_vivn_streaming)..."
+          - generic [ref=e286]:
+            - generic [ref=e287]: 15:47:58
+            - generic [ref=e288]: Bỏ qua lồng tiếng (lỗi).
+          - generic [ref=e289]:
+            - generic [ref=e290]: 15:47:58
+            - generic [ref=e291]: FFmpeg nhúng SRT (ASS black box) vào video...
+      - generic [ref=e292]: Unexpected token 'I', "Internal S"... is not valid JSON
+  - alert [ref=e293]

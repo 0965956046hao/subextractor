@@ -12,7 +12,7 @@ from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
 from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _video_playable
-from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, validate_timeline
+from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,36 @@ async def fix_srt_timeline(video_id: str):
     if not entries:
         return {"video_id": video_id, "entries": [], "fixes": [], "count": 0}
     fixed, fixes = fix_timeline(entries)
+    new_content = entries_to_srt(fixed)
+    if new_content.strip() != current.strip():
+        backup = srt_path.with_name("subtitles_original.srt")
+        if not backup.exists():
+            backup.write_text(current, encoding="utf-8")
+    srt_path.write_text(new_content, encoding="utf-8")
+    return {
+        "video_id": video_id,
+        "entries": [e.model_dump() for e in fixed],
+        "fixes": fixes,
+        "count": len(fixes),
+    }
+
+
+# ── POST /api/srt/{video_id}/auto-fix-overlaps ──
+# Auto-fix overlapping timelines by code (no LLM): scan the SRT line by line; if
+# a line's start time is before the previous line's end time, push its start to
+# after the previous line's end. Runs between Gemini translation and the manual
+# timeline review. Backs up the previous content first.
+
+@router.post("/api/srt/{video_id}/auto-fix-overlaps")
+async def auto_fix_srt_overlaps(video_id: str):
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    current = srt_path.read_text(encoding="utf-8")
+    entries = parse_srt(current)
+    if not entries:
+        return {"video_id": video_id, "entries": [], "fixes": [], "count": 0}
+    fixed, fixes = shift_overlaps(entries)
     new_content = entries_to_srt(fixed)
     if new_content.strip() != current.strip():
         backup = srt_path.with_name("subtitles_original.srt")
