@@ -17,7 +17,8 @@ youtubeuploader/youtubeuploader
 # =========================
 src-tauri/dist/
 src-tauri/target/
-
+src-tauri/resources/node/
+src-tauri/resources/tools/demucs/
 # Tauri generated/bundled output
 src-tauri/gen/
 
