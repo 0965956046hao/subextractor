@@ -10,11 +10,10 @@ App là 1 bundle duy nhất (`src-tauri/target/release/bundle/macos/SubTitle Ext
 |---|---|---|
 | Frontend (Next.js standalone + Node) | `Resources/frontend/.next/standalone` + `Resources/node/` | `frontend/src` |
 | Backend OCR (FastAPI + RapidOCR) | `Resources/backend/` (PyInstaller onedir) | `backend/app` |
-| demucs (tách vocal, chạy torch) | `Resources/tools/demucs/` | `backend/services/...` dùng demucs |
 | capcut-tts-api | `Resources/capcut-tts-api/` | `capcut-tts-api/` |
 | ds2api (download) | `Resources/ds2api/ds2api` | `ds2api/` |
-| youtubeuploader | `Resources/tools/youtubeuploader` | `youtubeuploader/` (Go) |
-| ffmpeg + dylib | `Resources/tools/ffmpeg` + `Resources/tools/lib/` | không build lại (copy sẵn) |
+
+**Tools (ffmpeg, demucs, youtubeuploader) KHÔNG bundle vào app.** Khi mở app lần đầu, chúng được tải về vào data dir (`~/Library/Application Support/com.subextractor.desktop/tools/`) từ host cấu hình (`STE_TOOLS_URL` hoặc `DEFAULT_TOOLS_URL` trong `src-tauri/src/tools.rs`). Mỗi tool có marker `.ten-tool.installed` — có marker là bỏ qua, không tải lại.
 
 ## Yêu cầu môi trường
 
@@ -33,11 +32,13 @@ App là 1 bundle duy nhất (`src-tauri/target/release/bundle/macos/SubTitle Ext
 
 ### Bước 0 — Chỉ build những gì đã sửa
 
-- Chỉ sửa **frontend** → chạy **Bước 1** + **Bước 5**
-- Chỉ sửa **backend** (`backend/app`) → chạy **Bước 2** + **Bước 5**
-- Sửa **capcut-tts-api** → **Bước 3** + **Bước 5**
-- Sửa **ds2api** → **Bước 4** + **Bước 5**
-- Sửa **demucs / torch** → **Bước 2b** + **Bước 5** (hiếm khi cần)
+- Chỉ sửa **frontend** → chạy **Bước 1** + **Bước 6**
+- Chỉ sửa **backend** (`backend/app`) → chạy **Bước 2** + **Bước 6**
+- Sửa **capcut-tts-api** → **Bước 3** + **Bước 6**
+- Sửa **ds2api** → **Bước 4** + **Bước 6**
+- Sửa **demucs / torch** → **Bước 2b** + **Bước 5** (đóng gói tools lại) + **Bước 6**
+- Sửa **code Rust** (`src-tauri/src`) → chỉ cần **Bước 6**
+- Sửa **tools.rs / cần đóng gói lại tools** → **Bước 5** + upload archive mới
 
 **LƯU Ý QUAN TRỌNG:** Bước 1 (frontend) chạy trước Bước 2/3/4 để `.next-prod` không bị ghi đè. **KHÔNG** chạy `npm run dev` sau khi build — `next dev` xóa `.next/standalone` khiến bản build hỏng.
 
@@ -89,7 +90,17 @@ go build -o ds2api ./cmd/ds2api
 cd ..
 ```
 
-### Bước 5 — Build app Tauri
+### Bước 5 — Đóng gói tools (chỉ khi tools thay đổi / lần đầu)
+
+Tạo 3 archive tải về khi mở app lần đầu:
+
+```bash
+bash pack-tools.sh
+```
+
+Sản phẩm: `tools-dist/ffmpeg.tar.gz`, `demucs.tar.gz`, `youtubeuploader.tar.gz` (~283MB). **Upload các file này lên host** và set `STE_TOOLS_URL` khi chạy app (hoặc sửa `DEFAULT_TOOLS_URL` trong `src-tauri/src/tools.rs` rồi build lại). Nếu không upload, app sẽ báo `[tools] ... install failed` và các tính năng cần ffmpeg/demucs/youtubeuploader không dùng được.
+
+### Bước 6 — Build app Tauri
 
 ```bash
 npx tauri build
@@ -101,7 +112,9 @@ Sản phẩm:
 
 > `beforeBuildCommand` tự chạy `npm run build` trong `frontend/` (Tauri CLI chạy hook với cwd = `frontend/`). Nếu chạy Bước 1 rồi, bước này chỉ cần cho phần Rust + bundle.
 
-### Bước 6 — Smoke test (mở app)
+### Bước 7 — Smoke test (mở app)
+
+Lần đầu mở, app tự tải tools vào data dir (theo dõi log: `[tools] ffmpeg ready`, `[tools] demucs ready`, `[tools] youtubeuploader ready`). Chờ tools xong rồi kiểm tra:
 
 ```bash
 open "src-tauri/target/release/bundle/macos/SubTitle Extractor.app"
@@ -115,6 +128,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3000/    # frontend �
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5001/    # ds2api → 200
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8100/api/voices   # capcut → 200
 curl -s http://127.0.0.1:8000/api/youtube/config   # youtube: has_binary + has_client_secrets = true
+ls "$HOME/Library/Application Support/com.subextractor.desktop/tools/"   # .ffmpeg.installed, .demucs.installed, .youtubeuploader.installed
 ```
 
 Thoát app + dọn port:
@@ -142,7 +156,14 @@ Khi app chạy, dữ liệu ghi được nằm ở:
 ├── youtube/client_secrets.json   # copy tự động từ template lần đầu chạy
 ├── youtube/request.token         # tạo sau khi OAuth Google lần đầu
 ├── ds2api/                       # config.json tự sinh từ config.example.json
+├── tools/                        # tải tự động lần đầu mở app (ffmpeg, demucs, youtubeuploader)
+│   ├── .ffmpeg.installed         # marker: có rồi thì không tải lại
+│   ├── .demucs.installed
+│   ├── .youtubeuploader.installed
+│   ├── ffmpeg + lib/
+│   ├── demucs/
+│   └── youtubeuploader
 └── temp/                         # videos, srt, frames, ...
 ```
 
-Muốn reset toàn bộ dữ liệu app: xóa thư mục này (app sẽ tự tạo lại cấu trúc khi mở).
+Muốn ép app tải lại tools (sau khi có archive mới): xóa marker + thư mục tương ứng trong `tools/`, đóng mở app. Muốn reset toàn bộ dữ liệu app: xóa thư mục data (app tự tạo lại khi mở).

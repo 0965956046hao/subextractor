@@ -22,17 +22,25 @@ router = APIRouter()
 _YOUTUBE_SOURCE_DIR = Path(__file__).resolve().parent.parent.parent.parent / "youtubeuploader"
 
 if getattr(sys, "frozen", False):
-    # Packaged app: binary is bundled on PATH (tools/youtubeuploader); runtime
-    # files (client_secrets.json, request.token) live in the writable data dir.
-    YOUTUBE_UPLOADER_BIN = Path(shutil.which("youtubeuploader") or "")
+    # Packaged app: runtime files (client_secrets.json, request.token) live in
+    # the writable data dir. The binary is downloaded into data_dir/tools on
+    # first launch (see src-tauri/src/tools.rs), so resolve it lazily at call
+    # time via PATH.
     YOUTUBE_UPLOADER_DIR = settings.base_dir / "youtube"
     YOUTUBE_UPLOADER_DIR.mkdir(parents=True, exist_ok=True)
 else:
-    YOUTUBE_UPLOADER_BIN = _YOUTUBE_SOURCE_DIR / "youtubeuploader"
     YOUTUBE_UPLOADER_DIR = _YOUTUBE_SOURCE_DIR
 
 CLIENT_SECRETS_PATH = YOUTUBE_UPLOADER_DIR / "client_secrets.json"
 REQUEST_TOKEN_PATH = YOUTUBE_UPLOADER_DIR / "request.token"
+
+
+def _uploader_bin() -> Path:
+    if getattr(sys, "frozen", False):
+        found = shutil.which("youtubeuploader")
+        if found:
+            return Path(found)
+    return _YOUTUBE_SOURCE_DIR / "youtubeuploader"
 
 _youtube_jobs: dict[str, dict] = {}
 
@@ -206,7 +214,7 @@ async def get_youtube_config():
     return {
         "has_client_secrets": CLIENT_SECRETS_PATH.exists(),
         "has_request_token": REQUEST_TOKEN_PATH.exists(),
-        "has_binary": YOUTUBE_UPLOADER_BIN.exists(),
+        "has_binary": _uploader_bin().exists(),
         "secrets_path": str(CLIENT_SECRETS_PATH),
     }
 
@@ -268,7 +276,7 @@ async def setup_youtube_environment():
 
     output_lines.append("youtubeuploader built successfully")
     return {"status": "success", "output": output_lines,
-            "binary": str(YOUTUBE_UPLOADER_BIN)}
+            "binary": str(_uploader_bin())}
 
 
 def _ensure_imagemagick() -> str:
@@ -337,8 +345,8 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
     """Start YouTube upload in background, return job_id for polling."""
     if not CLIENT_SECRETS_PATH.exists():
         raise HTTPException(400, "client_secrets.json not found. Please configure YouTube API credentials first.")
-    if not YOUTUBE_UPLOADER_BIN.exists():
-        raise HTTPException(500, f"youtubeuploader binary not found at {YOUTUBE_UPLOADER_BIN}")
+    if not _uploader_bin().exists():
+        raise HTTPException(500, f"youtubeuploader binary not found at {_uploader_bin()}")
 
     if not video_path.exists():
         raise HTTPException(404, f"Video not found: {video_path}")
@@ -358,7 +366,7 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
     _youtube_jobs[job_id] = job
 
     cmd = [
-        str(YOUTUBE_UPLOADER_BIN),
+        str(_uploader_bin()),
         "-filename", str(video_path),
         "-metaJSON", str(meta_path),
         "-privacy", privacy,
