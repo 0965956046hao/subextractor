@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List
 
 from app.config import settings
-from app.services.srt_utils import parse_srt
+from app.services.srt_utils import entries_to_srt, merge_similar_adjacent, parse_srt
 from app.services.media_utils import (
     _srt_path,
     _video_path,
@@ -179,7 +179,29 @@ def build_full_audio(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     srt_path = _srt_path(video_id)
-    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    srt_content = srt_path.read_text(encoding="utf-8")
+
+    # Kiểm tra phụ đề trùng lặp trước khi tạo voice: nếu nội dung một dòng giống
+    # line trước ≥80% thì không gen voice lại (chèn khoảng lặng) — đồng thời cập
+    # nhật SRT: xóa luôn dòng trùng đó và nới dài endtime của dòng trước bằng
+    # endtime của dòng vừa xóa, để phụ đề không hiển thị cùng text 2 lần.
+    merged, dedup_changes = merge_similar_adjacent(parse_srt(srt_content))
+    if dedup_changes:
+        if log_fn:
+            log_fn(f"Phát hiện {len(dedup_changes)} dòng phụ đề trùng (giống line trước ≥80%):")
+            for c in dedup_changes:
+                log_fn(f"  #Xóa dòng {c['index']}, nới endtime dòng {c['merged_into']}: {c['from']}  →  {c['to']}")
+        dedup_content = entries_to_srt(merged)
+        if dedup_content.strip() != srt_content.strip():
+            backup = srt_path.with_name("subtitles_original.srt")
+            if not backup.exists():
+                backup.write_text(srt_content, encoding="utf-8")
+            srt_path.write_text(dedup_content, encoding="utf-8")
+        if log_fn:
+            log_fn(f"Đã cập nhật SRT: xóa {len(dedup_changes)} dòng trùng, nới endtime dòng trước.")
+        srt_content = dedup_content
+
+    entries = parse_srt(srt_content)
 
     def cb(pct: int):
         if progress_callback:
