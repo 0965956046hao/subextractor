@@ -7,6 +7,7 @@ import TranscriptPlayer from "@/components/TranscriptPlayer";
 import { AnimatedBlock } from "@/lib/animation";
 import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
 import type { VideoMeta, LogEntry } from "@/lib/api";
+import { useI18n, type Dict } from "@/lib/i18n";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -18,12 +19,12 @@ function formatDate(iso: string): string {
   });
 }
 
-const PHASE_LABELS: Record<string, string> = {
-  submitting: "Đang gửi yêu cầu xử lý…",
-  queued: "Đang xếp hàng chờ xử lý…",
-  frames: "Đang đọc các khung hình của video…",
-  ocr: "Đang nhận dạng chữ viết trong video…",
-  saving: "Đang lưu file phụ đề…",
+const PHASE_KEY: Record<string, string> = {
+  submitting: "video.phase.submitting",
+  queued: "video.phase.queued",
+  frames: "video.phase.frames",
+  ocr: "video.phase.ocr",
+  saving: "video.phase.saving",
 };
 
 function fmtTime(ts: number): string {
@@ -54,6 +55,7 @@ function JobProgress({
   onCompleted: () => void;
   onCancelled?: () => void;
 }) {
+  const { t } = useI18n();
   const [progress, setProgress] = useState(0);
   const [phase, setPhase] = useState("queued");
   const [error, setError] = useState("");
@@ -88,7 +90,7 @@ function JobProgress({
           return;
         }
         if (st.status === "error") {
-          setError(st.error || "Xử lý thất bại");
+          setError(st.error || t("video.error.default"));
           return;
         }
       } catch {
@@ -118,10 +120,10 @@ function JobProgress({
 
   const pct = Math.max(0, Math.min(100, progress));
   const statusText = error
-    ? "Có lỗi xảy ra"
+    ? t("video.error.title")
     : phase
-      ? (PHASE_LABELS[phase] ?? "Đang xử lý…")
-      : "Đang xử lý…";
+      ? t((PHASE_KEY[phase] ?? "video.processing") as keyof Dict)
+      : t("video.processing");
 
   if (cancelled) {
     return (
@@ -139,16 +141,16 @@ function JobProgress({
             <line x1="5" y1="5" x2="19" y2="19" />
           </svg>
           <p className="text-sm text-ink mt-3 font-medium">
-            Đã hủy xử lý video
+            {t("video.cancelled.title")}
           </p>
           <p className="text-[13px] text-ink-light mt-1.5 max-w-sm mx-auto">
-            Phụ đề chưa được lưu. Bạn có thể xử lý lại từ đầu bất cứ lúc nào.
+            {t("video.cancelled.desc")}
           </p>
           <Link
             href={`/extract?video_id=${videoId}`}
             className="btn-island-primary group mt-6 text-sm inline-flex"
           >
-            <span className="tracking-tight">Xử lý lại</span>
+            <span className="tracking-tight">{t("video.retry")}</span>
             <span className="btn-island-icon">
               <svg
                 className="w-4 h-4"
@@ -226,7 +228,7 @@ function JobProgress({
             />
           </div>
           <div className="flex items-center justify-between mt-2">
-            <p className="text-[11px] text-ink-light">Tiến trình xử lý</p>
+            <p className="text-[11px] text-ink-light">{t("video.progress")}</p>
             <p className="text-xs font-mono text-ink-light tabular-nums">
               {error ? "0" : progress}%
             </p>
@@ -274,7 +276,7 @@ function JobProgress({
                 <line x1="5" y1="5" x2="19" y2="19" />
               </svg>
             )}
-            <span>{cancelling ? "Đang hủy…" : "Hủy xử lý (không lưu)"}</span>
+            <span>{cancelling ? t("video.cancelling") : t("video.cancel")}</span>
           </button>
         </div>
 
@@ -283,7 +285,7 @@ function JobProgress({
             <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.05] bg-white/40">
               <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
               <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
-                Nhật ký xử lý
+                {t("video.logs")}
               </span>
             </div>
             <div className="max-h-[300px] overflow-y-auto p-3 space-y-1.5">
@@ -315,6 +317,7 @@ type ViewMode = "transcript" | "context";
 export default function VideoDetailPage() {
   const params = useParams<{ id: string }>();
   const videoId = params.id;
+  const { t } = useI18n();
 
   const [meta, setMeta] = useState<VideoMeta | null>(null);
   const [loading, setLoading] = useState(true);
@@ -371,28 +374,28 @@ export default function VideoDetailPage() {
               <path d="M11 18l-6-6 6-6" />
             </svg>
           </span>
-          <span className="tracking-tight">Back to library</span>
+          <span className="tracking-tight">{t("back.library")}</span>
         </Link>
       </AnimatedBlock>
 
       <AnimatedBlock delay={100} className="mt-10 mb-10">
         <div className="flex items-start justify-between gap-6 flex-wrap">
           <div className="min-w-0">
-            <div className="eyebrow mb-4">Extracted Video</div>
+            <div className="eyebrow mb-4">{t("video.eyebrow")}</div>
             <h1 className="text-[clamp(1.8rem,4.5vw,3.4rem)] font-semibold tracking-tight leading-[1.05] text-balance text-ink break-words">
-              {loading ? "Loading…" : filename || videoId}
+              {loading ? t("video.loading") : filename || videoId}
             </h1>
             <div className="flex items-center gap-2 mt-4 flex-wrap">
               {isActive && (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                  Đang xử lý… {meta?.progress ?? 0}%
+                  {t("video.processingBadge", { progress: meta?.progress ?? 0 })}
                 </span>
               )}
 
               {meta?.created_at && (
                 <span className="text-[11px] text-ink-light tabular-nums">
-                  Extracted {formatDate(meta.created_at)}
+                  {t("video.extracted", { date: formatDate(meta.created_at) })}
                 </span>
               )}
               {entries !== null && (
@@ -400,14 +403,14 @@ export default function VideoDetailPage() {
                   href={`/extract?video_id=${videoId}`}
                   className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
                 >
-                  Retry
+                  {t("video.retryLink")}
                 </Link>
               )}
               <button
                 onClick={() => setReloadKey((k) => k + 1)}
                 className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
               >
-                Refesh
+                {t("video.refresh")}
               </button>
             </div>
           </div>
@@ -440,17 +443,16 @@ export default function VideoDetailPage() {
                 <line x1="5" y1="5" x2="19" y2="19" />
               </svg>
               <p className="text-sm text-ink mt-3 font-medium">
-                Đã hủy xử lý video
+                {t("video.cancelled.title")}
               </p>
               <p className="text-[13px] text-ink-light mt-1.5 max-w-sm mx-auto">
-                Phụ đề chưa được lưu. Bạn có thể xử lý lại từ đầu bất cứ lúc
-                nào.
+                {t("video.cancelled.desc")}
               </p>
               <Link
                 href={`/extract?video_id=${videoId}`}
                 className="btn-island-primary group mt-6 text-sm inline-flex"
               >
-                <span className="tracking-tight">Xử lý lại</span>
+                <span className="tracking-tight">{t("video.retry")}</span>
                 <span className="btn-island-icon">
                   <svg
                     className="w-4 h-4"
@@ -484,7 +486,7 @@ export default function VideoDetailPage() {
                     : "text-ink-light hover:text-ink"
                 }`}
               >
-                Transcript
+                {t("video.transcript")}
               </button>
             </div>
           </div>
@@ -495,7 +497,7 @@ export default function VideoDetailPage() {
           <div className="double-bezel">
             <div className="double-bezel-inner p-6 sm:p-10 text-center">
               <p className="text-sm text-ink-light">
-                Đang tải thông tin video…
+                {t("video.loadingInfo")}
               </p>
             </div>
           </div>

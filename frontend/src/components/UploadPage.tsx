@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from "react";
 import { uploadVideo } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 interface Props {
   onUploaded: (videoId: string) => void;
@@ -30,6 +31,7 @@ function UploadIcon({ dragging }: { dragging: boolean }) {
 }
 
 export default function UploadPage({ onUploaded }: Props) {
+  const { t } = useI18n();
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -41,7 +43,7 @@ export default function UploadPage({ onUploaded }: Props) {
   const handleFile = useCallback(
     async (file: File) => {
       if (!file.type.startsWith("video/")) {
-        setError("Select a video file");
+        setError(t("upload.selectVideo"));
         return;
       }
       setError("");
@@ -55,13 +57,13 @@ export default function UploadPage({ onUploaded }: Props) {
         onUploaded(id);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "CanceledError") return;
-        setError("Upload failed");
+        setError(t("upload.failed"));
       } finally {
         setLoading(false);
         abortRef.current = null;
       }
     },
-    [onUploaded],
+    [onUploaded, t],
   );
 
   return (
@@ -121,7 +123,7 @@ export default function UploadPage({ onUploaded }: Props) {
                 <div>
                   <p className="text-sm font-medium text-ink">{fileName}</p>
                   <p className="text-xs text-ink-muted mt-1.5">
-                    Uploading to server...
+                    {t("upload.uploading")}
                   </p>
                 </div>
                 <div className="w-full max-w-xs space-y-2">
@@ -158,14 +160,14 @@ export default function UploadPage({ onUploaded }: Props) {
                 <UploadIcon dragging={dragging} />
                 <div>
                   <p className="text-base sm:text-lg font-medium text-ink/80">
-                    {dragging ? "Release to upload" : "Drop video here"}
+                    {dragging ? t("upload.release") : t("upload.drop")}
                   </p>
                   <p className="text-sm text-ink-muted mt-1.5">
-                    or{" "}
+                    {t("upload.or")}{" "}
                     <span className="text-blue-600 underline underline-offset-2 decoration-blue-500/30">
-                      browse files
+                      {t("upload.browseFiles")}
                     </span>{" "}
-                    &mdash; MP4, MOV, AVI, MKV, WebM
+                    {t("upload.formatsHint")}
                   </p>
                 </div>
                 {error && (
@@ -193,7 +195,7 @@ export default function UploadPage({ onUploaded }: Props) {
 
       <div className="flex items-center justify-center gap-2 flex-wrap">
         <span className="text-[10px] uppercase tracking-wider text-ink-light mr-1">
-          Supported
+          {t("upload.supported")}
         </span>
         {FORMATS.map((ext) => (
           <span key={ext} className="tag">

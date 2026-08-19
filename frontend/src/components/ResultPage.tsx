@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { startProcess, getJobStatus, createWsUrl, cancelJob } from "@/lib/api";
 import type { Region, LogEntry, OcrLang, OcrType } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import TranscriptPlayer from "./TranscriptPlayer";
 
 interface Props {
@@ -26,16 +27,16 @@ type Phase =
   | "error"
   | "cancelled";
 
-const STATUS_LABELS: Record<Phase, string> = {
-  submitting: "Đang gửi yêu cầu xử lý…",
-  queued: "Đang xếp hàng chờ xử lý…",
-  frames: "Đang đọc các khung hình của video…",
-  ocr: "Đang nhận dạng chữ viết trong video…",
-  saving: "Đang lưu file phụ đề…",
-  done: "Hoàn tất! Phụ đề đã sẵn sàng.",
-  error: "Có lỗi xảy ra trong quá trình xử lý.",
-  cancelled: "Đã hủy xử lý video.",
-};
+const STATUS_LABEL_KEYS = {
+  submitting: "result.phaseSubmitting",
+  queued: "result.phaseQueued",
+  frames: "result.phaseFrames",
+  ocr: "result.phaseOcr",
+  saving: "result.phaseSaving",
+  done: "result.phaseDone",
+  error: "result.phaseError",
+  cancelled: "result.phaseCancelled",
+} as const;
 
 function fmtTime(ts: number): string {
   if (!ts) return "";
@@ -170,6 +171,7 @@ function LogRow({ log, index }: { log: LogEntry; index: number }) {
 }
 
 function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -188,10 +190,10 @@ function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
           }`}
         />
         <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
-          Nhật ký &amp; nội dung trích xuất
+          {t("result.logsTitle")}
         </span>
         <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
-          {logs.length} sự kiện
+          {t("result.logCount", { count: logs.length })}
         </span>
       </div>
       <div
@@ -224,7 +226,7 @@ function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
               />
             </svg>
             <p className="text-[13px] text-ink-light">
-              Đang chờ máy chủ phản hồi…
+              {t("result.waitingServer")}
             </p>
           </div>
         )}
@@ -279,6 +281,7 @@ export default function ResultPage({
   const doneNotifiedRef = useRef(false);
   const jobIdRef = useRef<string | null>(null);
   const router = useRouter();
+  const { t } = useI18n();
 
   const appendLog = useCallback(
     (message: string, level = "info", ts?: number) => {
@@ -319,7 +322,7 @@ export default function ResultPage({
               break;
             case "error":
               setPhase("error");
-              setError(data.message || "Xử lý thất bại");
+              setError(data.message || t("result.failed"));
               break;
           }
         } catch {
@@ -329,13 +332,13 @@ export default function ResultPage({
       ws.onclose = () => {
         if (reconnectRef.current < 5) {
           reconnectRef.current += 1;
-          appendLog("Mất kết nối tạm thời, đang thử kết nối lại…", "warn");
+          appendLog(t("result.reconnecting"), "warn");
           setTimeout(() => connectWs(id), 2000);
         }
       };
       ws.onerror = () => ws.close();
     },
-    [appendLog],
+    [appendLog, t],
   );
 
   useEffect(() => {
@@ -344,7 +347,7 @@ export default function ResultPage({
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     (async () => {
       try {
-        appendLog("Đang gửi yêu cầu xử lý đến máy chủ…");
+        appendLog(t("result.sendingRequest"));
         const job = await startProcess(videoId, region, lang, ocrType);
         jobIdRef.current = job.job_id;
         setPhase("queued");
@@ -366,7 +369,7 @@ export default function ResultPage({
               stopPolling();
             } else if (st.status === "error") {
               setPhase("error");
-              setError(st.error || "Xử lý thất bại");
+              setError(st.error || t("result.failed"));
               stopPolling();
             } else {
               setProgress(st.progress);
@@ -379,9 +382,7 @@ export default function ResultPage({
             if (axiosErr.response?.status === 404) {
               stopPolling();
               setPhase("error");
-              setError(
-                "Job no longer exists (server may have restarted). Please try again.",
-              );
+              setError(t("result.jobGone"));
             }
           }
         }, 4000);
@@ -389,10 +390,10 @@ export default function ResultPage({
         const axiosErr = err as { response?: { data?: { detail?: string } } };
         const msg =
           axiosErr.response?.data?.detail ||
-          (err instanceof Error ? err.message : "Failed to start");
+          (err instanceof Error ? err.message : t("result.failedToStart"));
         setPhase("error");
         setError(msg);
-        appendLog(`Không thể bắt đầu xử lý: ${msg}`, "error");
+        appendLog(t("result.cantStart", { msg }), "error");
       }
     })();
     function stopPolling() {
@@ -405,7 +406,7 @@ export default function ResultPage({
       wsRef.current?.close();
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [videoId, region, lang, ocrType, connectWs, appendLog]);
+  }, [videoId, region, lang, ocrType, connectWs, appendLog, t]);
 
   useEffect(() => {
     if (phase === "done" && !doneNotifiedRef.current) {
@@ -449,17 +450,17 @@ export default function ResultPage({
               <line x1="5" y1="5" x2="19" y2="19" />
             </svg>
             <p className="text-sm text-ink mt-3 font-medium">
-              Đã hủy xử lý video
+              {t("result.cancelledTitle")}
             </p>
             <p className="text-[13px] text-ink-light mt-1.5 max-w-sm mx-auto">
-              Phụ đề chưa được lưu. Bạn có thể xử lý lại từ đầu.
+              {t("result.cancelledDesc")}
             </p>
             <div className="flex items-center justify-center gap-3 mt-6">
               <button
                 onClick={() => router.push(reprocessUrl)}
                 className="btn-island-primary group text-sm"
               >
-                <span className="tracking-tight">Retry</span>
+                <span className="tracking-tight">{t("result.retry")}</span>
                 <span className="btn-island-icon">
                   <svg
                     className="w-4 h-4"
@@ -482,7 +483,7 @@ export default function ResultPage({
                   onClick={onViewLibrary}
                   className="btn-island-secondary group text-sm"
                 >
-                  <span className="tracking-tight">Về thư viện</span>
+                  <span className="tracking-tight">{t("result.backToLibrary")}</span>
                   <span className="btn-island-icon">
                     <svg
                       className="w-4 h-4"
@@ -542,7 +543,7 @@ export default function ResultPage({
                 </svg>
               )}
               <p className="text-sm text-ink mt-3 font-medium">
-                {STATUS_LABELS[phase]}
+                {t(STATUS_LABEL_KEYS[phase])}
               </p>
             </div>
 
@@ -555,7 +556,7 @@ export default function ResultPage({
                 />
               </div>
               <div className="flex items-center justify-between mt-2">
-                <p className="text-[11px] text-ink-light">Tiến trình xử lý</p>
+                <p className="text-[11px] text-ink-light">{t("result.progress")}</p>
                 <p className="text-xs font-mono text-ink-light tabular-nums">
                   {progress}%
                 </p>
@@ -604,7 +605,7 @@ export default function ResultPage({
                   </svg>
                 )}
                 <span>
-                  {cancelling ? "Đang hủy…" : "Hủy xử lý (không lưu)"}
+                  {cancelling ? t("result.cancelling") : t("result.cancel")}
                 </span>
               </button>
             </div>
@@ -647,7 +648,7 @@ export default function ResultPage({
             }}
           >
             <SuccessIcon />
-            <p className="text-sm text-ink-muted mt-3">Trích xuất hoàn tất</p>
+            <p className="text-sm text-ink-muted mt-3">{t("result.doneTitle")}</p>
           </div>
 
           <div
@@ -666,7 +667,7 @@ export default function ResultPage({
                 onClick={onViewLibrary}
                 className="btn-island-primary group text-sm"
               >
-                <span className="tracking-tight">Xem thư viện</span>
+                <span className="tracking-tight">{t("result.viewLibrary")}</span>
                 <span className="btn-island-icon">
                   <svg
                     className="w-4 h-4"
@@ -687,7 +688,7 @@ export default function ResultPage({
               onClick={onReset}
               className="btn-island-secondary group text-sm"
             >
-              <span className="tracking-tight">Trích xuất video khác</span>
+              <span className="tracking-tight">{t("result.extractAnother")}</span>
               <span className="btn-island-icon">
                 <svg
                   className="w-4 h-4"

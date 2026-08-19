@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Region, SubtitleStyle } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import VideoPlayer from "@/components/VideoPlayer";
 
 interface Props {
@@ -15,6 +16,7 @@ function clamp(v: number, min: number, max: number) {
 }
 
 export default function SubtitlePreview({ videoId, region, onConfirmed }: Props) {
+  const { t } = useI18n();
   const [fontSize, setFontSize] = useState(48);
   const [marginV, setMarginV] = useState(40);
   const [marginH, setMarginH] = useState(0);
@@ -40,7 +42,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           body: JSON.stringify({
             region,
             style: { font_size: fs, margin_v: mv, margin_h: mh },
-            text: "Phụ đề tiếng Việt",
+            text: t("preview.sampleText"),
             time,
             format: "overlay",
           }),
@@ -57,7 +59,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         setLoading(false);
       }
     },
-    [videoId, region]
+    [videoId, region, t]
   );
 
   // Initial overlay at t=0, then re-render on slider changes (debounced).
@@ -152,13 +154,13 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     <div className="space-y-4">
       <div className="glass-panel rounded-2xl p-4 sm:p-5 flex items-start justify-between gap-4">
         <p className="text-sm text-ink-muted leading-relaxed">
-          Play video và tua đến bất kỳ thời điểm nào để kiểm tra vị trí &amp; cỡ chữ phụ đề.
-          Kéo phụ đề trực tiếp trên video hoặc dùng thanh trượt để chỉnh cỡ chữ, khoảng cách từ đáy
-          và vị trí ngang, nhấn <b>Xác nhận</b> để dùng cấu hình này khi nhúng phụ đề.
+          {t("preview.helpDesc1")}{" "}
+          <b>{t("preview.confirmAction")}</b>{" "}
+          {t("preview.helpDesc2")}
         </p>
         <div className="flex gap-2 flex-shrink-0">
           <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">↵</kbd>
-          <span className="text-[10px] text-ink-light self-center hidden sm:inline">Confirm</span>
+          <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("preview.confirmShort")}</span>
         </div>
       </div>
 
@@ -177,7 +179,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             {overlayUrl && (
               <img
                 src={overlayUrl}
-                alt="Subtitle overlay"
+                alt={t("preview.overlayAlt")}
                 className="absolute inset-0 w-full h-full object-contain pointer-events-none"
                 draggable={false}
               />
@@ -192,12 +194,12 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         badge={
           <>
             <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/40 text-white/80 text-[10px] pointer-events-none">
-              Kéo phụ đề trên video để di chuyển
+              {t("preview.dragHint")}
             </div>
             {error && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/50 pointer-events-none">
                 <p className="text-white/90 text-[12px] px-4 text-center">
-                  Không thể tạo bản xem trước. Kiểm tra video/srt.
+                  {t("preview.previewFailed")}
                 </p>
               </div>
             )}
@@ -209,7 +211,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         <label className="block">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
-              Cỡ chữ
+              {t("preview.fontSize")}
             </span>
             <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
               {fontSize}px
@@ -229,7 +231,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         <label className="block">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
-              Vị trí (cách đáy)
+              {t("preview.marginV")}
             </span>
             <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
               {marginV}px
@@ -249,7 +251,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         <label className="block">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
-              Vị trí ngang
+              {t("preview.marginH")}
             </span>
             <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
               {marginH}px
@@ -272,7 +274,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             disabled={!overlayUrl}
             className="btn-island-primary group text-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <span className="tracking-tight">Xác nhận phụ đề</span>
+            <span className="tracking-tight">{t("preview.confirm")}</span>
             <span className="btn-island-icon">
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 6 9 17 4 12" />

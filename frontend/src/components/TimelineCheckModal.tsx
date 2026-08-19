@@ -12,6 +12,7 @@ import {
   validateSrtTimeline,
 } from "@/lib/api";
 import type { SrtEntry, TimelineIssue, SubtitleRisk } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 const ROW_H = 52;
 const MIN_DURATION = 0.5;
@@ -75,9 +76,9 @@ function entriesToSrt(entries: SrtEntry[]): string {
 }
 
 const RISK_LABELS: Record<string, string> = {
-  NOT_TRANSLATED: "Chưa dịch sang tiếng Việt",
-  TIMELINE_OVERLAP: "Timeline chồng lấn",
-  ADJACENT_SIMILAR: "Nội dung liền kề còn giống nhau",
+  NOT_TRANSLATED: "timeline.risk.notTranslated",
+  TIMELINE_OVERLAP: "timeline.risk.overlap",
+  ADJACENT_SIMILAR: "timeline.risk.adjacentSimilar",
 };
 
 interface TimelineCheckModalProps {
@@ -105,6 +106,7 @@ export default function TimelineCheckModal({
   onClose,
   targetLang = "vi",
 }: TimelineCheckModalProps) {
+  const { t } = useI18n();
   const [entries, setEntries] = useState<SrtEntry[]>([]);
   const [loadError, setLoadError] = useState("");
   const [duration, setDuration] = useState(0);
@@ -139,7 +141,7 @@ export default function TimelineCheckModal({
         setLoadError("");
       })
       .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Lỗi tải phụ đề");
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : t("timeline.loadError" as string));
       });
     return () => {
       cancelled = true;
@@ -370,8 +372,8 @@ export default function TimelineCheckModal({
       await new Promise((r) => setTimeout(r, 1000));
       const st = await getJobStatus(job_id);
       if (st.status === "done") break;
-      if (st.status === "error") throw new Error(st.error || "Kiểm tra rủi ro thất bại");
-      if (i === 599) throw new Error("Quá thời gian chờ kiểm tra rủi ro");
+      if (st.status === "error") throw new Error(st.error || t("timeline.riskCheckFailed" as string));
+      if (i === 599) throw new Error(t("timeline.riskCheckTimeout" as string));
     }
     const result = await getSrtRiskResult(videoId);
     setRisks(result.risks ?? []);
@@ -383,7 +385,7 @@ export default function TimelineCheckModal({
     try {
       await performRiskCheck();
     } catch (e) {
-      setCheckError(e instanceof Error ? e.message : "Kiểm tra rủi ro thất bại");
+      setCheckError(e instanceof Error ? e.message : t("timeline.riskCheckFailed" as string));
     } finally {
       setChecking(false);
     }
@@ -396,7 +398,7 @@ export default function TimelineCheckModal({
       await updateSrt(videoId, entriesToSrt(entries));
       await performRiskCheck();
     } catch (e) {
-      setCheckError(e instanceof Error ? e.message : "Lưu & kiểm tra lại thất bại");
+      setCheckError(e instanceof Error ? e.message : t("timeline.saveRecheckFailed" as string));
     } finally {
       setSaving(false);
     }
@@ -453,7 +455,7 @@ export default function TimelineCheckModal({
       const v = await validateSrtTimeline(videoId);
       setTimelineIssues(v.issues ?? []);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Khôi phục phụ đề đã lưu thất bại");
+      setLoadError(e instanceof Error ? e.message : t("timeline.restoreFailed" as string));
     }
   }, [videoId]);
 
@@ -476,11 +478,11 @@ export default function TimelineCheckModal({
                 <IconAlert className="w-5 h-5 text-amber-600" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">Kiểm tra timeline phụ đề</p>
+                <p className="text-sm font-semibold text-ink">{t("timeline.title" as string)}</p>
                 <p className="text-[12px] text-ink-muted leading-relaxed">
                   {timelineIssues.length > 0
-                    ? `Phát hiện ${timelineIssues.length} lỗi timeline vô lý — dòng lỗi được tô đỏ.`
-                    : "Không có lỗi timeline cơ bản. Bạn có thể kiểm tra rủi ro bằng Gemini."}
+                    ? t("timeline.issuesFound" as string, { count: timelineIssues.length })
+                    : t("timeline.noIssues" as string)}
                 </p>
               </div>
             </div>
@@ -491,11 +493,11 @@ export default function TimelineCheckModal({
                 className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
-                {checking ? "Đang kiểm tra…" : "Kiểm tra rủi ro file sub"}
+                {checking ? t("timeline.checking" as string) : t("timeline.checkRisk" as string)}
               </button>
               <button
                 onClick={onClose}
-                title="Thu nhỏ lại (tiếp tục chờ kiểm tra)"
+                title={t("timeline.minimize" as string)}
                 className="w-9 h-9 rounded-full bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
@@ -520,7 +522,7 @@ export default function TimelineCheckModal({
           {risks.length > 0 && (
             <div className="rounded-xl bg-amber-500/10 ring-1 ring-amber-500/25 px-3.5 py-2.5">
               <p className="text-[12px] font-semibold text-amber-800 mb-1.5">
-                Phát hiện {risks.length} dòng rủi ro (Gemini)
+                {t("timeline.risksFound" as string, { count: risks.length })}
               </p>
               <ul className="space-y-1 max-h-28 overflow-y-auto">
                 {risks.map((r) => (
@@ -531,14 +533,14 @@ export default function TimelineCheckModal({
                         if (entry) selectEntry(entry.index, entry.start);
                       }}
                       className="w-full text-left text-[12px] text-amber-800/90 leading-snug hover:bg-amber-500/15 rounded-md px-1.5 py-0.5 cursor-pointer transition-colors"
-                      title="Nhảy tới dòng này trên timeline và danh sách"
+                      title={t("timeline.jumpToLine" as string)}
                     >
                       <span className="font-mono text-amber-700">#{r.index}</span>{" "}
                       <span className="text-amber-900/80">{r.text}</span>
                       {r.problems.length > 0 && (
                         <span className="text-amber-700/80">
                           {" "}
-                          · {r.problems.map((p) => RISK_LABELS[p] || p).join(", ")}
+                          · {r.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
                         </span>
                       )}
                       {r.note && <span className="text-amber-700/60"> — {r.note}</span>}
@@ -581,11 +583,11 @@ export default function TimelineCheckModal({
             <div className="flex flex-col min-h-0">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-                  Phụ đề ({entries.length} dòng)
+                  {t("timeline.subtitleLines" as string, { count: entries.length })}
                 </p>
                 {activeRisk && (
                   <p className="text-[10px] text-amber-700 font-medium truncate max-w-[60%]">
-                    ⚠ {activeRisk.problems.map((p) => RISK_LABELS[p] || p).join(", ")}
+                    ⚠ {activeRisk.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
                   </p>
                 )}
               </div>
@@ -624,7 +626,7 @@ export default function TimelineCheckModal({
                           deleteEntry(entry.index);
                         }}
                         className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-red-600/90 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity cursor-pointer shadow-sm"
-                        title="Xóa dòng này"
+                        title={t("timeline.deleteRow" as string)}
                       >
                         ×
                       </button>
@@ -649,13 +651,13 @@ export default function TimelineCheckModal({
                             setEditingIndex(entry.index);
                           }}
                           className="ml-auto text-[10px] font-medium text-ink-muted hover:text-blue-600 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1"
-                          title="Chỉnh sửa nội dung"
+                          title={t("timeline.editContent" as string)}
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                             <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
                             <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                           </svg>
-                          Sửa
+                          {t("timeline.edit" as string)}
                         </button>
                       </div>
                       {editingIndex === entry.index ? (
@@ -673,7 +675,7 @@ export default function TimelineCheckModal({
                             autoFocus
                             rows={2}
                             className="w-full rounded-lg bg-white ring-1 ring-blue-500/40 focus:ring-2 focus:ring-blue-500 px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none resize-y"
-                            placeholder="Nhập nội dung phụ đề..."
+                            placeholder={t("timeline.enterSubtitle" as string)}
                           />
                           <div className="flex items-center justify-end gap-1.5 mt-1">
                             <button
@@ -683,7 +685,7 @@ export default function TimelineCheckModal({
                               }}
                               className="px-2 py-1 rounded-full text-[10px] font-medium text-ink-muted hover:bg-black/[0.04] transition-colors cursor-pointer"
                             >
-                              Hủy
+                              {t("timeline.cancel" as string)}
                             </button>
                             <button
                               onClick={(e) => {
@@ -692,7 +694,7 @@ export default function TimelineCheckModal({
                               }}
                               className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
                             >
-                              Lưu
+                              {t("timeline.save" as string)}
                             </button>
                           </div>
                         </div>
@@ -712,7 +714,7 @@ export default function TimelineCheckModal({
                   );
                 })}
                 {entries.length === 0 && !loadError && (
-                  <p className="text-[12px] text-ink-light p-4">Đang tải phụ đề...</p>
+                  <p className="text-[12px] text-ink-light p-4">{t("timeline.loadingSubtitles" as string)}</p>
                 )}
               </div>
             </div>
@@ -723,13 +725,13 @@ export default function TimelineCheckModal({
               <div className="flex items-center justify-between mb-2 gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-                    Timeline
+                    {t("timeline.timeline" as string)}
                   </p>
                   <div className="flex items-center gap-1 rounded-full bg-black/[0.04] ring-1 ring-black/[0.05] px-1.5 py-1">
                     <button
                       onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.25))}
                       className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
-                      title="Thu nhỏ"
+                      title={t("timeline.zoomOut" as string)}
                     >
                       −
                     </button>
@@ -739,7 +741,7 @@ export default function TimelineCheckModal({
                     <button
                       onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.25))}
                       className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
-                      title="Phóng to"
+                      title={t("timeline.zoomIn" as string)}
                     >
                       +
                     </button>
@@ -828,7 +830,7 @@ export default function TimelineCheckModal({
                             deleteEntry(entry.index);
                           }}
                           className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-600 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity cursor-pointer shadow-md z-10"
-                          title="Xóa dòng này"
+                          title={t("timeline.deleteRow" as string)}
                         >
                           ×
                         </button>
@@ -838,10 +840,10 @@ export default function TimelineCheckModal({
                 </div>
               </div>
               <div className="mt-2 flex items-center gap-3 text-[10px] text-ink-light">
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-500/70 inline-block" /> Bình thường</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Lỗi timeline</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> Rủi ro (Gemini)</span>
-                <span className="ml-auto text-ink-light">Kéo để di chuyển · Kéo mép để đổi độ dài</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-500/70 inline-block" /> {t("timeline.legendNormal" as string)}</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> {t("timeline.legendError" as string)}</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> {t("timeline.legendRisk" as string)}</span>
+                <span className="ml-auto text-ink-light">{t("timeline.dragHint" as string)}</span>
               </div>
             </div>
 
@@ -853,29 +855,29 @@ export default function TimelineCheckModal({
               onClick={resetEdits}
               disabled={saving || checking || entries.length === 0}
               className="mr-auto px-3.5 py-2 rounded-full text-[12px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
-              title="Xoá các chỉnh sửa chưa lưu, khôi phục phụ đề đã lưu"
+              title={t("timeline.restoreTitle" as string)}
             >
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
                 <path d="M3 3v5h5" />
               </svg>
-              Khôi phục bản đã lưu
+              {t("timeline.restore" as string)}
             </button>
             <button
               onClick={() => onResolve("continue")}
               disabled={saving || checking}
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer disabled:opacity-50"
             >
-              Tiếp tục giữ nguyên
+              {t("timeline.keepAsIs" as string)}
             </button>
             <button
               onClick={saveAndRecheck}
               disabled={saving || checking || entries.length === 0}
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
-              title="Lưu các chỉnh sửa vào SRT rồi gọi Gemini kiểm tra rủi ro lại từ đầu"
+              title={t("timeline.saveRecheckTitle" as string)}
             >
               {saving || checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
-              {saving ? "Đang lưu…" : checking ? "Đang kiểm tra…" : "Lưu & kiểm tra lại"}
+              {saving ? t("timeline.saving" as string) : checking ? t("timeline.checking" as string) : t("timeline.saveRecheck" as string)}
             </button>
             <button
               onClick={saveAndContinue}
@@ -883,7 +885,7 @@ export default function TimelineCheckModal({
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
             >
               {saving && <IconSpinner className="w-3.5 h-3.5" />}
-              {saving ? "Đang lưu…" : "Lưu chỉnh sửa & tiếp tục"}
+              {saving ? t("timeline.saving" as string) : t("timeline.saveContinue" as string)}
             </button>
           </div>
         </div>

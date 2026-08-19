@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
+import { useI18n, type Dict } from "@/lib/i18n";
 import {
   getPipelineHealth,
   getProfilesCheck,
@@ -32,10 +33,54 @@ import {
   STEPS,
   STEP_STAGE,
   DEFAULT_REGION,
-  langLabel,
   fmtElapsed,
   type Pipeline,
 } from "@/stores/pipeline-store";
+
+type TFunc = (key: string, vars?: Record<string, string | number>) => string;
+
+function makeT(
+  t: (key: keyof Dict, vars?: Record<string, string | number>) => string,
+): TFunc {
+  return (key, vars) => t(key as keyof Dict, vars);
+}
+
+const STEP_LABEL_KEYS = [
+  "pipeline.step.label.resolve",
+  "pipeline.step.label.merge",
+  "pipeline.step.label.region",
+  "pipeline.step.label.style",
+  "pipeline.step.label.ocr",
+  "pipeline.step.label.context",
+  "pipeline.step.label.translate",
+  "pipeline.step.label.dub",
+  "pipeline.step.label.mux",
+  "pipeline.step.label.meta",
+  "pipeline.step.label.thumbnail",
+  "pipeline.step.label.youtube",
+];
+
+const STEP_DETAIL_KEYS = [
+  "pipeline.step.detail.resolve",
+  "pipeline.step.detail.merge",
+  "pipeline.step.detail.region",
+  "pipeline.step.detail.style",
+  "pipeline.step.detail.ocr",
+  "pipeline.step.detail.context",
+  "pipeline.step.detail.translate",
+  "pipeline.step.detail.dub",
+  "pipeline.step.detail.mux",
+  "pipeline.step.detail.meta",
+  "pipeline.step.detail.thumbnail",
+  "pipeline.step.detail.youtube",
+];
+
+function localizedLangLabel(code: string, tr: TFunc): string {
+  if (code === "zh" || code === "ch") return tr("pipeline.langZh");
+  if (code === "en") return tr("pipeline.langEn");
+  if (code === "vi") return tr("pipeline.langVi");
+  return code || "—";
+}
 
 function IconSpinner({ className = "w-4 h-4" }) {
   return (
@@ -79,29 +124,31 @@ function IconCheck({ className = "w-4 h-4" }) {
   );
 }
 
-const STATUS_META: Record<string, { label: string; cls: string; dot: string }> =
-  {
-    queued: {
-      label: "Chờ",
-      cls: "bg-amber-500/10 text-amber-700 ring-amber-500/20",
-      dot: "bg-amber-500",
-    },
-    running: {
-      label: "Đang chạy",
-      cls: "bg-blue-500/10 text-blue-700 ring-blue-500/20",
-      dot: "bg-blue-500 animate-pulse",
-    },
-    done: {
-      label: "Xong",
-      cls: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20",
-      dot: "bg-emerald-500",
-    },
-    error: {
-      label: "Lỗi",
-      cls: "bg-red-500/10 text-red-700 ring-red-500/20",
-      dot: "bg-red-500",
-    },
-  };
+const STATUS_META: Record<
+  string,
+  { labelKey: string; cls: string; dot: string }
+> = {
+  queued: {
+    labelKey: "pipeline.status.queued",
+    cls: "bg-amber-500/10 text-amber-700 ring-amber-500/20",
+    dot: "bg-amber-500",
+  },
+  running: {
+    labelKey: "pipeline.status.running",
+    cls: "bg-blue-500/10 text-blue-700 ring-blue-500/20",
+    dot: "bg-blue-500 animate-pulse",
+  },
+  done: {
+    labelKey: "pipeline.status.done",
+    cls: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20",
+    dot: "bg-emerald-500",
+  },
+  error: {
+    labelKey: "pipeline.status.error",
+    cls: "bg-red-500/10 text-red-700 ring-red-500/20",
+    dot: "bg-red-500",
+  },
+};
 
 function fmtBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -111,48 +158,68 @@ function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function stepDetail(p: Pipeline): string {
+function stepDetail(p: Pipeline, tr: TFunc): string {
   const idx =
     p.status === "error" && p.failedStep != null
       ? p.failedStep
       : (STEP_STAGE[p.stage] ?? -1);
   switch (idx) {
     case 0:
-      return `Tải video từ link · ngôn ngữ: ${langLabel(p.srcLang || "zh")}`;
+      return tr("pipeline.stepDetail.download", {
+        lang: localizedLangLabel(p.srcLang || "zh", tr),
+      });
     case 1:
-      return "FFmpeg gộp 2 file (copy video + audio)";
+      return tr("pipeline.stepDetail.merge");
     case 2:
       return p.region
-        ? `Đã chọn vùng x ${p.region.x1}–${p.region.x2} · y ${p.region.y1}–${p.region.y2}`
-        : "Kéo vùng quét lấy phụ đề trên video";
+        ? tr("pipeline.stepDetail.regionSelected", {
+            x1: p.region.x1,
+            x2: p.region.x2,
+            y1: p.region.y1,
+            y2: p.region.y2,
+          })
+        : tr("pipeline.stepDetail.regionPending");
     case 3:
       return p.subtitleStyle
-        ? `Cỡ chữ ${p.subtitleStyle.font_size ?? 48}px · cách đáy ${p.subtitleStyle.margin_v ?? 40}px`
+        ? tr("pipeline.stepDetail.subtitleStyle", {
+            size: p.subtitleStyle.font_size ?? 48,
+            margin: p.subtitleStyle.margin_v ?? 40,
+          })
         : p.autoFit
-          ? "Tự động khớp vị trí sub gốc"
-          : "Xem trước, chỉnh cỡ chữ và vị trí phụ đề";
+          ? tr("pipeline.stepDetail.subtitleAutoFit")
+          : tr("pipeline.stepDetail.subtitlePreview");
     case 4:
       return p.ocrEngine
-        ? `${p.ocrEngine} · ${langLabel(p.ocrLang)}`
-        : "Nhận dạng chữ trong vùng đã chọn";
+        ? tr("pipeline.stepDetail.ocrEngine", {
+            engine: p.ocrEngine,
+            lang: localizedLangLabel(p.ocrLang, tr),
+          })
+        : tr("pipeline.stepDetail.ocrPending");
     case 5:
-      return `Gemini Vision · ${p.contextOn ? "đã bật" : "chưa bật"}`;
+      return tr("pipeline.stepDetail.context", {
+        state: p.contextOn ? tr("pipeline.enabled") : tr("pipeline.disabled"),
+      });
     case 6:
       return p.translateOn !== false
         ? p.srcLang
-          ? `Gemini dịch ${langLabel(p.srcLang)} → ${langLabel(p.translateTarget || "vi")}`
-          : `Gemini dịch sang ${langLabel(p.translateTarget || "vi")}`
-        : "Đã tắt dịch — giữ phụ đề gốc";
+          ? tr("pipeline.stepDetail.translateFromTo", {
+              from: localizedLangLabel(p.srcLang, tr),
+              to: localizedLangLabel(p.translateTarget || "vi", tr),
+            })
+          : tr("pipeline.stepDetail.translateTo", {
+              to: localizedLangLabel(p.translateTarget || "vi", tr),
+            })
+        : tr("pipeline.stepDetail.translateOff");
     case 7:
-      return "Demucs tách giọng + TTS Việt (giữ nhạc nền)";
+      return tr("pipeline.stepDetail.dub");
     case 8:
-      return "FFmpeg nhúng SRT (ASS BlackBox) vào MP4";
+      return tr("pipeline.stepDetail.mux");
     case 9:
-      return "Gemini tạo tiêu đề/mô tả/tags từ ngữ cảnh";
+      return tr("pipeline.stepDetail.meta");
     case 10:
-      return "fal.ai chỉnh lại thumbnail 16:9 + tiêu đề";
+      return tr("pipeline.stepDetail.thumbnail");
     case 11:
-      return "Đăng video lên YouTube kèm meta";
+      return tr("pipeline.stepDetail.youtube");
     default:
       return "";
   }
@@ -167,6 +234,8 @@ function pipelineElapsed(p: Pipeline, now: number): string {
 }
 
 export default function AutoPipeline() {
+  const { t } = useI18n();
+  const tr = makeT(t);
   const pipelines = usePipelineStore((s) => s.pipelines);
   const addPipeline = usePipelineStore((s) => s.addPipeline);
   const addPipelineFromUpload = usePipelineStore(
@@ -246,16 +315,20 @@ export default function AutoPipeline() {
           configured: !!profiles?.douyin.exists,
           healthy: !!profiles?.douyin.exists,
           message: profiles?.douyin.exists
-            ? `Profile douyin sẵn sàng (${profiles.douyin.path})`
-            : "Chưa có profile douyin — cần đăng nhập Douyin (bấm đăng nhập ở phần nguồn video)",
+            ? tr("pipeline.health.profileDouyinReady", {
+                path: profiles.douyin.path,
+              })
+            : tr("pipeline.health.profileDouyinMissing"),
         },
         {
           service: "chatgpt",
           configured: !!profiles?.chatgpt.exists,
           healthy: !!profiles?.chatgpt.exists,
           message: profiles?.chatgpt.exists
-            ? `Profile chatgpt sẵn sàng (${profiles.chatgpt.path})`
-            : "Chưa có profile chatgpt — cần đăng nhập ChatGPT một lần",
+            ? tr("pipeline.health.profileChatgptReady", {
+                path: profiles.chatgpt.path,
+              })
+            : tr("pipeline.health.profileChatgptMissing"),
         },
       ];
       setHealth({ ...h, checks: [...h.checks, ...profileChecks] });
@@ -267,7 +340,7 @@ export default function AutoPipeline() {
             service: "server",
             configured: false,
             healthy: false,
-            message: "Không kết nối được backend",
+            message: tr("pipeline.health.backendDown"),
           },
         ],
       });
@@ -343,7 +416,7 @@ export default function AutoPipeline() {
                   ...p,
                   status: "error" as const,
                   stage: "error" as const,
-                  error: p.error || "Đã bị gián đoạn do tải lại trang",
+                  error: p.error || tr("pipeline.error.interruptedReload"),
                 }
               : p,
           );
@@ -518,7 +591,9 @@ export default function AutoPipeline() {
       const videoId = await uploadVideo(file, setUploadProgress);
       setUploaded({ videoId, name: file.name, size: file.size });
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "Upload thất bại");
+      setUploadError(
+        e instanceof Error ? e.message : tr("pipeline.error.uploadFailed"),
+      );
       setUploaded(null);
     } finally {
       setUploading(false);
@@ -645,25 +720,27 @@ export default function AutoPipeline() {
                   <path d="M11 18l-6-6 6-6" />
                 </svg>
               </span>
-              <span className="tracking-tight">Back to library</span>
+              <span className="tracking-tight">
+                {tr("pipeline.backLibrary")}
+              </span>
             </Link>
             {hasFinished && (
               <button
                 onClick={handleClearFinished}
                 className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
               >
-                Xoá job đã xong
+                {tr("pipeline.clearFinished")}
               </button>
             )}
             <button
               onClick={() => setConfirmingClear(true)}
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-all duration-300 active:scale-[0.97] cursor-pointer"
             >
-              Dọn sạch dữ liệu tạm
+              {tr("pipeline.clearTemp")}
             </button>
             <Link
               href="/settings"
-              title="Cài đặt (API key, TTS, style phụ đề)"
+              title={tr("pipeline.settingsTitle")}
               className="w-9 h-9 rounded-full bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.95] flex items-center justify-center cursor-pointer"
             >
               <svg
@@ -683,14 +760,12 @@ export default function AutoPipeline() {
         </AnimatedBlock>
 
         <AnimatedBlock delay={100} className="mt-10 mb-10">
-          <div className="eyebrow mb-4">Auto Pipeline</div>
+          <div className="eyebrow mb-4">{tr("pipeline.eyebrow")}</div>
           <h1 className="text-[clamp(1.8rem,4.5vw,3.4rem)] font-semibold tracking-tight leading-[1.05] text-ink">
-            Link / Video → Video có phụ đề Việt
+            {tr("pipeline.title")}
           </h1>
           <p className="mt-4 text-sm text-ink-muted max-w-lg leading-relaxed">
-            Dán link Douyin/YouTube hoặc tải video từ máy, hệ thống tự động: tải
-            → merge audio/video → OCR → ngữ cảnh → dịch Gemini → nhúng phụ đề
-            mới vào video.
+            {tr("pipeline.subtitle")}
           </p>
         </AnimatedBlock>
 
@@ -698,29 +773,24 @@ export default function AutoPipeline() {
         <AnimatedBlock delay={150}>
           <div className="double-bezel mb-6">
             <div className="double-bezel-inner p-5 sm:p-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-3">
-                1. Chọn nguồn video
-              </p>
               {healthLoading ? (
                 <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
                   <IconSpinner className="w-4 h-4 text-blue-600" />
                   <span className="text-[12px] text-ink-muted">
-                    Đang kiểm tra cấu hình
+                    {tr("pipeline.health.checking")}
                   </span>
                 </div>
               ) : health && !health.healthy ? (
                 <div className="mb-4 rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20 px-4 py-3">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <p className="text-[12px] font-medium text-amber-800">
-                      ⚠️ Cần cấu hình trước khi xử lý: Gemini API phải hoạt động
-                      và cần ít nhất 1 engine lồng tiếng (Google TTS hoặc CapCut
-                      service).
+                      {tr("pipeline.health.warning")}
                     </p>
                     <button
                       onClick={checkHealth}
                       className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors cursor-pointer"
                     >
-                      Kiểm tra lại
+                      {tr("pipeline.retry")}
                     </button>
                   </div>
                   <ul className="mt-2 space-y-1">
@@ -742,30 +812,30 @@ export default function AutoPipeline() {
                 <div className="flex items-center gap-2 mb-4 rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 px-4 py-2.5">
                   <IconCheck className="w-4 h-4 text-emerald-600" />
                   <span className="text-[12px] text-emerald-800">
-                    Gemini API đã sẵn sàng. Engine lồng tiếng:{" "}
+                    {tr("pipeline.health.readyPrefix")}{" "}
                     {health.dub_engines?.google ? "Google TTS" : ""}
                     {health.dub_engines?.google && health.dub_engines?.capcut
                       ? " + "
                       : ""}
                     {health.dub_engines?.capcut ? "CapCut" : ""}
                     {!health.dub_engines?.google && !health.dub_engines?.capcut
-                      ? "chưa sẵn sàng"
-                      : " sẵn sàng"}
+                      ? tr("pipeline.health.notReady")
+                      : tr("pipeline.health.ready")}
                     .{" "}
                     {health.checks.find((c) => c.service === "douyin")?.healthy
-                      ? "Profile douyin ✓"
-                      : "Profile douyin ✗"}
+                      ? tr("pipeline.health.profileDouyinOk")
+                      : tr("pipeline.health.profileDouyinNo")}
                     ,{" "}
                     {health.checks.find((c) => c.service === "chatgpt")?.healthy
-                      ? "Profile chatgpt ✓"
-                      : "Profile chatgpt ✗"}
+                      ? tr("pipeline.health.profileChatgptOk")
+                      : tr("pipeline.health.profileChatgptNo")}
                     .
                   </span>
                   <button
                     onClick={checkHealth}
                     className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-emerald-600/15 text-emerald-800 ring-1 ring-emerald-500/20 hover:bg-emerald-600/25 transition-colors cursor-pointer"
                   >
-                    Kiểm tra lại
+                    {tr("pipeline.retry")}
                   </button>
                 </div>
               ) : null}
@@ -781,10 +851,10 @@ export default function AutoPipeline() {
                     } cursor-pointer`}
                   >
                     {t === "douyin"
-                      ? "Link Douyin"
+                      ? tr("pipeline.sourceDouyin")
                       : t === "youtube"
-                        ? "Link YouTube"
-                        : "Upload từ máy"}
+                        ? tr("pipeline.sourceYoutube")
+                        : tr("pipeline.sourceUpload")}
                   </button>
                 ))}
               </div>
@@ -799,12 +869,12 @@ export default function AutoPipeline() {
                     disabled={!health?.healthy}
                     placeholder={
                       healthLoading
-                        ? "Đang kiểm tra kết nối..."
+                        ? tr("pipeline.placeholder.checking")
                         : health?.healthy
                           ? sourceType === "youtube"
-                            ? "Dán link YouTube (https://youtube.com/watch?v=... hoặc https://youtu.be/...)"
-                            : "Dán toàn bộ nội dung chia sẻ (hoặc link https://v.douyin.com/...)"
-                          : "Vào Settings (⚙️) nhập Gemini API key (và Google TTS Service Account nếu chọn Google)"
+                            ? tr("pipeline.placeholder.youtube")
+                            : tr("pipeline.placeholder.douyin")
+                          : tr("pipeline.placeholder.notConfigured")
                     }
                     className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
@@ -814,7 +884,9 @@ export default function AutoPipeline() {
                     className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <span className="tracking-tight">
-                      {sourceType === "youtube" ? "Tải & Xử lý" : "Bắt đầu"}
+                      {sourceType === "youtube"
+                        ? tr("pipeline.btnDownloadProcess")
+                        : tr("pipeline.btnStart")}
                     </span>
                   </button>
                 </div>
@@ -830,38 +902,48 @@ export default function AutoPipeline() {
                   {uploading ? (
                     <div className="w-full rounded-xl border border-dashed border-blue-500/30 bg-blue-500/5 px-4 py-6 text-[13px] text-ink-muted flex flex-col items-center gap-2">
                       <IconSpinner className="w-5 h-5 text-blue-600" />
-                      <span>Đang tải lên... {uploadProgress}%</span>
+                      <span>
+                        {tr("pipeline.uploading", {
+                          pct: uploadProgress,
+                        })}
+                      </span>
                     </div>
                   ) : uploaded ? (
                     <div className="w-full rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-4">
                       <div className="flex items-center gap-2">
                         <IconCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                         <p className="text-[13px] font-medium text-emerald-800 truncate">
-                          Đã tải lên thành công: {uploaded.name}
+                          {tr("pipeline.uploadSuccess", {
+                            name: uploaded.name,
+                          })}
                         </p>
                       </div>
                       <p className="text-[11px] text-emerald-800/70 mt-1">
-                        {fmtBytes(uploaded.size)} — bấm Bắt đầu để xử lý video.
+                        {tr("pipeline.uploadHint", {
+                          size: fmtBytes(uploaded.size),
+                        })}
                       </p>
                       <div className="mt-3 flex items-center gap-2 flex-wrap">
                         <button
                           onClick={handleStartUpload}
                           className="btn-island-primary group text-sm !px-5 !py-2.5"
                         >
-                          <span className="tracking-tight">Bắt đầu xử lý</span>
+                          <span className="tracking-tight">
+                            {tr("pipeline.btnStartProcess")}
+                          </span>
                         </button>
                         <button
                           onClick={() => fileInputRef.current?.click()}
                           className="px-4 py-2 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:text-ink transition-colors cursor-pointer"
                         >
-                          Đổi video khác
+                          {tr("pipeline.changeVideo")}
                         </button>
                       </div>
                     </div>
                   ) : uploadError ? (
                     <div className="w-full rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-4">
                       <p className="text-[13px] font-medium text-red-700">
-                        ⚠️ Upload thất bại
+                        {tr("pipeline.error.uploadFailed")}
                       </p>
                       <p className="text-[11px] text-red-700/80 mt-1">
                         {uploadError}
@@ -870,7 +952,7 @@ export default function AutoPipeline() {
                         onClick={() => fileInputRef.current?.click()}
                         className="mt-3 px-4 py-2 rounded-full text-[11px] font-medium bg-red-600/15 text-red-700 ring-1 ring-red-500/20 hover:bg-red-600/25 transition-colors cursor-pointer"
                       >
-                        Thử lại
+                        {tr("pipeline.retry")}
                       </button>
                     </div>
                   ) : (
@@ -892,14 +974,14 @@ export default function AutoPipeline() {
                         <polyline points="17 8 12 3 7 8" />
                         <line x1="12" y1="3" x2="12" y2="15" />
                       </svg>
-                      <span>Chọn video từ máy để tải lên</span>
+                      <span>{tr("pipeline.chooseVideo")}</span>
                     </button>
                   )}
                 </div>
               )}
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                  Ngôn ngữ gốc:
+                  {tr("pipeline.sourceLang")}
                 </span>
                 <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
                   {(["zh", "en", "vi"] as const).map((l) => (
@@ -913,20 +995,20 @@ export default function AutoPipeline() {
                       } cursor-pointer`}
                     >
                       {l === "zh"
-                        ? "Tiếng Trung"
+                        ? tr("pipeline.langZh")
                         : l === "en"
-                          ? "Tiếng Anh"
-                          : "Tiếng Việt"}
+                          ? tr("pipeline.langEn")
+                          : tr("pipeline.langVi")}
                     </button>
                   ))}
                 </div>
                 <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                  Dùng cho nhận dạng phụ đề (OCR) và dịch Gemini.
+                  {tr("pipeline.sourceLangHint")}
                 </p>
               </div>
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                  Vùng quét phụ đề:
+                  {tr("pipeline.scanRegion")}
                 </span>
                 <div
                   className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
@@ -939,7 +1021,7 @@ export default function AutoPipeline() {
                         : "text-ink-light hover:text-ink"
                     }`}
                   >
-                    Tự động (vùng mặc định)
+                    {tr("pipeline.regionAuto")}
                   </button>
                   <button
                     onClick={() => setRegionMode("manual")}
@@ -949,19 +1031,19 @@ export default function AutoPipeline() {
                         : "text-ink-light hover:text-ink"
                     }`}
                   >
-                    Chọn vùng thủ công
+                    {tr("pipeline.regionManual")}
                   </button>
                 </div>
                 <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
                   {regionMode === "auto"
-                    ? "Hệ thống tự dùng tọa độ mặc định, không cần kéo vùng trên video."
-                    : "Pipeline sẽ dừng lại ở bước Chọn vùng quét để bạn kéo vùng lấy phụ đề."}
+                    ? tr("pipeline.regionAutoHint")
+                    : tr("pipeline.regionManualHint")}
                 </p>
               </div>
               <div className="mt-4 border-t border-black/[0.05] pt-4">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                    Lồng tiếng:
+                    {tr("pipeline.dubTitle")}
                   </span>
                   <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
                     {(["vi-VN", "en-US"] as const).map((l) => (
@@ -982,7 +1064,9 @@ export default function AutoPipeline() {
                             : "text-ink-light hover:text-ink"
                         } cursor-pointer`}
                       >
-                        {l === "vi-VN" ? "Tiếng Việt" : "Tiếng Anh"}
+                        {l === "vi-VN"
+                          ? tr("pipeline.langVi")
+                          : tr("pipeline.langEn")}
                       </button>
                     ))}
                   </div>
@@ -1037,7 +1121,9 @@ export default function AutoPipeline() {
                         disabled={previewing}
                         className="px-4 py-2 rounded-full text-[11px] font-medium bg-blue-500/10 ring-1 ring-blue-500/20 text-blue-700 hover:bg-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
-                        {previewing ? "Đang tạo audio..." : "Nghe thử"}
+                        {previewing
+                          ? tr("pipeline.creatingAudio")
+                          : tr("pipeline.previewVoice")}
                       </button>
                       {previewUrl && (
                         <audio
@@ -1050,14 +1136,15 @@ export default function AutoPipeline() {
                       )}
                       {previewError && (
                         <span className="text-[11px] text-red-600 flex items-center gap-1.5">
-                          Giọng không khả dụng
+                          {tr("pipeline.voiceUnavailable")}
                         </span>
                       )}
                     </>
                   )}
                   {voicesLoading && (
                     <span className="text-[11px] text-ink-light flex items-center gap-1.5">
-                      <IconSpinner className="w-3 h-3" /> Đang tải giọng{" "}
+                      <IconSpinner className="w-3 h-3" />{" "}
+                      {tr("pipeline.loadingVoices")}{" "}
                       {dubEngine === "google" ? "Google TTS" : "CapCut"}...
                     </span>
                   )}
@@ -1066,29 +1153,29 @@ export default function AutoPipeline() {
                       ? capcutVoices.length === 0
                       : googleVoices.length === 0) && (
                       <span className="text-[11px] text-amber-700 flex items-center gap-2">
-                        Không tải được danh sách giọng{" "}
+                        {tr("pipeline.voicesFailed")}{" "}
                         {dubEngine === "google"
-                          ? "Google TTS (kiểm tra Service Account trong Settings ⚙️)"
-                          : "CapCut (service :8100)"}
+                          ? tr("pipeline.voicesFailedGoogle")
+                          : tr("pipeline.voicesFailedCapcut")}
                         .
                         <button
                           onClick={refreshVoices}
                           className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                          Thử lại
+                          {tr("pipeline.retry")}
                         </button>
                       </span>
                     )}
                 </div>
                 <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
                   {dubEngine === "google"
-                    ? "Dùng Google Cloud TTS (cần Service Account trong Settings ⚙️). Chọn giọng và bấm Nghe thử để nghe trước."
-                    : "Dùng giọng CapCut (yêu cầu service capcut-tts-api chạy ở port 8100)."}
+                    ? tr("pipeline.dubGoogleHint")
+                    : tr("pipeline.dubCapcutHint")}
                 </p>
 
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                    Voice gốc:
+                    {tr("pipeline.originalVoice")}
                   </span>
                   <div
                     className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
@@ -1101,7 +1188,7 @@ export default function AutoPipeline() {
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
-                      Tắt (tách bằng Demucs)
+                      {tr("pipeline.originalVoiceMute")}
                     </button>
                     <button
                       onClick={() => setMuteOriginal(false)}
@@ -1111,13 +1198,13 @@ export default function AutoPipeline() {
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
-                      Giữ lại (giảm âm lượng)
+                      {tr("pipeline.originalVoiceKeep")}
                     </button>
                   </div>
                   {!muteOriginal && (
                     <label className="flex items-center gap-2.5">
                       <span className="text-[11px] text-ink-muted">
-                        Giảm giọng gốc:
+                        {tr("pipeline.reduceOriginalVoice")}
                       </span>
                       <input
                         type="range"
@@ -1139,8 +1226,10 @@ export default function AutoPipeline() {
                 {!muteOriginal && (
                   <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
                     {originalGainDb === 0
-                      ? "Giữ nguyên âm lượng giọng gốc (0 dB)."
-                      : `Giọng nói và nhạc nền gốc sẽ giảm ${originalGainDb} dB để giọng đọc Việt nổi bật hơn.`}
+                      ? tr("pipeline.reduceOriginalHintZero")
+                      : tr("pipeline.reduceOriginalHint", {
+                          db: originalGainDb,
+                        })}
                   </p>
                 )}
 
@@ -1148,12 +1237,12 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Nhiều giọng nói (đa nhân vật)
+                        {tr("pipeline.multiVoice")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
                         {dubEngine === "capcut"
-                          ? "Gemini tự chọn giọng CapCut phù hợp cho từng dòng theo nhân vật (nam/nữ/tuổi), lồng tiếng mỗi dòng bằng đúng giọng đã chọn."
-                          : "Chỉ dùng được với engine CapCut."}
+                          ? tr("pipeline.multiVoiceHint")
+                          : tr("pipeline.multiVoiceCapcutOnly")}
                       </p>
                     </div>
                     <button
@@ -1175,7 +1264,7 @@ export default function AutoPipeline() {
 
                 <div className="mt-4 border-t border-black/[0.05] pt-4 flex items-center gap-3 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                    Căn chỉnh phụ đề:
+                    {tr("pipeline.alignSubs")}
                   </span>
                   <div
                     className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
@@ -1188,7 +1277,7 @@ export default function AutoPipeline() {
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
-                      Tự động khớp vị trí sub gốc
+                      {tr("pipeline.alignSubsAutoFit")}
                     </button>
                     <button
                       onClick={() => setAutoFitSubs(false)}
@@ -1198,13 +1287,13 @@ export default function AutoPipeline() {
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
-                      Tự chỉnh kích thước & vị trí
+                      {tr("pipeline.alignSubsManual")}
                     </button>
                   </div>
                   <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
                     {autoFitSubs
-                      ? "Tự động tính kích thước chữ và vị trí để phụ đề mới nằm đúng chỗ phụ đề gốc trên video."
-                      : "Thêm bước xem trước trong pipeline để bạn chỉnh cỡ chữ và vị trí phụ đề trước khi nhúng."}
+                      ? tr("pipeline.alignSubsAutoFitHint")
+                      : tr("pipeline.alignSubsManualHint")}
                   </p>
                 </div>
 
@@ -1212,11 +1301,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Dịch sub tự động
+                        {tr("pipeline.autoTranslate")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Bật để pipeline dịch phụ đề sang ngôn ngữ bạn chọn; tắt
-                        để giữ nguyên phụ đề gốc (không dịch).
+                        {tr("pipeline.autoTranslateHint")}
                       </p>
                     </div>
                     <button
@@ -1236,7 +1324,7 @@ export default function AutoPipeline() {
                   {translateOn && (
                     <div className="mt-3 flex items-center gap-2 flex-wrap">
                       <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Dịch sang:
+                        {tr("pipeline.translateTo")}
                       </span>
                       <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
                         {(["zh", "en", "vi"] as const).map((l) => (
@@ -1250,16 +1338,15 @@ export default function AutoPipeline() {
                             } cursor-pointer`}
                           >
                             {l === "zh"
-                              ? "Tiếng Trung"
+                              ? tr("pipeline.langZh")
                               : l === "en"
-                                ? "Tiếng Anh"
-                                : "Tiếng Việt"}
+                                ? tr("pipeline.langEn")
+                                : tr("pipeline.langVi")}
                           </button>
                         ))}
                       </div>
                       <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                        Nếu ngôn ngữ đích trùng ngôn ngữ gốc, pipeline sẽ giữ
-                        nguyên phụ đề gốc.
+                        {tr("pipeline.translateToHint")}
                       </p>
                     </div>
                   )}
@@ -1269,11 +1356,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Tự động lồng tiếng
+                        {tr("pipeline.autoDub")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Bật để pipeline tách giọng gốc và lồng tiếng Việt vào
-                        video; tắt để bỏ qua bước lồng tiếng.
+                        {tr("pipeline.autoDubHint")}
                       </p>
                     </div>
                     <button
@@ -1292,8 +1378,7 @@ export default function AutoPipeline() {
                   </div>
                   {dubOn && (
                     <p className="mt-3 text-[11px] text-ink-light leading-relaxed">
-                      Giọng đọc dùng cấu hình mục "Lồng tiếng" phía trên
-                      (CapCut/Google TTS + giọng đã chọn).
+                      {tr("pipeline.autoDubHintDetail")}
                     </p>
                   )}
                 </div>
@@ -1302,11 +1387,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Logo + Watermark
+                        {tr("pipeline.watermark")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Logo nhỏ ở góc trên trái + chữ chạy quanh viền clip (tạo
-                        bộ text + logo trong Settings ⚙️).
+                        {tr("pipeline.watermarkHint")}
                       </p>
                     </div>
                     <button
@@ -1327,7 +1411,7 @@ export default function AutoPipeline() {
                     <div className="mt-3">
                       <label className="block">
                         <span className="text-[11px] text-ink-muted mb-1.5 block">
-                          Bộ watermark sử dụng
+                          {tr("pipeline.watermarkSet")}
                         </span>
                         <select
                           value={watermarkPreset || presets[0]?.id || ""}
@@ -1336,13 +1420,15 @@ export default function AutoPipeline() {
                         >
                           {presets.length === 0 ? (
                             <option value="">
-                              Chưa có bộ nào — tạo trong Settings ⚙️
+                              {tr("pipeline.watermarkNone")}
                             </option>
                           ) : (
                             presets.map((p) => (
                               <option key={p.id} value={p.id}>
                                 {p.name}{" "}
-                                {p.has_logo ? "(logo + chữ)" : "(chỉ chữ)"}
+                                {p.has_logo
+                                  ? tr("pipeline.watermarkWithLogo")
+                                  : tr("pipeline.watermarkTextOnly")}
                               </option>
                             ))
                           )}
@@ -1356,12 +1442,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Kiểm tra timeline phụ đề
+                        {tr("pipeline.checkTimeline")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Sau khi dịch xong, pipeline dừng lại để kiểm tra
-                        timeline vô lý (end ≤ start, chồng lấn) và hiển thị
-                        popup cho bạn duyệt trước khi tiếp tục.
+                        {tr("pipeline.checkTimelineHint")}
                       </p>
                     </div>
                     <button
@@ -1384,11 +1468,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        fal.ai Edit thumbnail
+                        {tr("pipeline.falThumbnail")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Dùng fal.ai chỉnh lại thumbnail 16:9 + tiêu đề tiếng
-                        Việt (cần FAL key trong Settings ⚙️).
+                        {tr("pipeline.falThumbnailHint")}
                       </p>
                     </div>
                     <button
@@ -1412,12 +1495,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        ChatGPT Edit thumbnail
+                        {tr("pipeline.gptThumbnail")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Mở chatgpt.com, gửi ảnh + prompt (giống fal.ai) cho
-                        ChatGPT tạo thumbnail mới (mở Chrome để đăng nhập lần
-                        đầu).
+                        {tr("pipeline.gptThumbnailHint")}
                       </p>
                     </div>
                     <button
@@ -1443,11 +1524,10 @@ export default function AutoPipeline() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        Tự động up YouTube
+                        {tr("pipeline.autoYoutube")}
                       </p>
                       <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        Sau khi xong, đăng video lên YouTube kèm meta (tiêu
-                        đề/mô tả/tags) + thumbnail.
+                        {tr("pipeline.autoYoutubeHint")}
                       </p>
                     </div>
                     <button
@@ -1482,7 +1562,7 @@ export default function AutoPipeline() {
                     : "text-ink-light hover:text-ink"
                 }`}
               >
-                Tiến trình
+                {tr("pipeline.tabProgress")}
               </button>
               <button
                 onClick={() => setTab("active")}
@@ -1492,7 +1572,7 @@ export default function AutoPipeline() {
                     : "text-ink-light hover:text-ink"
                 }`}
               >
-                Đang xử lý
+                {tr("pipeline.tabActive")}
                 {activeCount > 0 && (
                   <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-blue-500/15 text-[10px] text-blue-600">
                     {activeCount}
@@ -1507,7 +1587,7 @@ export default function AutoPipeline() {
                     : "text-ink-light hover:text-ink"
                 }`}
               >
-                Đã xử lý
+                {tr("pipeline.tabDone")}
                 {finishedCount > 0 && (
                   <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-[10px] text-emerald-600">
                     {finishedCount}
@@ -1524,7 +1604,7 @@ export default function AutoPipeline() {
               <div className="double-bezel-inner p-5 sm:p-6">
                 {activePipelines.length === 0 ? (
                   <p className="text-sm text-ink-muted text-center py-8">
-                    Không có video nào đang xử lý.
+                    {tr("pipeline.emptyActive")}
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -1554,7 +1634,7 @@ export default function AutoPipeline() {
                 {donePipelines.length === 0 &&
                 historyVideosDone.length === 0 ? (
                   <p className="text-sm text-ink-muted text-center py-8">
-                    Chưa có video nào hoàn tất.
+                    {tr("pipeline.emptyDone")}
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -1616,7 +1696,7 @@ export default function AutoPipeline() {
             <div className="double-bezel">
               <div className="double-bezel-inner p-16 text-center">
                 <p className="text-sm text-ink-muted">
-                  Chưa có job nào. Dán link phía trên để bắt đầu.
+                  {tr("pipeline.emptyJob")}
                 </p>
               </div>
             </div>
@@ -1638,26 +1718,23 @@ export default function AutoPipeline() {
           >
             <div className="double-bezel-inner p-5 sm:p-6">
               <p className="text-sm font-semibold text-ink mb-1">
-                Dọn sạch dữ liệu tạm?
+                {tr("pipeline.clearTempTitle")}
               </p>
               <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
-                Hành động này sẽ xóa toàn bộ dữ liệu trong thư mục temp (video,
-                khung hình, phụ đề, file lồng tiếng, file merge, dự án...) và
-                hủy mọi quá trình đang chạy. Cấu hình (Gemini key, TTS) được giữ
-                nguyên.
+                {tr("pipeline.clearTempBody")}
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingClear(false)}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                 >
-                  Không
+                  {tr("pipeline.no")}
                 </button>
                 <button
                   onClick={handleClearTemp}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
                 >
-                  Xác nhận dọn sạch
+                  {tr("pipeline.confirmClear")}
                 </button>
               </div>
             </div>
@@ -1679,16 +1756,24 @@ function PipelineRow({
   onOpen: () => void;
   onRemove: () => void;
 }) {
+  const { t } = useI18n();
+  const tr = makeT(t);
   const meta = STATUS_META[p.status] ?? STATUS_META.queued;
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
     if (p.status === "error" && p.failedStep != null) {
-      return `Lỗi ở bước ${p.failedStep + 1}/9 · ${STEPS[p.failedStep]?.label ?? p.stage}`;
+      return `${tr("pipeline.stepError")} ${p.failedStep + 1}/9 · ${
+        STEP_LABEL_KEYS[p.failedStep]
+          ? tr(STEP_LABEL_KEYS[p.failedStep])
+          : p.stage
+      }`;
     }
     if (p.status !== "running") return null;
     const idx = STEP_STAGE[p.stage];
     return idx != null
-      ? `Bước ${idx + 1}/12 · ${STEPS[idx]?.label ?? p.stage}`
+      ? `${tr("pipeline.stepProgress")} ${idx + 1}/12 · ${
+          STEP_LABEL_KEYS[idx] ? tr(STEP_LABEL_KEYS[idx]) : p.stage
+        }`
       : p.stage;
   })();
 
@@ -1728,7 +1813,7 @@ function PipelineRow({
           <span
             className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 ${meta.cls}`}
           >
-            {meta.label}
+            {tr(meta.labelKey)}
           </span>
           {p.status === "queued" && (
             <span className="text-[10px] text-amber-700/80 flex items-center gap-1">
@@ -1743,13 +1828,13 @@ function PipelineRow({
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
               </svg>
-              Đang chờ
+              {tr("pipeline.waiting")}
             </span>
           )}
           {p.status === "running" && (
             <span className="text-[10px] text-blue-700/80 flex items-center gap-1">
               <IconSpinner className="w-3 h-3" />
-              Đang chạy
+              {tr("pipeline.running")}
             </span>
           )}
           <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
@@ -1757,7 +1842,7 @@ function PipelineRow({
           </span>
         </div>
         <p className="text-[12px] font-medium text-ink truncate">
-          {p.title || p.url || `Job ${p.id}`}
+          {p.title || p.url || tr("pipeline.jobTitle", { id: p.id })}
         </p>
         <div className="flex items-center gap-2 mt-1.5">
           <div className="flex-1 h-1 rounded-full bg-black/[0.06] overflow-hidden">
@@ -1795,7 +1880,9 @@ function PipelineRow({
           setConfirmingRemove(true);
         }}
         title={
-          p.status === "running" || p.status === "queued" ? "Hủy xử lý" : "Xoá"
+          p.status === "running" || p.status === "queued"
+            ? tr("pipeline.cancelProcess")
+            : tr("pipeline.delete")
         }
         className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
       >
@@ -1847,19 +1934,17 @@ function PipelineRow({
               {p.status === "running" || p.status === "queued" ? (
                 <>
                   <p className="text-sm font-semibold text-ink mb-1">
-                    Hủy xử lý?
+                    {tr("pipeline.cancelProcessTitle")}
                   </p>
                   <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
-                    Nếu hủy sẽ mất hết tiến độ hiện tại và xóa toàn bộ file tạm
-                    của video này (video, khung hình, phụ đề). Quá trình sẽ phải
-                    làm lại từ đầu.
+                    {tr("pipeline.cancelProcessBody")}
                   </p>
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmingRemove(false)}
                       className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                     >
-                      Không, tiếp tục
+                      {tr("pipeline.noContinue")}
                     </button>
                     <button
                       onClick={() => {
@@ -1868,24 +1953,24 @@ function PipelineRow({
                       }}
                       className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
                     >
-                      Xác nhận hủy
+                      {tr("pipeline.confirmCancel")}
                     </button>
                   </div>
                 </>
               ) : (
                 <>
                   <p className="text-sm font-semibold text-ink mb-1">
-                    Xoá job này?
+                    {tr("pipeline.deleteJobTitle")}
                   </p>
                   <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
-                    Sẽ xóa job khỏi danh sách xử lý.
+                    {tr("pipeline.deleteJobBody")}
                   </p>
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmingRemove(false)}
                       className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                     >
-                      Không, giữ lại
+                      {tr("pipeline.noKeep")}
                     </button>
                     <button
                       onClick={() => {
@@ -1894,7 +1979,7 @@ function PipelineRow({
                       }}
                       className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
                     >
-                      Xoá
+                      {tr("pipeline.delete")}
                     </button>
                   </div>
                 </>
@@ -1916,6 +2001,8 @@ function HistoryRow({
   onOpen: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
+  const tr = makeT(t);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   return (
     <div
@@ -1951,10 +2038,10 @@ function HistoryRow({
         <div className="flex items-center gap-2 mb-1">
           <span className="w-2 h-2 rounded-full flex-shrink-0 bg-emerald-500" />
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 bg-emerald-500/10 text-emerald-700 ring-emerald-500/20">
-            Xong
+            {tr("pipeline.status.done")}
           </span>
           <span className="text-[10px] font-mono text-ink-light tabular-nums">
-            {v.entries} phụ đề
+            {tr("pipeline.entries", { count: v.entries })}
           </span>
         </div>
         <p className="text-[12px] font-medium text-ink truncate">
@@ -1978,7 +2065,7 @@ function HistoryRow({
           e.stopPropagation();
           setConfirmingDelete(true);
         }}
-        title="Xoá toàn bộ video"
+        title={tr("pipeline.deleteVideo")}
         className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
       >
         <svg
@@ -2012,18 +2099,17 @@ function HistoryRow({
           >
             <div className="double-bezel-inner p-5 sm:p-6">
               <p className="text-sm font-semibold text-ink mb-1">
-                Xoá toàn bộ video?
+                {tr("pipeline.deleteVideoTitle")}
               </p>
               <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
-                Sẽ xóa toàn bộ file của video này (video gốc, phụ đề, video lồng
-                tiếng, phụ đề cứng và file đã gộp). Không thể khôi phục.
+                {tr("pipeline.deleteVideoBody")}
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingDelete(false)}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                 >
-                  Không, giữ lại
+                  {tr("pipeline.noKeep")}
                 </button>
                 <button
                   onClick={() => {
@@ -2032,7 +2118,7 @@ function HistoryRow({
                   }}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
                 >
-                  Xoá toàn bộ
+                  {tr("pipeline.deleteVideoConfirm")}
                 </button>
               </div>
             </div>
@@ -2054,6 +2140,8 @@ function DetailView({
   onRemove: () => void;
   onStartNext?: () => void;
 }) {
+  const { t } = useI18n();
+  const tr = makeT(t);
   const failedStep = p.status === "error" ? p.failedStep : null;
   const activeStep =
     p.status === "done"
@@ -2087,7 +2175,7 @@ function DetailView({
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-0.5">
               <p className="text-sm font-semibold text-ink truncate">
-                {p.title || "Đang phân tích..."}
+                {p.title || tr("pipeline.analyzing")}
               </p>
               {p.status === "queued" && (
                 <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 ring-1 ring-amber-500/25 text-amber-700 flex items-center gap-1">
@@ -2102,13 +2190,13 @@ function DetailView({
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />
                   </svg>
-                  Đang chờ trong hàng đợi
+                  {tr("pipeline.queuedInQueue")}
                 </span>
               )}
               {p.status === "running" && (
                 <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 ring-1 ring-blue-500/25 text-blue-700 flex items-center gap-1">
                   <IconSpinner className="w-3 h-3" />
-                  Đang xử lý
+                  {tr("pipeline.processing")}
                 </span>
               )}
               {p.status === "error" && (
@@ -2125,7 +2213,9 @@ function DetailView({
                     <line x1="18" y1="6" x2="6" y2="18" />
                     <line x1="6" y1="6" x2="18" y2="18" />
                   </svg>
-                  Lỗi ở bước {failedStep != null ? failedStep + 1 : "?"}
+                  {tr("pipeline.errorAtStep", {
+                    step: failedStep != null ? failedStep + 1 : "?",
+                  })}
                 </span>
               )}
             </div>
@@ -2139,14 +2229,14 @@ function DetailView({
                 onClick={() => setConfirmingCancel(true)}
                 className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-colors cursor-pointer"
               >
-                Hủy xử lý
+                {tr("pipeline.cancelProcess")}
               </button>
             )}
             <button
               onClick={onRemove}
               className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
             >
-              Xoá
+              {tr("pipeline.delete")}
             </button>
           </div>
         </div>
@@ -2174,7 +2264,7 @@ function DetailView({
           <div className="mb-5">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
-                Tổng tiến độ
+                {tr("pipeline.overallProgress")}
               </span>
               <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
                 {p.status === "done"
@@ -2213,7 +2303,7 @@ function DetailView({
             const skipped = p.stepSkipped[i];
             const stepPct = p.stepProgress[i] ?? (done || isFailed ? 100 : 0);
             let stepTime: string | null = null;
-            if (skipped) stepTime = "Bỏ qua";
+            if (skipped) stepTime = tr("pipeline.skipped");
             else if (start != null && end != null)
               stepTime = fmtElapsed(end - start);
             else if (start != null) stepTime = fmtElapsed(now - start);
@@ -2261,7 +2351,7 @@ function DetailView({
                     <p
                       className={`text-[13px] font-medium ${isFailed ? "text-red-600" : done || active ? "text-ink" : "text-ink-light"}`}
                     >
-                      {s.label}
+                      {STEP_LABEL_KEYS[i] ? tr(STEP_LABEL_KEYS[i]) : s.label}
                     </p>
                     <span
                       className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${
@@ -2276,11 +2366,19 @@ function DetailView({
                                 : "text-ink-light"
                       }`}
                     >
-                      {skipped ? "—" : isFailed ? "Lỗi" : `${stepPct}%`}
+                      {skipped
+                        ? "—"
+                        : isFailed
+                          ? tr("pipeline.errorLabel")
+                          : `${stepPct}%`}
                     </span>
                   </div>
                   <p className="text-[11px] text-ink-light">
-                    {isFailed || active ? stepDetail(p) : s.detail}
+                    {isFailed || active
+                      ? stepDetail(p, tr)
+                      : STEP_DETAIL_KEYS[i]
+                        ? tr(STEP_DETAIL_KEYS[i])
+                        : s.detail}
                   </p>
                   {(active || done) && !skipped && (
                     <div className="mt-1.5 h-1 rounded-full bg-black/[0.06] overflow-hidden">
@@ -2317,7 +2415,11 @@ function DetailView({
                   {canRerun && (i >= 4 || Boolean(p.url)) && (
                     <button
                       onClick={() => rerunPipeline(p.id, i)}
-                      title={`Chạy lại từ "${s.label}"`}
+                      title={tr("pipeline.rerunFrom", {
+                        label: STEP_LABEL_KEYS[i]
+                          ? tr(STEP_LABEL_KEYS[i])
+                          : s.label,
+                      })}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
                     >
                       <svg
@@ -2332,7 +2434,7 @@ function DetailView({
                         <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
                         <path d="M3 3v5h5" />
                       </svg>
-                      Chạy lại
+                      {tr("pipeline.rerun")}
                     </button>
                   )}
                 </div>
@@ -2345,10 +2447,10 @@ function DetailView({
           <div className="mt-4 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden">
             <div className="px-4 py-2 border-b border-black/[0.05] bg-white/40 flex items-center justify-between">
               <span className="text-[10px] font-medium uppercase tracking-[0.15em] text-ink-muted">
-                Nhật ký chi tiết · {p.logs.length} dòng
+                {tr("pipeline.logHeader", { count: p.logs.length })}
               </span>
               <span className="text-[10px] font-mono text-ink-light tabular-nums">
-                Thời gian:{" "}
+                {tr("pipeline.logTime")}{" "}
                 {p.startedAt
                   ? fmtElapsed(
                       (p.status === "done" || p.status === "error"
@@ -2411,7 +2513,9 @@ function DetailView({
                 download
                 className="btn-island-primary group text-sm !px-5 !py-2.5"
               >
-                <span className="tracking-tight">Tải video hoàn thiện</span>
+                <span className="tracking-tight">
+                  {tr("pipeline.downloadFinalVideo")}
+                </span>
                 <span className="btn-island-icon">
                   <svg
                     className="w-4 h-4"
@@ -2434,7 +2538,9 @@ function DetailView({
                   download
                   className="btn-island-primary group text-sm !px-5 !py-2.5"
                 >
-                  <span className="tracking-tight">Tải voice lồng tiếng</span>
+                  <span className="tracking-tight">
+                    {tr("pipeline.downloadDubbedVoice")}
+                  </span>
                   <span className="btn-island-icon">
                     <svg
                       className="w-4 h-4"
@@ -2457,7 +2563,9 @@ function DetailView({
                   download
                   className="btn-island-primary group text-sm !px-5 !py-2.5"
                 >
-                  <span className="tracking-tight">Tải SRT phụ đề</span>
+                  <span className="tracking-tight">
+                    {tr("pipeline.downloadSrt")}
+                  </span>
                   <span className="btn-island-icon">
                     <svg
                       className="w-4 h-4"
@@ -2481,17 +2589,17 @@ function DetailView({
                   onClick={() =>
                     navigator.clipboard.writeText(p.updatedThumbnailUrl || "")
                   }
-                  title="Sao chép URL ảnh thumbnail"
+                  title={tr("pipeline.copyThumbnailTitle")}
                   className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                 >
-                  Sao chép URL ảnh
+                  {tr("pipeline.copyThumbnail")}
                 </button>
               )}
             </div>
 
             <iframe
               src={previewUrl}
-              title="Result video"
+              title={tr("pipeline.resultVideoTitle")}
               className="w-full aspect-video rounded-xl ring-1 ring-black/[0.06] bg-black"
               allow="autoplay; fullscreen"
               allowFullScreen
@@ -2500,14 +2608,15 @@ function DetailView({
             {onStartNext && (
               <div className="mt-5 pt-4 border-t border-black/[0.05] flex items-center justify-between gap-4 flex-wrap">
                 <p className="text-[12px] text-ink-muted leading-relaxed">
-                  Video này đã xử lý xong. Dán link tiếp theo để chạy job mới
-                  ngay trong trang này.
+                  {tr("pipeline.donePrompt")}
                 </p>
                 <button
                   onClick={onStartNext}
                   className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0"
                 >
-                  <span className="tracking-tight">Xử lý video tiếp theo</span>
+                  <span className="tracking-tight">
+                    {tr("pipeline.processNextVideo")}
+                  </span>
                   <span className="btn-island-icon">
                     <svg
                       className="w-4 h-4"
@@ -2542,18 +2651,18 @@ function DetailView({
             }}
           >
             <div className="double-bezel-inner p-5 sm:p-6">
-              <p className="text-sm font-semibold text-ink mb-1">Hủy xử lý?</p>
+              <p className="text-sm font-semibold text-ink mb-1">
+                {tr("pipeline.cancelTitle")}
+              </p>
               <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
-                Nếu hủy sẽ mất hết tiến độ hiện tại và xóa toàn bộ file tạm của
-                video này (video, khung hình, phụ đề). Quá trình sẽ phải làm lại
-                từ đầu.
+                {tr("pipeline.cancelBody")}
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingCancel(false)}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                 >
-                  Không, tiếp tục
+                  {tr("pipeline.noContinue2")}
                 </button>
                 <button
                   onClick={() => {
@@ -2562,7 +2671,7 @@ function DetailView({
                   }}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
                 >
-                  Xác nhận hủy & xóa file
+                  {tr("pipeline.confirmCancelDelete")}
                 </button>
               </div>
             </div>
@@ -2597,12 +2706,14 @@ function DetailView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-ink">
-                    Kiểm tra timeline phụ đề
+                    {tr("pipeline.timelineCheckTitle")}
                   </p>
                   <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
                     {p.timelineCheck.issues.length > 0
-                      ? `Phát hiện ${p.timelineCheck.issues.length} lỗi timeline vô lý trong phụ đề đã dịch.`
-                      : "Phụ đề đã dịch xong. Bạn có thể kiểm tra timeline trước khi tiếp tục."}
+                      ? tr("pipeline.timelineCheckIssues", {
+                          count: p.timelineCheck.issues.length,
+                        })
+                      : tr("pipeline.timelineCheckOk")}
                   </p>
                 </div>
               </div>
@@ -2611,7 +2722,7 @@ function DetailView({
                   onClick={() => resolveTimelineCheck(p.id, "continue")}
                   className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
                 >
-                  Tiếp tục xử lý
+                  {tr("pipeline.timelineCheckContinue")}
                 </button>
                 <button
                   onClick={() => openTimelineCheck(p.id)}
@@ -2629,7 +2740,7 @@ function DetailView({
                     <line x1="12" y1="9" x2="12" y2="13" />
                     <line x1="12" y1="17" x2="12.01" y2="17" />
                   </svg>
-                  Hiện popup kiểm tra
+                  {tr("pipeline.timelineCheckOpen")}
                 </button>
               </div>
             </div>

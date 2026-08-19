@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getVideoUrl } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 function clamp(v: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, v));
@@ -47,6 +48,7 @@ export default function VideoPlayer({
   onPointerUp,
   cursorClass = "",
 }: Props) {
+  const { t } = useI18n();
   const containerEl = useRef<HTMLDivElement>(null);
   const videoEl = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -152,7 +154,7 @@ export default function VideoPlayer({
         <div className="flex items-center gap-2">
           <button
             onClick={togglePlay}
-            aria-label={playing ? "Pause" : "Play"}
+            aria-label={playing ? t("videoplayer.pause") : t("videoplayer.play")}
             className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center
                        hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300
                        ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer"

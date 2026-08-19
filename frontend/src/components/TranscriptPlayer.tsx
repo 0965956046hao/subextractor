@@ -13,6 +13,7 @@ import {
   fixSrtTimeline,
 } from "@/lib/api";
 import type { TimelineIssue } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 interface SrtEntry {
   index: number;
@@ -99,6 +100,7 @@ function entriesToSrt(entries: SrtEntry[]): string {
 }
 
 export default function TranscriptPlayer({ videoId }: { videoId: string }) {
+  const { t } = useI18n();
   const [entries, setEntries] = useState<SrtEntry[]>([]);
   const [loadError, setLoadError] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -139,7 +141,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
         setEntries(parseSrt(content));
       })
       .catch((err: unknown) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : "Failed to load SRT");
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : t("transcript.loadFailed" as string));
       });
     return () => { cancelled = true; };
   }, [videoId]);
@@ -274,7 +276,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
         setSelectedSrt({ id: fileId, name: fileName });
         setSaved(false);
         setMuxedUrl(null);
-        setToast(`Đã chọn "${fileName}" (${parsed.length} phụ đề)`);
+        setToast(t("transcript.selectedSrt" as string, { name: fileName, count: parsed.length }));
         setTimeout(() => setToast(null), 2500);
       }
     } catch {
@@ -284,7 +286,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
 
   const handleTtsSelect = (fileId: string, fileName: string) => {
     setSelectedTts({ id: fileId, name: fileName });
-    setToast(`Đã chọn "${fileName}"`);
+    setToast(t("transcript.selectedTts" as string, { name: fileName }));
     setTimeout(() => setToast(null), 2500);
   };
 
@@ -294,21 +296,21 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       try {
         await updateSrt(videoId, entriesToSrt(entries));
         setSaved(true);
-        msgs.push(`Đã lưu phụ đề "${selectedSrt.name}"`);
+        msgs.push(t("transcript.savedSrt" as string, { name: selectedSrt.name }));
       } catch {
-        msgs.push("Lưu phụ đề thất bại");
+        msgs.push(t("transcript.saveSrtFailed" as string));
       }
     }
     if (selectedTts) {
       if (selectedTts.id === "dubbed") {
         setDubbedUrl(`/api/download/dubbed/${videoId}`);
-        msgs.push(`Đã áp dụng "${selectedTts.name}"`);
+        msgs.push(t("transcript.appliedTts" as string, { name: selectedTts.name }));
       } else {
-        msgs.push(`Đã áp dụng "${selectedTts.name}"`);
+        msgs.push(t("transcript.appliedTts" as string, { name: selectedTts.name }));
       }
     }
     if (!msgs.length) {
-      setToast("Chưa chọn SRT hoặc TTS để lưu");
+      setToast(t("transcript.nothingToApply" as string));
     } else {
       setToast(msgs.join(" • "));
     }
@@ -329,7 +331,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
   };
 
   const saveSettings = async () => {
-    setSettingsStatus("Đang lưu...");
+    setSettingsStatus(t("transcript.settings.saving" as string));
     try {
       const res = await fetch("/api/config", {
         method: "POST",
@@ -350,7 +352,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       if (d.error) {
         setSettingsStatus(d.error);
       } else {
-        setSettingsStatus("Đã lưu!");
+        setSettingsStatus(t("transcript.settings.saved" as string));
         setTimeout(() => {
           setShowSettings(false);
           setSettingsStatus("");
@@ -358,7 +360,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
         setHasApiKeys(true);
       }
     } catch {
-      setSettingsStatus("Lỗi kết nối");
+      setSettingsStatus(t("transcript.settings.connectionError" as string));
     }
   };
 
@@ -395,9 +397,9 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       const text = await fetchTranslatedText();
       await updateSrt(videoId, text);
       setSaved(true);
-      setToast("Đã lưu phụ đề dịch");
+      setToast(t("transcript.savedTranslated" as string));
     } catch {
-      setToast("Lưu thất bại");
+      setToast(t("transcript.saveFailed" as string));
     }
     setSaving(false);
     setTimeout(() => setToast(null), 2500);
@@ -413,7 +415,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       const data = await res.json();
       setMuxJob({ type: "mux", jobId: data.job_id, status: data.status, progress: data.progress || 0, error: data.error || "" });
     } catch {
-      setToast("Áp dụng thất bại");
+      setToast(t("transcript.applyFailed" as string));
       setTimeout(() => setToast(null), 2500);
     }
   };
@@ -425,12 +427,12 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       if (d.entries.length > 0) {
         setEntries(d.entries);
         setTimelineIssues([]);
-        setToast(`Đã sửa ${d.count} lỗi timeline (giữ sub dài nhất)`);
+        setToast(t("transcript.fixedTimeline" as string, { count: d.count }));
       } else {
-        setToast("Không có lỗi timeline để sửa");
+        setToast(t("transcript.noTimelineIssues" as string));
       }
     } catch {
-      setToast("Sửa timeline thất bại");
+      setToast(t("transcript.fixTimelineFailed" as string));
     }
     setFixingTimeline(false);
     setTimeout(() => setToast(null), 2500);
@@ -464,7 +466,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
               <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
-            <p className="text-sm text-ink-muted">Loading transcript…</p>
+            <p className="text-sm text-ink-muted">{t("transcript.loading" as string)}</p>
           </div>
         </div>
       </div>
@@ -480,7 +482,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
             <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
               <path d="M22 11.08V12a10 10 0 11-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
             </svg>
-            <span className="text-xs font-medium text-emerald-600/80">{entries.length} subtitles extracted</span>
+            <span className="text-xs font-medium text-emerald-600/80">{t("transcript.subtitlesExtracted" as string, { count: entries.length })}</span>
           </div>
 
           <div className="flex gap-2 flex-wrap">
@@ -579,7 +581,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               download="subtitles.srt"
               className="btn-island-primary group text-sm"
             >
-              <span className="tracking-tight">Download .SRT</span>
+              <span className="tracking-tight">{t("transcript.downloadSrt" as string)}</span>
               <span className="btn-island-icon">
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
@@ -591,7 +593,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               download="subtitles.txt"
               className="btn-island-secondary group text-sm"
             >
-              <span className="tracking-tight">Download .TXT</span>
+              <span className="tracking-tight">{t("transcript.downloadTxt" as string)}</span>
               <span className="btn-island-icon">
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
@@ -610,7 +612,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               download
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-cyan-600 text-white hover:bg-cyan-500 transition-colors cursor-pointer"
             >
-              Tải video lồng tiếng
+              {t("transcript.downloadDubbed" as string)}
             </a>
           </div>
         )}
@@ -623,7 +625,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 <>
                   <IconSpinner className="w-4 h-4 text-blue-500 flex-shrink-0" />
                   <span className="text-[12px] font-medium text-ink-muted flex-1">
-                    {toolJob.type === "translate" ? "Đang dịch..." : "Đang tổng hợp giọng nói..."}
+                    {toolJob.type === "translate" ? t("transcript.translating" as string) : t("transcript.synthesizingVoice" as string)}
                   </span>
                   <div className="w-32 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
                     <div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400" style={{ width: `${Math.max(3, toolJob.progress)}%` }} />
@@ -634,11 +636,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 <>
                   <IconCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
                   <span className="text-[12px] font-medium text-emerald-700 flex-1">
-                    {toolJob.type === "translate" ? "Dịch hoàn tất" : "Hoàn tất"}
+                    {toolJob.type === "translate" ? t("transcript.translateDone" as string) : t("transcript.done" as string)}
                   </span>
                 </>
               ) : (
-                <span className="text-[12px] font-medium text-red-600/80 flex-1">{toolJob.error || "Thất bại"}</span>
+                <span className="text-[12px] font-medium text-red-600/80 flex-1">{toolJob.error || t("transcript.failed" as string)}</span>
               )}
               <button onClick={() => setToolJob(null)} className="text-[11px] text-ink-light hover:text-ink transition-colors cursor-pointer">✕</button>
             </div>
@@ -650,7 +652,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
           <div className="mb-4 p-4 rounded-2xl bg-emerald-500/[0.04] ring-1 ring-emerald-500/[0.12]">
             <div className="flex items-center gap-2 mb-3">
               <IconCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span className="text-[11px] font-medium text-emerald-700 uppercase tracking-wider">Phụ đề đã dịch xong</span>
+              <span className="text-[11px] font-medium text-emerald-700 uppercase tracking-wider">{t("transcript.translatedReady" as string)}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <button
@@ -659,20 +661,20 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 className="btn-island-primary group !px-4 !py-2 text-[12px]"
               >
                 {saving ? <IconSpinner className="w-3.5 h-3.5" /> : <IconCheck className="w-3.5 h-3.5" />}
-                <span className="tracking-tight">{saved ? "Đã lưu" : "Lưu"}</span>
+                <span className="tracking-tight">{saved ? t("transcript.saved" as string) : t("transcript.save" as string)}</span>
               </button>
               <button
                 onClick={handleApplySrt}
                 className="px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
               >
-                Apply SRT
+                {t("transcript.applySrt" as string)}
               </button>
               <a
                 href={getTranslatedDownloadUrl(videoId)}
                 download
                 className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
               >
-                Tải SRT Việt
+                {t("transcript.downloadVnSrt" as string)}
               </a>
             </div>
 
@@ -681,7 +683,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 {muxJob.status === "queued" || muxJob.status === "processing" ? (
                   <>
                     <IconSpinner className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                    <span className="text-[12px] text-ink-muted">Đang nhúng phụ đề vào video...</span>
+                    <span className="text-[12px] text-ink-muted">{t("transcript.muxing" as string)}</span>
                     <span className="text-[10px] font-mono text-ink-light tabular-nums">{muxJob.progress}%</span>
                   </>
                 ) : muxJob.status === "done" ? (
@@ -690,10 +692,10 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     download
                     className="px-4 py-2 rounded-full text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer"
                   >
-                    Tải video đã nhúng phụ đề
+                    {t("transcript.downloadMuxed" as string)}
                   </a>
                 ) : (
-                  <span className="text-[12px] font-medium text-red-600/80">{muxJob.error || "Nhúng thất bại"}</span>
+                  <span className="text-[12px] font-medium text-red-600/80">{muxJob.error || t("transcript.muxFailed" as string)}</span>
                 )}
               </div>
             )}
@@ -710,7 +712,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
               <span className="text-[11px] font-medium text-amber-700 uppercase tracking-wider">
-                Phát hiện {timelineIssues.length} lỗi timeline vô lý
+                {t("transcript.timelineIssuesFound" as string, { count: timelineIssues.length })}
               </span>
             </div>
             <div className="space-y-1 max-h-32 overflow-y-auto">
@@ -720,7 +722,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 </p>
               ))}
               {timelineIssues.length > 8 && (
-                <p className="text-[11px] text-ink-light">+{timelineIssues.length - 8} lỗi nữa…</p>
+                <p className="text-[11px] text-ink-light">{t("transcript.moreIssues" as string, { count: timelineIssues.length - 8 })}</p>
               )}
             </div>
             <button
@@ -728,7 +730,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               disabled={fixingTimeline}
               className="mt-3 px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-amber-600/10 text-amber-700 ring-1 ring-amber-500/25 hover:bg-amber-600/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {fixingTimeline ? "Đang sửa…" : "Tự sửa timeline (giữ sub dài nhất)"}
+              {fixingTimeline ? t("transcript.fixing" as string) : t("transcript.fixTimeline" as string)}
             </button>
           </div>
         )}
@@ -759,7 +761,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               {!playing && activeIndex < 0 && (
                 <button
                   onClick={togglePlay}
-                  aria-label="Play"
+                  aria-label={t("transcript.play" as string)}
                   className="absolute inset-0 m-auto w-14 h-14 rounded-full bg-black/50 hover:bg-black/70 backdrop-blur-sm border border-white/15 flex items-center justify-center transition-all duration-300 active:scale-95 cursor-pointer"
                 >
                   <svg className="w-6 h-6 text-white ml-1" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
@@ -770,7 +772,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
             <div className="glass-panel rounded-2xl px-3 py-2.5 flex items-center gap-3">
               <button
                 onClick={togglePlay}
-                aria-label={playing ? "Pause" : "Play"}
+                aria-label={playing ? t("transcript.pause" as string) : t("transcript.play" as string)}
                 className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
               >
                 {playing ? (
@@ -794,8 +796,8 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
           {/* ── SRT list ── */}
           <div className="flex flex-col min-h-0">
             <div className="flex items-center justify-between px-1 mb-2">
-              <span className="text-xs font-medium text-ink-muted tracking-wide uppercase">Transcript</span>
-              <span className="text-[10px] font-mono text-ink-light tabular-nums">{entries.length} lines</span>
+              <span className="text-xs font-medium text-ink-muted tracking-wide uppercase">{t("transcript.title" as string)}</span>
+              <span className="text-[10px] font-mono text-ink-light tabular-nums">{t("transcript.lines" as string, { count: entries.length })}</span>
             </div>
             <div
               ref={listRef}
@@ -842,7 +844,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
           >
             <div className="double-bezel-inner !rounded-[calc(1rem-1px)] p-6">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-sm font-semibold text-ink">⚙️ Cấu hình API</span>
+                <span className="text-sm font-semibold text-ink">⚙️ {t("transcript.settings.title" as string)}</span>
                 <button
                   onClick={() => {
                     setShowSettings(false);
@@ -859,7 +861,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               <div className="space-y-3">
                 <div>
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
-                    Gemini API Key
+                    {t("transcript.settings.geminiTitle" as string)}
                   </label>
                   <input
                     type="password"
@@ -869,7 +871,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
-                    Lấy tại{" "}
+                    {t("transcript.settings.getAt" as string)}{" "}
                     <a href="https://aistudio.google.com/apikey" target="_blank" className="text-blue-500 underline">
                       aistudio.google.com/apikey
                     </a>
@@ -877,7 +879,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 </div>
                 <div>
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
-                    Google Cloud TTS (Service Account JSON)
+                    {t("transcript.settings.ttsTitle" as string)}
                   </label>
                   <textarea
                     value={settingsTtsJson}
@@ -887,22 +889,22 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
-                    Google Cloud → IAM → Service Accounts → Create Key → JSON
+                    {t("transcript.settings.ttsHowto" as string)}
                   </p>
                 </div>
                 <div>
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted mb-1 block">
-                    fal.ai Key
+                    {t("transcript.settings.falTitle" as string)}
                   </label>
                   <input
                     type="password"
                     value={settingsFalKey}
                     onChange={(e) => setSettingsFalKey(e.target.value)}
-                    placeholder="FAL key cho thumbnail..."
+                    placeholder={t("transcript.settings.falPlaceholder" as string)}
                     className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
-                    Lấy tại{" "}
+                    {t("transcript.settings.getAt" as string)}{" "}
                     <a href="https://fal.ai/dashboard/keys" target="_blank" className="text-blue-500 underline">
                       fal.ai/dashboard/keys
                     </a>
@@ -929,13 +931,13 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     }}
                     className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-all duration-300 cursor-pointer active:scale-[0.97]"
                   >
-                    Đóng
+                    {t("transcript.settings.close" as string)}
                   </button>
                   <button
                     onClick={saveSettings}
                     className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-all duration-300 cursor-pointer active:scale-[0.97]"
                   >
-                    Lưu
+                    {t("transcript.settings.save" as string)}
                   </button>
                 </div>
               </div>

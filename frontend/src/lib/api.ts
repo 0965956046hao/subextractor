@@ -129,16 +129,16 @@ export interface JobStatus {
 export type OcrLang = "ch" | "en" | "latin";
 
 export const OCR_LANGS: { value: OcrLang; label: string; hint: string }[] = [
-  { value: "ch", label: "Tiếng Trung", hint: "Chinese + English" },
-  { value: "latin", label: "Tiếng Việt", hint: "Vietnamese / Latin" },
-  { value: "en", label: "Tiếng Anh", hint: "English" },
+  { value: "ch", label: "lang.zh", hint: "ocr.ch.hint" },
+  { value: "latin", label: "lang.vi", hint: "ocr.latin.hint" },
+  { value: "en", label: "lang.en", hint: "ocr.en.hint" },
 ];
 
 export type OcrType = "rapid" | "apple";
 
 export const OCR_TYPES: { value: OcrType; label: string; hint: string }[] = [
-  { value: "apple", label: "Apple Vision", hint: "macOS, tối ưu cho chữ in" },
-  { value: "rapid", label: "RapidOCR", hint: "Nhanh, chạy mọi nền tảng" },
+  { value: "apple", label: "ocr.type.apple", hint: "ocr.type.apple.hint" },
+  { value: "rapid", label: "ocr.type.rapid", hint: "ocr.type.rapid.hint" },
 ];
 
 export async function startProcess(

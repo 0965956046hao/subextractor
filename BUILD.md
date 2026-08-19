@@ -112,7 +112,15 @@ Sản phẩm:
 
 > `beforeBuildCommand` tự chạy `npm run build` trong `frontend/` (Tauri CLI chạy hook với cwd = `frontend/`). Nếu chạy Bước 1 rồi, bước này chỉ cần cho phần Rust + bundle.
 
-### Bước 7 — Smoke test (mở app)
+### Bước 7 — Sign + verify app (bắt buộc trước khi share)
+
+`tauri build` để lại signature thiếu seal resource → chạy script này để ký ad-hoc cho chuẩn:
+
+```bash
+bash sign.sh
+```
+
+### Bước 8 — Smoke test (mở app)
 
 Lần đầu mở, app tự tải tools vào data dir (theo dõi log: `[tools] ffmpeg ready`, `[tools] demucs ready`, `[tools] youtubeuploader ready`). Chờ tools xong rồi kiểm tra:
 
@@ -167,3 +175,17 @@ Khi app chạy, dữ liệu ghi được nằm ở:
 ```
 
 Muốn ép app tải lại tools (sau khi có archive mới): xóa marker + thư mục tương ứng trong `tools/`, đóng mở app. Muốn reset toàn bộ dữ liệu app: xóa thư mục data (app tự tạo lại khi mở).
+
+## Share app cho máy Mac khác
+
+App build ra là **ad-hoc signed** (không có Apple Developer Certificate). Trên máy khác, Gatekeeper sẽ chặn "unidentified developer" khi mở lần đầu. Có 2 cách:
+
+1. **Developer ID + notarize** (mở thẳng không warning, cần tài khoản Apple Developer $99/năm):
+   ```bash
+   codesign --deep --force --sign "Developer ID Application: Tên (TEAMID)" \
+     "src-tauri/target/release/bundle/macos/SubTitle Extractor.app"
+   # đóng gói DMG rồi submit:
+   xcrun notarytool submit --apple-id "email" --team-id TEAMID --wait "SubTitle Extractor_0.1.0_aarch64.dmg"
+   xcrun stapler staple "src-tauri/target/release/bundle/macos/SubTitle Extractor.app"
+   ```
+2. **Không cần cert** — máy nhận làm 1 lần: click phải app → **Open**, hoặc chạy `xattr -cr "SubTitle Extractor.app"` rồi mở bình thường.

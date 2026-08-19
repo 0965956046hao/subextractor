@@ -14,6 +14,7 @@ import {
   getPipelineState,
   reportTimelineAction,
 } from "@/lib/api";
+import { translate } from "@/lib/i18n";
 
 function sanitizeFilename(name: string): string {
   return (name || "")
@@ -709,9 +710,9 @@ function detectOcrType(): "apple" | "rapid" {
 }
 
 export function langLabel(code: string): string {
-  if (code === "zh" || code === "ch") return "Tiếng Trung";
-  if (code === "en") return "Tiếng Anh";
-  if (code === "vi") return "Tiếng Việt";
+  if (code === "zh" || code === "ch") return translate("lang.zh");
+  if (code === "en") return translate("lang.en");
+  if (code === "vi") return translate("lang.vi");
   return code || "—";
 }
 

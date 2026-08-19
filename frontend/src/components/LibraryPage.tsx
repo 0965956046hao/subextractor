@@ -5,6 +5,7 @@ import Link from "next/link";
 import { listVideos, getFrameUrl, deleteVideo, cancelJob } from "@/lib/api";
 import type { VideoMeta } from "@/lib/api";
 import { AnimatedBlock } from "@/lib/animation";
+import { useI18n } from "@/lib/i18n";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -37,6 +38,7 @@ function SkeletonCard({ featured = false }: { featured?: boolean }) {
 }
 
 export default function LibraryPage() {
+  const { t } = useI18n();
   const [videos, setVideos] = useState<VideoMeta[] | null>(null);
   const [error, setError] = useState("");
   const [view, setView] = useState<ViewMode>(() => {
@@ -62,7 +64,7 @@ export default function LibraryPage() {
       setVideos(await listVideos());
     } catch (err: unknown) {
       if (!opts?.silent)
-        setError(err instanceof Error ? err.message : "Failed to load library");
+        setError(err instanceof Error ? err.message : t("library.loadError" as string));
     }
   }, []);
 
@@ -89,7 +91,7 @@ export default function LibraryPage() {
       await deleteVideo(id);
       setVideos((prev) => prev?.filter((v) => v.video_id !== id) ?? prev);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
+      setError(err instanceof Error ? err.message : t("library.deleteError" as string));
     }
   }, []);
 
@@ -99,7 +101,7 @@ export default function LibraryPage() {
         await cancelJob(jobId);
         refreshActive();
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to cancel");
+        setError(err instanceof Error ? err.message : t("library.cancelError" as string));
       }
     },
     [refreshActive],
@@ -137,14 +139,14 @@ export default function LibraryPage() {
               </svg>
             </div>
             <span className="text-sm font-semibold tracking-tight text-ink">
-              SubTitle Extractor
+              {t("library.brand" as string)}
             </span>
           </div>
           <Link
             href="/extract"
             className="btn-island-primary group !px-5 !py-2 text-[13px]"
           >
-            <span className="tracking-tight">New Extractor</span>
+            <span className="tracking-tight">{t("library.newExtractor" as string)}</span>
             <span className="btn-island-icon !w-7 !h-7">
               <svg
                 className="w-3.5 h-3.5"
@@ -164,7 +166,7 @@ export default function LibraryPage() {
             href="/auto"
             className="btn-island-primary group !px-5 !py-2 text-[13px]"
           >
-            <span className="tracking-tight">Auto Pipeline</span>
+            <span className="tracking-tight">{t("library.autoPipeline" as string)}</span>
             <span className="btn-island-icon !w-7 !h-7">
               <svg
                 className="w-3.5 h-3.5"
@@ -182,7 +184,7 @@ export default function LibraryPage() {
 
           <Link
             href="/settings"
-            title="Cài đặt (API key, TTS, style phụ đề)"
+            title={t("library.settingsTitle" as string)}
             className="w-9 h-9 rounded-full bg-black/[0.04] ring-1 ring-black/[0.08] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-all duration-300 active:scale-[0.95] flex items-center justify-center cursor-pointer"
           >
             <svg
@@ -204,21 +206,20 @@ export default function LibraryPage() {
       {/* ── Hero ── */}
       <section className="pt-20 sm:pt-28 md:pt-36 pb-16 sm:pb-20 text-center">
         <AnimatedBlock delay={0}>
-          <div className="eyebrow mx-auto mb-6 w-max">Extracted Library</div>
+          <div className="eyebrow mx-auto mb-6 w-max">{t("library.eyebrow" as string)}</div>
         </AnimatedBlock>
         <AnimatedBlock delay={100}>
           <h1 className="text-[clamp(2.6rem,8vw,6.5rem)] font-semibold tracking-tight leading-[0.92] text-balance text-ink">
-            Your subtitles,
+            {t("library.heroTitle1" as string)}
             <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-blue-500 to-blue-400/60">
-              ready to relive
+              {t("library.heroTitle2" as string)}
             </span>
           </h1>
         </AnimatedBlock>
         <AnimatedBlock delay={200}>
           <p className="mt-5 text-sm sm:text-base text-ink-muted max-w-md mx-auto leading-relaxed">
-            Every video you&rsquo;ve extracted lives here — open one to watch,
-            read the transcript, and download clean SRT text.
+            {t("library.heroDesc" as string)}
           </p>
         </AnimatedBlock>
         <AnimatedBlock delay={300}>
@@ -227,7 +228,7 @@ export default function LibraryPage() {
               href="/extract"
               className="btn-island-primary group text-[15px]"
             >
-              <span className="tracking-tight">Start a new extractor</span>
+              <span className="tracking-tight">{t("library.startNewExtractor" as string)}</span>
               <span className="btn-island-icon">
                 <svg
                   className="w-4 h-4"
@@ -252,16 +253,16 @@ export default function LibraryPage() {
                 <span className="font-semibold text-ink tabular-nums">
                   {stats.count}
                 </span>
-                <span className="text-ink-light"> videos</span>
+                <span className="text-ink-light"> {t("library.videos" as string)}</span>
               </div>
               <div className="tag !px-4 !py-2">
                 <span className="font-semibold text-ink tabular-nums">
                   {stats.totalEntries}
                 </span>
-                <span className="text-ink-light"> subtitle lines</span>
+                <span className="text-ink-light"> {t("library.subtitleLines" as string)}</span>
               </div>
               <div className="tag !px-4 !py-2">
-                <span className="text-ink-light">latest&nbsp;</span>
+                <span className="text-ink-light">{t("library.latest" as string)}&nbsp;</span>
                 <span className="text-ink">{formatDate(stats.newest)}</span>
               </div>
             </div>
@@ -292,7 +293,7 @@ export default function LibraryPage() {
                   onClick={() => load()}
                   className="btn-island-secondary group mt-5 text-sm"
                 >
-                  <span className="tracking-tight">Try again</span>
+                  <span className="tracking-tight">{t("library.tryAgain" as string)}</span>
                   <span className="btn-island-icon">
                     <svg
                       className="w-4 h-4"
@@ -341,15 +342,14 @@ export default function LibraryPage() {
                   </svg>
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-ink">
-                  Nothing extracted yet
+                  {t("library.emptyTitle" as string)}
                 </h2>
                 <p className="text-sm text-ink-muted max-w-sm mx-auto mt-3 leading-relaxed">
-                  Upload your first video, mark the subtitle region, and let OCR
-                  do the rest. Your library appears here.
+                  {t("library.emptyDesc" as string)}
                 </p>
                 <Link href="/extract" className="btn-island-primary group mt-8">
                   <span className="tracking-tight">
-                    Start your first extractor
+                    {t("library.startFirstExtractor" as string)}
                   </span>
                   <span className="btn-island-icon">
                     <svg
@@ -375,7 +375,7 @@ export default function LibraryPage() {
           <>
             <div className="flex items-center justify-between mb-6">
               <span className="text-[13px] font-medium text-ink-muted tabular-nums">
-                {videos.length} video{videos.length > 1 ? "s" : ""}
+                {t("library.videoCount" as string, { count: videos.length })}
               </span>
               <ViewToggle value={view} onChange={changeView} />
             </div>
@@ -420,7 +420,7 @@ export default function LibraryPage() {
 
       <footer className="max-w-7xl mx-auto mt-24 sm:mt-32 text-center">
         <p className="text-[11px] text-ink-light tracking-wide">
-          SubTitle Extractor
+          {t("library.brand" as string)}
         </p>
       </footer>
     </main>
@@ -436,12 +436,13 @@ function ViewToggle({
   value: ViewMode;
   onChange: (v: ViewMode) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
       <button
         onClick={() => onChange("grid")}
-        aria-label="Xem dạng lưới"
-        title="Xem dạng lưới"
+        aria-label={t("library.viewGrid" as string)}
+        title={t("library.viewGrid" as string)}
         className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
           ${value === "grid" ? "bg-white text-blue-600 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
       >
@@ -462,8 +463,8 @@ function ViewToggle({
       </button>
       <button
         onClick={() => onChange("list")}
-        aria-label="Xem dạng danh sách"
-        title="Xem dạng danh sách"
+        aria-label={t("library.viewList" as string)}
+        title={t("library.viewList" as string)}
         className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
           ${value === "list" ? "bg-white text-blue-600 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
       >
@@ -527,6 +528,7 @@ function JobStatusBlock({
   video: VideoMeta;
   onCancel?: (jobId: string) => void;
 }) {
+  const { t } = useI18n();
   if (!video.status || video.status === "done") return null;
 
   if (video.status === "uploaded") {
@@ -545,7 +547,7 @@ function JobStatusBlock({
             <polyline points="17 8 12 3 7 8" />
             <line x1="12" y1="3" x2="12" y2="15" />
           </svg>
-          Đã upload — cần chọn vùng & extract
+          {t("library.statusUploaded" as string)}
         </span>
       </div>
     );
@@ -566,7 +568,7 @@ function JobStatusBlock({
             <circle cx="12" cy="12" r="10" />
             <line x1="5" y1="5" x2="19" y2="19" />
           </svg>
-          Đã hủy — xử lý lại
+          {t("library.statusCancelled" as string)}
         </span>
       </div>
     );
@@ -588,7 +590,7 @@ function JobStatusBlock({
             <line x1="12" y1="8" x2="12" y2="12" />
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
-          {video.error ? video.error : "Có lỗi xử lý"}
+          {video.error ? video.error : t("library.statusError" as string)}
         </span>
       </div>
     );
@@ -600,7 +602,7 @@ function JobStatusBlock({
       <div className="flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90">
           <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-          {video.status === "queued" ? "Đang chờ xử lý…" : "Đang xử lý…"}
+          {video.status === "queued" ? t("library.statusQueued" as string) : t("library.statusProcessing" as string)}
         </span>
         <span className="text-[11px] font-mono text-blue-600 tabular-nums">
           {pct}%
@@ -633,7 +635,7 @@ function JobStatusBlock({
             <circle cx="12" cy="12" r="10" />
             <line x1="5" y1="5" x2="19" y2="19" />
           </svg>
-          Hủy xử lý
+          {t("library.cancelProcessing" as string)}
         </button>
       )}
     </div>
@@ -651,12 +653,13 @@ function VideoRow({
   onDelete: (videoId: string) => void;
   onCancel: (jobId: string) => void;
 }) {
+  const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     if (!confirming) return;
-    const t = setTimeout(() => setConfirming(false), 3000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setConfirming(false), 3000);
+    return () => clearTimeout(timer);
   }, [confirming]);
 
   const { ref, style } = useReveal(index);
@@ -761,7 +764,7 @@ function VideoRow({
                     <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
                     <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
                   </svg>
-                  {video.entries} lines
+                  {t("library.linesCount" as string, { count: video.entries })}
                 </span>
                 <span className="text-[11px] text-ink-light tabular-nums">
                   {formatDate(video.created_at)}
@@ -770,7 +773,7 @@ function VideoRow({
                 </span>
                 {!video.has_video && (
                   <span className="px-2.5 py-1 rounded-full bg-black/[0.05] text-[10px] font-medium text-ink-light uppercase tracking-wide">
-                    Video unavailable
+                    {t("library.videoUnavailable" as string)}
                   </span>
                 )}
               </div>
@@ -785,7 +788,7 @@ function VideoRow({
                 if (confirming) onDelete(video.video_id);
                 else setConfirming(true);
               }}
-              aria-label={confirming ? "Confirm delete" : "Delete"}
+              aria-label={confirming ? t("library.confirmDelete" as string) : t("library.delete" as string)}
               className={`flex items-center justify-center rounded-full transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
@@ -855,6 +858,7 @@ function VideoCard({
   onDelete: (videoId: string) => void;
   onCancel: (jobId: string) => void;
 }) {
+  const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
 
   const { ref, style } = useReveal(index, 40);
@@ -948,7 +952,7 @@ function VideoCard({
                 if (confirming) onDelete(video.video_id);
                 else setConfirming(true);
               }}
-              aria-label={confirming ? "Confirm delete" : "Delete"}
+              aria-label={confirming ? t("library.confirmDelete" as string) : t("library.delete" as string)}
               className={`absolute top-3 right-3 z-10 flex items-center gap-1.5 rounded-full backdrop-blur-sm transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
@@ -970,7 +974,7 @@ function VideoCard({
                     <path d="M20 6L9 17l-5-5" />
                   </svg>
                   <span className="text-[11px] font-medium tracking-tight">
-                    Delete?
+                    {t("library.deleteQuestion" as string)}
                   </span>
                 </>
               ) : (
@@ -992,7 +996,7 @@ function VideoCard({
             </button>
             {!video.has_video && (
               <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/50 backdrop-blur-sm text-[10px] font-medium text-white/90 tracking-wide uppercase">
-                Video unavailable
+                {t("library.videoUnavailable" as string)}
               </span>
             )}
           </div>
@@ -1020,7 +1024,7 @@ function VideoCard({
                       <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
                       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
                     </svg>
-                    {video.entries} lines
+                    {t("library.linesCount" as string, { count: video.entries })}
                   </span>
                   <span className="text-[11px] text-ink-light tabular-nums">
                     {formatDate(video.created_at)}
@@ -1033,7 +1037,7 @@ function VideoCard({
             {featured && (
               <div className="hidden sm:block flex-shrink-0">
                 <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/[0.04] text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
-                  Latest extraction
+                  {t("library.latestExtraction" as string)}
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 </span>
               </div>

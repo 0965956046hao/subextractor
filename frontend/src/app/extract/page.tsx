@@ -9,17 +9,20 @@ import ResultPage from "@/components/ResultPage";
 import { AnimatedBlock } from "@/lib/animation";
 import { OCR_LANGS, OCR_TYPES } from "@/lib/api";
 import type { Region, OcrLang, OcrType } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 type Step = "upload" | "select" | "result";
 
-const STEPS: { key: Step; label: string; desc: string }[] = [
-  { key: "upload", label: "Upload", desc: "Choose your video file" },
-  { key: "select", label: "Select Region", desc: "Mark the subtitle area" },
-  { key: "result", label: "Extract", desc: "Process & download SRT" },
-];
+const STEP_KEYS = ["upload", "select", "result"] as const;
 
 function BentoStepIndicator({ current }: { current: Step }) {
-  const idx = STEPS.findIndex((s) => s.key === current);
+  const { t } = useI18n();
+  const idx = STEP_KEYS.findIndex((s) => s === current);
+  const STEPS = STEP_KEYS.map((k) => ({
+    key: k,
+    label: t(`extract.${k}`),
+    desc: t(`extract.${k}.desc`),
+  }));
   return (
     <div className="double-bezel mb-12">
       <div className="double-bezel-inner p-4 sm:p-5">
@@ -99,10 +102,11 @@ function LangSelector({
   value: OcrLang;
   onChange: (v: OcrLang) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
       <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
-        Ngôn ngữ OCR
+        {t("extract.ocrLang")}
       </span>
       <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
         {OCR_LANGS.map((l) => (
@@ -116,7 +120,7 @@ function LangSelector({
                   : "text-ink-muted hover:text-ink"
               }`}
           >
-            {l.label}
+            {t(l.label)}
           </button>
         ))}
       </div>
@@ -131,25 +135,26 @@ function EngineSelector({
   value: OcrType;
   onChange: (v: OcrType) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="glass-panel rounded-2xl px-3 py-2.5 mb-6 flex items-center justify-center gap-2 flex-wrap">
       <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted mr-1">
-        OCR Engine
+        {t("extract.ocrEngine")}
       </span>
       <div className="flex items-center gap-1 rounded-full bg-black/[0.03] p-1 ring-1 ring-black/[0.05]">
-        {OCR_TYPES.map((t) => (
+        {OCR_TYPES.map((opt) => (
           <button
-            key={t.value}
-            onClick={() => onChange(t.value)}
-            title={t.hint}
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            title={t(opt.hint)}
             className={`px-4 py-1.5 rounded-full text-[13px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
               ${
-                value === t.value
+                value === opt.value
                   ? "bg-violet-600 text-white shadow-[0_6px_16px_-6px_rgba(139,92,246,0.5)]"
                   : "text-ink-muted hover:text-ink"
               }`}
           >
-            {t.label}
+            {t(opt.label)}
           </button>
         ))}
       </div>
@@ -159,6 +164,7 @@ function EngineSelector({
 
 export default function ExtractPage() {
   const router = useRouter();
+  const { t } = useI18n();
 
   const [step, setStep] = useState<Step>("upload");
   const [videoId, setVideoId] = useState<string>("");
@@ -202,22 +208,21 @@ export default function ExtractPage() {
               <path d="M11 18l-6-6 6-6" />
             </svg>
           </span>
-          <span className="tracking-tight">Back to library</span>
+          <span className="tracking-tight">{t("back.library")}</span>
         </Link>
       </AnimatedBlock>
 
       <AnimatedBlock delay={100} className="text-center mb-10 sm:mb-14">
-        <div className="eyebrow mx-auto mb-5 w-max">Video OCR Pipeline</div>
+        <div className="eyebrow mx-auto mb-5 w-max">{t("extract.eyebrow")}</div>
         <h1 className="text-[clamp(2rem,6vw,4.5rem)] font-semibold tracking-tight leading-[0.92] text-balance text-ink">
-          SubTitle
+          {t("extract.title1")}
           <br />
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-blue-500 to-blue-400/60">
-            Extractor
+            {t("extract.title2")}
           </span>
         </h1>
         <p className="mt-4 text-sm sm:text-base text-ink-muted max-w-md mx-auto leading-relaxed">
-          Upload a video, select the subtitle region, and extract clean SRT text
-          with AI-powered OCR.
+          {t("extract.desc")}
         </p>
       </AnimatedBlock>
 
@@ -269,7 +274,7 @@ export default function ExtractPage() {
 
       <AnimatedBlock delay={500} className="mt-24 sm:mt-32 text-center">
         <p className="text-[11px] text-ink-light tracking-wide">
-          SubTitle Extractor
+          {t("extract.footer")}
         </p>
       </AnimatedBlock>
     </main>
