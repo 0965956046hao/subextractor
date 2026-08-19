@@ -21,7 +21,10 @@ src-tauri/resources/node/
 src-tauri/resources/tools/demucs/
 # Tauri generated/bundled output
 src-tauri/gen/
-
+*.dylib
+*.so
+*.dll
+*.exe
 */build/
 */dist/
 .playwright-mcp
