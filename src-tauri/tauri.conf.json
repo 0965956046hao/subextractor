@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SubTitle Extractor",
+  "version": "0.1.0",
+  "identifier": "com.subextractor.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SubTitle Extractor",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "resources": {
+      "resources/node/bin/node": "node/bin/node",
+      "../frontend/.next-prod": "frontend/.next/standalone",
+      "../backend/dist/backend": "backend",
+      "../capcut-tts-api/dist/capcut-tts-api": "capcut-tts-api",
+      "../ds2api/ds2api": "ds2api/ds2api",
+      "../ds2api/config.example.json": "ds2api/config.example.json",
+      "../youtubeuploader/client_secrets.json": "youtubeuploader.client_secrets.json"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
