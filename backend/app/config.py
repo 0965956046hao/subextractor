@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     ocr_cache_max_streak: int = 15
     # Hardcode (Pillow burn) parallelism: 0 = auto (min(4, cpu_count)); 1 = single process.
     hardcode_workers: int = 0
+    # TTS parallelism: số luồng gọi API gen voice đồng thời (Google TTS + CapCut).
+    tts_workers: int = 3
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5
