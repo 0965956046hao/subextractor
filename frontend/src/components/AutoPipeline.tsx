@@ -2960,12 +2960,12 @@ function DetailView({
                   </button>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
+<div className="grid gap-4 md:grid-cols-2">
+                  <div className="flex flex-col">
                     <p className="text-[11px] font-medium text-ink-muted mb-2">
                       {tr("pipeline.previewThumbnail")}
                     </p>
-                    <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                    <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06]">
                       {p.thumbnail ? (
                         <img
                           src={p.thumbnail}

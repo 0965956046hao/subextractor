@@ -420,10 +420,17 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
         def _download_thumbnail() -> None:
             if not thumbnail_url:
                 return
-            dest = ctx_dir / "thumbnail.jpg"
-            _download(thumbnail_url, dest)
-            logger.info("Thumbnail downloaded for %s (%d bytes)", merge_id, dest.stat().st_size if dest.exists() else 0)
-            _set("Đang tải video + audio (song song)...", 5, "Đã tải thumbnail.")
+            try:
+                dest = ctx_dir / "thumbnail.jpg"
+                _download(thumbnail_url, dest)
+                logger.info("Thumbnail downloaded for %s (%d bytes)", merge_id, dest.stat().st_size if dest.exists() else 0)
+                _set("Đang tải video + audio (song song)...", 5, "Đã tải thumbnail.")
+            except Exception as e:
+                logger.warning("Thumbnail download failed for %s: %s", merge_id, e)
+                with state["lock"]:
+                    job.setdefault("logs", []).append({
+                        "message": f"Thumbnail: lỗi tải ảnh ({e})", "ts": time.time(), "level": "warn",
+                    })
 
         def _download_big_thumbs() -> None:
             bts = big_thumbs or []
@@ -431,11 +438,22 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
                 return
             thumb_dir = ctx_dir / "context_images"
             thumb_dir.mkdir(parents=True, exist_ok=True)
+            ok = 0
             for idx, u in enumerate(bts):
                 dest = thumb_dir / f"context_{idx}.jpg"
-                _download(u, dest)
-            logger.info("%d big thumb images downloaded for %s", len(bts), merge_id)
-            _set("Đang tải video + audio (song song)...", 5, f"Đã tải {len(bts)} ảnh ngữ cảnh.")
+                try:
+                    _download(u, dest)
+                    ok += 1
+                except Exception as e:
+                    logger.warning("Big thumb %d download failed for %s: %s", idx, merge_id, e)
+            logger.info("%d/%d big thumb images downloaded for %s", ok, len(bts), merge_id)
+            if ok:
+                _set("Đang tải video + audio (song song)...", 5, f"Đã tải {ok} ảnh ngữ cảnh.")
+            else:
+                with state["lock"]:
+                    job.setdefault("logs", []).append({
+                        "message": "Ảnh ngữ cảnh: lỗi tải ảnh", "ts": time.time(), "level": "warn",
+                    })
 
         threads.append(threading.Thread(target=_download_thumbnail))
         threads.append(threading.Thread(target=_download_big_thumbs))
