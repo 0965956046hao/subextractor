@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     // Chờ một chút cho các request media (video/audio CDN) kịp fire.
     for (let i = 0; i < 40; i++) {
       if (captured.length > 0) break;
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 5000));
     }
 
     // Fallback: nếu chưa bắt được từ network, quét DOM lần cuối
