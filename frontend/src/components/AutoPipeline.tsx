@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Lightbox } from "react-modal-image";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
 import { useI18n, type Dict } from "@/lib/i18n";
@@ -13,12 +15,13 @@ import {
   getGoogleTtsVoices,
   googleTtsPreview,
   getFrameUrl,
+  getVideoUrl,
   listVideos,
   deleteVideo,
   getAppConfig,
   uploadVideo,
   getDownloadUrl,
-  getDubbedVoiceDownloadUrl,
+  getDubbedDownloadUrl,
   type PipelineHealth,
   type HealthCheckResult,
   type CapCutVoice,
@@ -1760,6 +1763,8 @@ function PipelineRow({
   const tr = makeT(t);
   const meta = STATUS_META[p.status] ?? STATUS_META.queued;
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [zoomSrc, setZoomSrc] = useState<string | null>(null);
   const stepLabel = (() => {
     if (p.status === "error" && p.failedStep != null) {
       return `${tr("pipeline.stepError")} ${p.failedStep + 1}/9 · ${
@@ -1877,6 +1882,16 @@ function PipelineRow({
       <button
         onClick={(e) => {
           e.stopPropagation();
+          setPreviewOpen(true);
+        }}
+        title={tr("pipeline.previewMedia")}
+        className="px-2.5 h-7 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+      >
+        {tr("pipeline.previewMediaBtn")}
+      </button>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
           setConfirmingRemove(true);
         }}
         title={
@@ -1988,6 +2003,129 @@ function PipelineRow({
           </div>
         </div>
       )}
+
+      {previewOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 backdrop-blur-sm p-4"
+            onClick={() => setPreviewOpen(false)}
+          >
+            <div
+              className="double-bezel w-full max-w-3xl my-auto"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards",
+              }}
+            >
+              <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <p className="text-sm font-semibold text-ink truncate">
+                  {p.title || p.url || tr("pipeline.jobTitle", { id: p.id })}
+                </p>
+                <button
+                  onClick={() => setPreviewOpen(false)}
+                  className="w-8 h-8 rounded-lg bg-black/[0.04] text-ink-muted flex items-center justify-center hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <p className="text-[11px] font-medium text-ink-muted mb-2">
+                    {tr("pipeline.previewThumbnail")}
+                  </p>
+                  <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                    {p.thumbnail ? (
+                      <img
+                        src={p.thumbnail}
+                        alt={p.title || "thumbnail"}
+                        className="w-full h-full object-cover cursor-zoom-in"
+                        onClick={() => setZoomSrc(p.thumbnail)}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-ink-light">
+                        {tr("pipeline.previewNoThumbnail")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium text-ink-muted mb-2">
+                    {tr("pipeline.previewVideo")}
+                  </p>
+                  <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                    {p.videoId ? (
+                      // eslint-disable-next-line jsx-a11y/media-has-caption
+                      <video
+                        src={getVideoUrl(p.videoId)}
+                        controls
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-ink-light">
+                        {tr("pipeline.previewNoVideo")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-[11px] font-medium text-ink-muted mb-2">
+                  {tr("pipeline.previewBigThumbs")}
+                </p>
+                {p.bigThumbs && p.bigThumbs.length ? (
+                  <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+                    {p.bigThumbs.map((src, i) => (
+                      <div
+                        key={i}
+                        className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video cursor-zoom-in"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={src}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          onClick={() => setZoomSrc(src)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[12px] text-ink-light">
+                    {tr("pipeline.previewNoBigThumbs")}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+          </div>,
+          document.body,
+        )}
+
+      {zoomSrc &&
+        createPortal(
+          <Lightbox
+            medium={zoomSrc}
+            large={zoomSrc}
+            alt={p.title || "thumbnail"}
+            onClose={() => setZoomSrc(null)}
+            hideDownload
+          />,
+          document.body,
+        )}
     </div>
   );
 }
@@ -2158,6 +2296,8 @@ function DetailView({
   const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [zoomSrc, setZoomSrc] = useState<string | null>(null);
 
   useEffect(() => {
     const el = logRef.current;
@@ -2224,6 +2364,13 @@ function DetailView({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPreviewOpen(true)}
+              title={tr("pipeline.previewMedia")}
+              className="px-2.5 h-7 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer"
+            >
+              {tr("pipeline.previewMediaBtn")}
+            </button>
             {(p.status === "running" || p.status === "queued") && (
               <button
                 onClick={() => setConfirmingCancel(true)}
@@ -2534,7 +2681,7 @@ function DetailView({
               </a>
               {p.dubbedUrl && p.videoId && (
                 <a
-                  href={getDubbedVoiceDownloadUrl(p.videoId)}
+                  href={getDubbedDownloadUrl(p.videoId)}
                   download
                   className="btn-island-primary group text-sm !px-5 !py-2.5"
                 >
@@ -2757,6 +2904,130 @@ function DetailView({
           onClose={() => closeTimelineCheck(p.id)}
         />
       )}
+
+      {previewOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 backdrop-blur-sm p-4"
+            onClick={() => setPreviewOpen(false)}
+          >
+            <div
+              className="double-bezel w-full max-w-3xl my-auto"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                animation:
+                  "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards",
+              }}
+            >
+              <div className="double-bezel-inner p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <p className="text-sm font-semibold text-ink truncate">
+                    {p.title || tr("pipeline.analyzing")}
+                  </p>
+                  <button
+                    onClick={() => setPreviewOpen(false)}
+                    className="w-8 h-8 rounded-lg bg-black/[0.04] text-ink-muted flex items-center justify-center hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <p className="text-[11px] font-medium text-ink-muted mb-2">
+                      {tr("pipeline.previewThumbnail")}
+                    </p>
+                    <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                      {p.thumbnail ? (
+                        <img
+                          src={p.thumbnail}
+                          alt={p.title || "thumbnail"}
+                          className="w-full h-full object-cover cursor-zoom-in"
+                          onClick={() => setZoomSrc(p.thumbnail)}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-ink-light">
+                          {tr("pipeline.previewNoThumbnail")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium text-ink-muted mb-2">
+                      {tr("pipeline.previewVideo")}
+                    </p>
+                    <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                      {p.videoId ? (
+                        // eslint-disable-next-line jsx-a11y/media-has-caption
+                        <video
+                          src={getVideoUrl(p.videoId)}
+                          controls
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-ink-light">
+                          {tr("pipeline.previewNoVideo")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <p className="text-[11px] font-medium text-ink-muted mb-2">
+                    {tr("pipeline.previewBigThumbs")}
+                  </p>
+                  {p.bigThumbs && p.bigThumbs.length ? (
+                    <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+                      {p.bigThumbs.map((src, i) => (
+                        <div
+                          key={i}
+                          className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video cursor-zoom-in"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={src}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            onClick={() => setZoomSrc(src)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[12px] text-ink-light">
+                      {tr("pipeline.previewNoBigThumbs")}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {zoomSrc &&
+        createPortal(
+          <Lightbox
+            medium={zoomSrc}
+            large={zoomSrc}
+            alt={p.title || "thumbnail"}
+            onClose={() => setZoomSrc(null)}
+            hideDownload
+          />,
+          document.body,
+        )}
     </div>
   );
 }

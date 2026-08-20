@@ -12,8 +12,6 @@ from app.services.media_utils import (
     _srt_path,
     _video_path,
     _get_audio_duration,
-    _get_video_resolution,
-    target_dims_min1080,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
@@ -477,7 +475,7 @@ def build_full_audio(
     return full_audio
 
 
-def dub_video_with_tts(
+def dub_audio_only(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
     tts_engine: str = "google",
@@ -487,8 +485,7 @@ def dub_video_with_tts(
     progress_callback=None,
     log_fn=None,
 ) -> Path:
-    """Separate vocals → synthesize Vietnamese TTS → mix into dubbed video."""
-    video_path = _video_path(video_id)
+    """Separate vocals → synthesize Vietnamese TTS → mix into dubbed audio (no video merge)."""
     full_audio = build_full_audio(
         video_id,
         voice_name,
@@ -499,39 +496,7 @@ def dub_video_with_tts(
         progress_callback=progress_callback,
         log_fn=log_fn,
     )
-
-    out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
-    if (
-        out_path.exists() and out_path.stat().st_size > 0
-        and out_path.stat().st_mtime >= full_audio.stat().st_mtime
-    ):
-        if log_fn:
-            log_fn("Đã có video lồng tiếng từ lần chạy trước — tái sử dụng (bỏ qua mux).")
-        return out_path
-    if log_fn:
-        log_fn("Mux audio lồng tiếng vào video (FFmpeg)...")
-    vw, vh = _get_video_resolution(str(video_path))
-    tw, th = target_dims_min1080(vw, vh)
-    if (tw, th) != (vw, vh) and log_fn:
-        log_fn(f"Nâng độ phân giải video: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
-    subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", str(video_path),
-            "-i", str(full_audio),
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-vf", f"scale={tw}:{th}:flags=lanczos",
-            "-c:v", "libx264", "-crf", "18", "-preset", "medium",
-            "-c:a", "copy",
-            "-shortest",
-            str(out_path),
-        ],
-        check=True, capture_output=True, timeout=600,
-    )
-    if log_fn:
-        log_fn("Đã tạo video lồng tiếng xong.")
-    return out_path
+    return full_audio
 
 
 def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
@@ -553,12 +518,12 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
                     "type": "progress", "progress": pct, "phase": "dub",
                 })
 
-        job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu lồng tiếng Việt (tách giọng + TTS + trộn)...")
+        job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu tạo audio lồng tiếng Việt (tách giọng + TTS + trộn)...")
 
         def _log(msg: str, level: str = "info"):
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
-        out = dub_video_with_tts(
+        out = dub_audio_only(
             video_id,
             voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
             tts_engine=job.get("tts_engine", "google"),
@@ -572,7 +537,7 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         job["status"] = "done"
         job["progress"] = 100
         job["output_path"] = str(out)
-        job_log_sync(loop, jobs, ws_clients, job_id, "Lồng tiếng Việt hoàn tất!", level="success")
+        job_log_sync(loop, jobs, ws_clients, job_id, "Tạo audio lồng tiếng Việt hoàn tất!", level="success")
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "done", "progress": 100, "video_id": video_id,
         })

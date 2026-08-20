@@ -992,7 +992,6 @@ def run_hardcode_sync(
     # Use dubbed (instrumental + TTS Việt) audio if it exists, else original audio
     video_id = Path(video_path_str).parent.name
     full_audio_path = settings.temp_dir / "tts" / video_id / "full_audio.m4a"
-    dubbed_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
 
     def _valid_audio(p: Path) -> bool:
         # A file can exist yet be corrupt (e.g. mux killed before finalize, no moov
@@ -1001,10 +1000,8 @@ def run_hardcode_sync(
 
     if _valid_audio(full_audio_path):
         audio_src = full_audio_path
-    elif _valid_audio(dubbed_path):
-        audio_src = dubbed_path
     else:
-        if full_audio_path.exists() or dubbed_path.exists():
+        if full_audio_path.exists():
             logger.warning(
                 "hardcode job %s: dubbed audio invalid/corrupt, falling back to original audio", job_id
             )

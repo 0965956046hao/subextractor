@@ -448,7 +448,7 @@ async def upload_to_youtube(body: UploadRequest):
 
 @router.post("/api/youtube/upload/{video_id}")
 async def upload_video_by_id(video_id: str):
-    """Upload the hardcoded/dubbed video with the generated meta to YouTube."""
+    """Upload the hardcoded video with the generated meta to YouTube."""
     # Resolve video path
     hd_dir = settings.temp_dir / "hardcoded" / video_id
     video_path = None
@@ -457,11 +457,7 @@ async def upload_video_by_id(video_id: str):
         if files:
             video_path = files[0]
     if video_path is None:
-        dubbed = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
-        if dubbed.exists():
-            video_path = dubbed
-    if video_path is None:
-        raise HTTPException(404, "Video not found. Run hardcode/dub first.")
+        raise HTTPException(404, "Video not found. Run hardcode first.")
 
     meta_path = settings.temp_dir / "meta" / video_id / "meta.json"
     if not meta_path.exists():

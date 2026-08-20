@@ -34,64 +34,76 @@ export async function POST(req: NextRequest) {
   }
 
   let thumbnail: string | null = null;
+  let bigThumbs: string[] = [];
 
   try {
     const page = await handle.browser.newPage();
     if (!handle.persistent) await page.setUserAgent(USER_AGENT);
 
     await loadCookies(page);
+
+    // Bắt response của API /aweme/v1/web/aweme/detail/ ngay trên trang video:
+    // data.aweme_detail.video.cover.url_list → thumbnail (ưu tiên URL có lk3s),
+    // data.aweme_detail.video.big_thumbs[].img_urls → bigThumbs (chỉ giữ URL hợp lệ).
+    let postCover: string[] = [];
+    let detailResolved = false;
+    let resolveDetail: (() => void) | null = null;
+    const detailReady = new Promise<void>((resolve) => {
+      resolveDetail = resolve;
+    });
+
+    page.on("response", async (resp) => {
+      const u = resp.url();
+      if (!u.includes("/aweme/v1/web/aweme/detail/")) return;
+      try {
+        const data = await resp.json();
+        const aweme = data?.aweme_detail ?? data?.aweme ?? null;
+        if (!aweme) return;
+        const covers = Array.isArray(aweme.video?.cover?.url_list)
+          ? (aweme.video.cover.url_list as string[])
+          : [];
+        if (covers.length) postCover = covers;
+        const thumbs = Array.isArray(aweme.video?.big_thumbs)
+          ? (aweme.video.big_thumbs as Array<{ img_urls?: string[] }>)
+          : [];
+        const thumbUrls = thumbs
+          .flatMap((t) => (Array.isArray(t?.img_urls) ? t.img_urls : []))
+          .filter((u): u is string => {
+            if (typeof u !== "string") return false;
+            try {
+              const parsed = new URL(u);
+              return (
+                parsed.protocol === "http:" || parsed.protocol === "https:"
+              );
+            } catch {
+              return false;
+            }
+          });
+        if (thumbUrls.length) bigThumbs = thumbUrls;
+        if (covers.length || thumbUrls.length) {
+          detailResolved = true;
+          resolveDetail?.();
+        }
+      } catch {
+        // không parse được body — bỏ qua
+      }
+    });
+
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
 
-    // Lấy userId từ thẻ <a href="/user/{userId}"> và videoId từ URL
-    const userId = await page.evaluate(() => {
-      const a = document.querySelector('a[href*="/user/"]');
-      const href = a ? a.getAttribute("href") || "" : "";
-      const m = href.match(/\/user\/([^/?]+)/);
-      return m ? m[1] : null;
-    });
-    const videoId = await page.evaluate(() => {
-      const m = window.location.href.match(/\/video\/(\d+)/);
-      return m ? m[1] : null;
-    });
+    // Đợi response detail về (timeout 15s). Trang có thể gọi detail trước khi
+    // goto xong, listener đã đăng ký sẵn nên vẫn bắt được.
+    await Promise.race([
+      detailReady,
+      new Promise((r) => setTimeout(r, 15000)),
+    ]);
 
-    if (userId && videoId) {
-      await page.goto(
-        `https://www.douyin.com/user/${userId}?modal_id=${videoId}`,
-        { waitUntil: "domcontentloaded", timeout: 45000 },
-      );
-      await new Promise((r) => setTimeout(r, 1500));
+    if (postCover.length) {
+      thumbnail = postCover.find((c) => c.includes("lk3s")) ?? postCover[0];
+    }
 
-      // Nếu có dialog "我知道了" thì click để đóng, không có thì chạy bình thường
-      try {
-        const clicked = await page.evaluate(() => {
-          const buttons = Array.from(document.querySelectorAll("button"));
-          const target = buttons.find((b) =>
-            (b.textContent || "").includes("我知道了"),
-          );
-          if (target) {
-            (target as HTMLButtonElement).click();
-            return true;
-          }
-          return false;
-        });
-        if (clicked) await new Promise((r) => setTimeout(r, 800));
-      } catch {
-        // ignore
-      }
-
-      try {
-        await page.waitForSelector(
-          'div.account-name.userAccountTextHover[data-e2e="feed-video-nickname"]',
-          { timeout: 10000 },
-        );
-        await page.click(
-          'div.account-name.userAccountTextHover[data-e2e="feed-video-nickname"]',
-        );
-        await new Promise((r) => setTimeout(r, 10000));
-      } catch {
-        // account-name có thể không cần click
-      }
-
+    // Fallback: quét DOM nếu chưa lấy được thumbnail từ API
+    if (!thumbnail) {
       const extractThumbnail = () =>
         page.evaluate(() => {
           const decode = (s: string) => s.replace(/&amp;/g, "&");
@@ -120,5 +132,5 @@ export async function POST(req: NextRequest) {
 
   await closeBrowser(handle).catch(() => {});
 
-  return NextResponse.json({ thumbnail });
+  return NextResponse.json({ thumbnail, bigThumbs });
 }

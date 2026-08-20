@@ -29,7 +29,7 @@ export const STEPS = [
     label: "Phân tích link",
     detail: "Lấy URL / tải video theo nguồn (Douyin/YouTube)",
   },
-  { label: "Merge video + audio", detail: "Gộp 2 file nếu có audio riêng" },
+  { label: "Tải video", detail: "Tải video (gộp audio riêng nếu nguồn có)" },
   { label: "Chọn vùng quét sub", detail: "Kéo vùng trên video để lấy phụ đề" },
   {
     label: "Chỉnh kích thước & vị trí sub",
@@ -107,6 +107,7 @@ export interface Pipeline {
   title: string;
   originalName: string;
   thumbnail: string | null;
+  bigThumbs: string[];
   updatedThumbnailUrl: string | null;
   status: "queued" | "running" | "done" | "error";
   stage: Stage;
@@ -259,6 +260,7 @@ function newPipeline(
     title: "",
     originalName: "",
     thumbnail: null,
+    bigThumbs: [],
     updatedThumbnailUrl: null,
     status: "queued",
     stage: "idle",
@@ -1035,7 +1037,7 @@ function enqueue(id: string, startStep = 0) {
 }
 
 // After a video finishes, tell the backend to delete intermediate temp data,
-// keeping only the final deliverables (hardcoded video, SRT, dubbed video,
+// keeping only the final deliverables (hardcoded video, SRT, dubbed audio,
 // meta.json, project state) so the result stays reviewable.
 function cleanupTempForVideo(videoId: string | null) {
   if (!videoId) return;
@@ -1324,6 +1326,9 @@ async function runPrep(id: string, startStep = 0) {
           } else {
             appendLog(id, "Thumbnail: không lấy được");
           }
+          if (Array.isArray(td.bigThumbs) && td.bigThumbs.length) {
+            patch(id, { bigThumbs: td.bigThumbs });
+          }
         } catch {
           appendLog(id, "Thumbnail: không lấy được");
         }
@@ -1335,13 +1340,13 @@ async function runPrep(id: string, startStep = 0) {
       if (videoId) {
         // Already imported (YouTube): yt-dlp đã merge sẵn video + audio.
         markStepSkipped(id, 1);
-        appendLog(id, "Video YouTube đã có sẵn audio (yt-dlp gộp sẵn).");
+        appendLog(id, "Video YouTube đã có sẵn (yt-dlp đã tải video + audio).");
       } else {
         let mergeId = "";
         if (audioUrl && videoUrl) {
           patch(id, { stage: "merging" });
           markStepStart(id, 1);
-          appendLog(id, "Phát hiện 2 file riêng (video + audio) → merge...");
+          appendLog(id, "Phát hiện 2 file riêng (video + audio) → tải 2 file rồi gộp...");
           const mr = await fetch("/api/video-merge", {
             method: "POST",
             headers: JSON_HEADERS,
@@ -1353,7 +1358,7 @@ async function runPrep(id: string, startStep = 0) {
           if (ms.status !== "done")
             throw new Error(ms.error || "Merge thất bại");
           mergeId = (ms.filename || "").replace(/\.mp4$/, "");
-          appendLog(id, "Merge xong.");
+          appendLog(id, "Đã tải 2 file và gộp xong.");
           markStepEnd(id, 1);
         } else {
           markStepSkipped(id, 1);
@@ -1842,7 +1847,7 @@ async function runPipeline(id: string, startStep = 4) {
         appendLog(id, "Đã tắt lồng tiếng tự động — bỏ qua bước lồng tiếng.");
         markStepSkipped(id, 7);
       } else {
-        // Resume: nếu video lồng tiếng đã tồn tại thì bỏ qua.
+        // Resume: nếu audio lồng tiếng đã tồn tại thì bỏ qua.
         let dubbedExists = false;
         try {
           const dubbedCheck = await fetch(`/api/download/dubbed/${videoId}`);
@@ -1852,7 +1857,7 @@ async function runPipeline(id: string, startStep = 4) {
         }
         if (dubbedExists) {
           patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
-          appendLog(id, "Video lồng tiếng đã có sẵn — bỏ qua.");
+          appendLog(id, "Audio lồng tiếng đã có sẵn — bỏ qua.");
           markStepSkipped(id, 7);
         } else {
           const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
@@ -1895,7 +1900,7 @@ async function runPipeline(id: string, startStep = 4) {
               const ds = await pollJob(dd.job_id, tick(7));
               if (ds.status === "done") {
                 patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
-                appendLog(id, "Lồng tiếng Việt xong.");
+                appendLog(id, "Audio lồng tiếng Việt xong.");
               } else {
                 appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
               }

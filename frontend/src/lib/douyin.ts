@@ -121,6 +121,10 @@ export async function openBrowser(options?: {
     args: [
       "--disable-blink-features=AutomationControlled",
       `--remote-debugging-port=${CDP_PORT}`,
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-features=Translate,MediaRouter",
     ],
     defaultViewport: null,
   });

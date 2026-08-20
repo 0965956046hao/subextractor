@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   openBrowser,
   closeBrowser,
+  isVideoUrl,
   isMp4Url,
   loadCookies,
   saveCookies,
@@ -47,9 +48,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const page = await handle.browser.newPage();
-    page.on("response", (resp) => {
-      const u = resp.url();
-      if (isMp4Url(u)) captured.push(u);
+
+    // Nghe network request NGAY TỪ ĐẦU (không chờ DOM): bắt URL video/audio
+    // khi trình duyệt request CDN, trước khi video element được render.
+    page.on("request", (request) => {
+      const u = request.url();
+      if (isVideoUrl(u) || isMp4Url(u)) {
+        captured.push(u);
+      }
     });
 
     if (!handle.persistent) await page.setUserAgent(USER_AGENT);
@@ -57,58 +63,33 @@ export async function POST(req: NextRequest) {
     await loadCookies(page);
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
 
-    srcs = await page.evaluate(async (selectors: string[]) => {
-      const selector = selectors.join(", ");
-      const isMp4 = (v: string) =>
-        /^https?:\/\//.test(v) &&
-        /\.mp4(\?|$)|video_mp4|mime_type=video_mp4/i.test(v);
+    // Chờ một chút cho các request media (video/audio CDN) kịp fire.
+    for (let i = 0; i < 40; i++) {
+      if (captured.length > 0) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
 
-      const collect = (): string[] => {
-        const out: string[] = [];
-        document.querySelectorAll<HTMLElement>(selector).forEach((el) => {
-          const s = el.getAttribute("src");
-          if (s && isMp4(s)) out.push(s);
-        });
-        return Array.from(new Set(out));
-      };
+    // Fallback: nếu chưa bắt được từ network, quét DOM lần cuối
+    // (tránh bỏ sót khi URL chỉ xuất hiện trong attribute src của <video>).
+    if (captured.length === 0) {
+      srcs = await page.evaluate((selectors: string[]) => {
+        const selector = selectors.join(", ");
+        const isMp4 = (v: string) =>
+          /^https?:\/\//.test(v) &&
+          /\.mp4(\?|$)|video_mp4|mime_type=video_mp4/i.test(v);
 
-      const first = collect();
-      if (first.length) return first;
-
-      return await new Promise<string[]>((resolve) => {
-        let interval: ReturnType<typeof setInterval>;
-        let timer: ReturnType<typeof setTimeout>;
-        let observer: MutationObserver;
-        let settled = false;
-
-        const done = (vals: string[]) => {
-          if (settled) return;
-          settled = true;
-          clearInterval(interval);
-          clearTimeout(timer);
-          observer.disconnect();
-          resolve(vals);
+        const collect = (): string[] => {
+          const out: string[] = [];
+          document.querySelectorAll<HTMLElement>(selector).forEach((el) => {
+            const s = el.getAttribute("src");
+            if (s && isMp4(s)) out.push(s);
+          });
+          return Array.from(new Set(out));
         };
 
-        const check = () => {
-          const vals = collect();
-          if (vals.length) done(vals);
-        };
-
-        observer = new MutationObserver(check);
-        const root =
-          document.querySelector("xg-video-container") ?? document.body;
-        observer.observe(root, {
-          subtree: true,
-          childList: true,
-          attributes: true,
-          attributeFilter: ["src"],
-        });
-
-        interval = setInterval(check, 200);
-        timer = setTimeout(() => done([]), 30000);
-      });
-    }, SOURCE_SELECTORS);
+        return collect();
+      }, SOURCE_SELECTORS);
+    }
 
     await saveCookies(page);
 

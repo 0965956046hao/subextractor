@@ -170,7 +170,7 @@ frontend/
 | GET | `/api/download/{video_id}?format=srt\|txt` | Download subtitle file (filename = `{original}.original.srt`) |
 | GET | `/api/download/muxed/{video_id}` | Download merged video (filename = `{original}_muxed.mp4`) |
 | GET | `/api/download/hardcoded/{video_id}` | Download hardcoded video (filename = `{original}_hardcoded.mp4`) |
-| GET | `/api/download/dubbed/{video_id}` | Download dubbed video (filename = `{original}_dubbed.mp4`) |
+| GET | `/api/download/dubbed/{video_id}` | Download dubbed audio (filename = `{original}_dubbed.m4a`) |
 | GET | `/api/download/exported/{video_id}` | Download exported video (filename = `{original}_exported.mp4`) |
 | GET | `/api/srt/{video_id}` | Raw SRT content as JSON `{content: "..."}` |
 | GET | `/api/capcut/voices?lang=vi-VN` | List CapCut voices (proxy → service :8100) |

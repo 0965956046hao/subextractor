@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response
 from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
-from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _video_playable
+from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 
@@ -734,14 +734,14 @@ async def tts_subtitles(video_id: str, request: Request):
 async def download_dubbed(video_id: str):
     tts_dir = settings.temp_dir / "tts" / video_id
     if not tts_dir.exists():
-        raise HTTPException(404, "Dubbed video not found. Run TTS first.")
-    files = list(tts_dir.glob("dubbed_video.mp4"))
+        raise HTTPException(404, "Dubbed audio not found. Run TTS first.")
+    files = list(tts_dir.glob("full_audio.m4a"))
     if not files:
-        raise HTTPException(404, "Dubbed video not found. Run TTS first.")
+        raise HTTPException(404, "Dubbed audio not found. Run TTS first.")
     path = files[0]
-    if not _video_playable(str(path)):
-        raise HTTPException(404, "Dubbed video is incomplete. Run TTS again.")
-    return FileResponse(str(path), media_type="video/mp4", filename=_original_download_name(video_id, "_dubbed"))
+    if path.stat().st_size == 0:
+        raise HTTPException(404, "Dubbed audio is incomplete. Run TTS again.")
+    return FileResponse(str(path), media_type="audio/mp4", filename=_original_download_name(video_id, "_dubbed", ".m4a"))
 
 
 # ── GET /api/preview/dubbed/{video_id} (inline, cho iframe) ──
@@ -750,20 +750,20 @@ async def download_dubbed(video_id: str):
 async def preview_dubbed(video_id: str):
     tts_dir = settings.temp_dir / "tts" / video_id
     if not tts_dir.exists():
-        raise HTTPException(404, "Dubbed video not found")
-    files = list(tts_dir.glob("dubbed_video.mp4"))
+        raise HTTPException(404, "Dubbed audio not found")
+    files = list(tts_dir.glob("full_audio.m4a"))
     if not files:
-        raise HTTPException(404, "Dubbed video not found")
-    if not _video_playable(str(files[0])):
-        raise HTTPException(404, "Dubbed video is incomplete. Run TTS again.")
-    return FileResponse(str(files[0]), media_type="video/mp4")
+        raise HTTPException(404, "Dubbed audio not found")
+    if files[0].stat().st_size == 0:
+        raise HTTPException(404, "Dubbed audio is incomplete. Run TTS again.")
+    return FileResponse(str(files[0]), media_type="audio/mp4")
 
 
 # ── POST /api/dub/{video_id} ──
 
 @router.post("/api/dub/{video_id}")
 async def dub_subtitles(video_id: str, request: Request):
-    """Separate vocals (keep instrumental) + Vietnamese TTS → dubbed video."""
+    """Separate vocals (keep instrumental) + Vietnamese TTS → dubbed audio (no video merge)."""
     _srt_path(video_id)
     _video_path(video_id)
 
@@ -915,10 +915,10 @@ async def list_available_tts(video_id: str):
                 "name": f"Audio TTS legacy ({len(mp3_files)} files)",
                 "count": len(mp3_files),
             })
-        # Also check for remuxed video
-        dubbed = tts_dir / "dubbed_video.mp4"
+        # Dubbed audio (mix nhạc nền + giọng TTS)
+        dubbed = tts_dir / "full_audio.m4a"
         if dubbed.exists():
-            files.append({"id": "dubbed", "name": "Video lồng tiếng", "size": dubbed.stat().st_size})
+            files.append({"id": "dubbed", "name": "Audio lồng tiếng", "size": dubbed.stat().st_size})
     return {"files": files}
 
 

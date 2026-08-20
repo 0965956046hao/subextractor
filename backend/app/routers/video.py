@@ -136,7 +136,7 @@ async def list_videos(
             filename = _meta_filename(video_id) or video_id
             content = srt_path.read_text(encoding="utf-8")
             entries = sum(1 for block in content.split("\n\n") if "-->" in block)
-            has_dubbed = (settings.temp_dir / "tts" / video_id / "dubbed_video.mp4").exists()
+            has_dubbed = (settings.temp_dir / "tts" / video_id / "full_audio.m4a").exists()
             row = {
                 "video_id": video_id,
                 "filename": filename,
@@ -192,7 +192,7 @@ async def cleanup_video(video_id: str):
     final deliverables needed to re-view / re-download the result:
     - hardcoded/{video_id}/        (final video + ASS)
     - srt/{video_id}/              (final subtitles)
-    - tts/{video_id}/dubbed_video.mp4 (dubbed video)
+    - tts/{video_id}/full_audio.m4a (dubbed audio)
     - videos/{video_id}/meta.json  (original filename)
     - projects/{video_id}/         (editor project state)
 
@@ -241,11 +241,11 @@ async def cleanup_video(video_id: str):
         shutil.rmtree(translated_dir, ignore_errors=True)
         removed.append("translated")
 
-    # tts/: keep only dubbed_video.mp4 + full_voice.mp3 (dubbed voice download)
+    # tts/: keep only full_audio.m4a + full_voice.mp3 (dubbed audio download)
     tts_dir = settings.temp_dir / "tts" / video_id
     if tts_dir.exists():
         for f in tts_dir.iterdir():
-            if f.name in ("dubbed_video.mp4", "full_voice.mp3"):
+            if f.name in ("full_audio.m4a", "full_voice.mp3"):
                 continue
             if f.is_dir():
                 shutil.rmtree(f, ignore_errors=True)

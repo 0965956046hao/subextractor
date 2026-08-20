@@ -603,7 +603,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
           </div>
         </div>
 
-        {/* Video lồng tiếng (dubbed) download */}
+        {/* Audio lồng tiếng (dubbed) download */}
         {dubbedUrl && (
           <div className="mb-4 p-4 rounded-2xl bg-cyan-500/[0.04] ring-1 ring-cyan-500/[0.12] flex items-center gap-3">
             <IconCheck className="w-4 h-4 text-cyan-500 flex-shrink-0" />
