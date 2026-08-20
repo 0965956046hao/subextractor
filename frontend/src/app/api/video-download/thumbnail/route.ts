@@ -57,10 +57,12 @@ export async function POST(req: NextRequest) {
       if (!u.includes("/aweme/v1/web/aweme/detail/")) return;
       try {
         const data = await resp.json();
-        const aweme = data?.aweme_detail ?? data?.aweme ?? null;
+        const aweme = data?.aweme_detail ?? null;
         if (!aweme) return;
-        const covers = Array.isArray(aweme.video?.cover?.url_list)
-          ? (aweme.video.cover.url_list as string[])
+        const covers = Array.isArray(
+          aweme.video?.cover_original_scale?.url_list,
+        )
+          ? (aweme.video.cover_original_scale.url_list as string[])
           : [];
         if (covers.length) postCover = covers;
         const thumbs = Array.isArray(aweme.video?.big_thumbs)
@@ -93,10 +95,7 @@ export async function POST(req: NextRequest) {
 
     // Đợi response detail về (timeout 15s). Trang có thể gọi detail trước khi
     // goto xong, listener đã đăng ký sẵn nên vẫn bắt được.
-    await Promise.race([
-      detailReady,
-      new Promise((r) => setTimeout(r, 15000)),
-    ]);
+    await Promise.race([detailReady, new Promise((r) => setTimeout(r, 15000))]);
 
     if (postCover.length) {
       thumbnail = postCover.find((c) => c.includes("lk3s")) ?? postCover[0];

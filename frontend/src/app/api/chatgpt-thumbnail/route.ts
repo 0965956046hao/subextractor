@@ -40,12 +40,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2. Download the source thumbnail (Douyin CDN needs a browser UA + Referer).
+  // 2. Download the source thumbnail (now served locally by the backend).
   const tmpDir = path.join(os.tmpdir(), "chatgpt-thumb");
   fs.mkdirSync(tmpDir, { recursive: true });
   const inputPath = path.join(tmpDir, `${videoId}.jpg`);
   try {
-    const res = await fetch(thumbUrl, {
+    const src = thumbUrl.startsWith("/") ? `${BACKEND_URL}${thumbUrl}` : thumbUrl;
+    const res = await fetch(src, {
       headers: { "User-Agent": USER_AGENT, Referer: "https://www.douyin.com/" },
     });
     if (!res.ok) throw new Error(`download thumb failed: ${res.status}`);

@@ -1216,6 +1216,7 @@ async function runPrep(id: string, startStep = 0) {
   const ocrType = detectOcrType();
   let region = cur.region;
   let thumbUrl = cur.thumbnail;
+  let bigThumbsUrls: string[] = cur.bigThumbs || [];
   let originalName = cur.originalName || "";
 
   const stageForStart =
@@ -1311,7 +1312,8 @@ async function runPrep(id: string, startStep = 0) {
         );
         markStepEnd(id, 0);
 
-        // Luồng puppeteer riêng lấy thumbnail (sau khi có URL video)
+        // Lấy thumbnail + ảnh ngữ cảnh (big_thumbs) trước — sau đó merge sẽ tải
+        // các file này song song với video + audio.
         try {
           const tr = await fetch("/api/video-download/thumbnail", {
             method: "POST",
@@ -1327,6 +1329,7 @@ async function runPrep(id: string, startStep = 0) {
             appendLog(id, "Thumbnail: không lấy được");
           }
           if (Array.isArray(td.bigThumbs) && td.bigThumbs.length) {
+            bigThumbsUrls = td.bigThumbs;
             patch(id, { bigThumbs: td.bigThumbs });
           }
         } catch {
@@ -1350,7 +1353,12 @@ async function runPrep(id: string, startStep = 0) {
           const mr = await fetch("/api/video-merge", {
             method: "POST",
             headers: JSON_HEADERS,
-            body: JSON.stringify({ video_url: videoUrl, audio_url: audioUrl }),
+            body: JSON.stringify({
+              video_url: videoUrl,
+              audio_url: audioUrl,
+              thumbnail_url: thumbUrl || "",
+              big_thumbs: bigThumbsUrls,
+            }),
           });
           const md = await mr.json();
           if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
@@ -1368,8 +1376,18 @@ async function runPrep(id: string, startStep = 0) {
         appendLog(id, "Đăng ký video vào hệ thống...");
         const impName = `${originalName || "video"}.mp4`;
         const impBody = mergeId
-          ? { merge_id: mergeId, filename: impName }
-          : { url: videoUrl, filename: impName };
+          ? {
+              merge_id: mergeId,
+              filename: impName,
+              thumbnail_url: thumbUrl || "",
+              big_thumbs: bigThumbsUrls,
+            }
+          : {
+              url: videoUrl,
+              filename: impName,
+              thumbnail_url: thumbUrl || "",
+              big_thumbs: bigThumbsUrls,
+            };
         const ir = await fetch("/api/import-video", {
           method: "POST",
           headers: JSON_HEADERS,
@@ -1385,17 +1403,6 @@ async function runPrep(id: string, startStep = 0) {
             method: "POST",
             headers: JSON_HEADERS,
             body: JSON.stringify({ text: rawUrl }),
-          });
-        } catch {
-          // ignore
-        }
-      }
-      if (thumbUrl) {
-        try {
-          await fetch(`/api/context/${videoId}/thumbnail`, {
-            method: "POST",
-            headers: JSON_HEADERS,
-            body: JSON.stringify({ url: thumbUrl }),
           });
         } catch {
           // ignore

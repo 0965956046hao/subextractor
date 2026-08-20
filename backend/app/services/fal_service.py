@@ -11,7 +11,10 @@ import urllib.request
 from pathlib import Path
 
 from app.config import settings
-from app.services.context_service import load_video_context, load_thumbnail
+from app.services.context_service import (
+    load_video_context,
+    load_thumbnail_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,20 +92,20 @@ def get_thumbnail_prompt(video_id: str) -> tuple[str, str]:
     Shares the exact same prompt-building logic as the fal.ai flow so both
     engines produce the same style of edit.
     """
-    thumb_url = load_thumbnail(video_id)
-    if not thumb_url:
-        raise RuntimeError("Thumbnail URL not saved — run resolve first.")
+    thumb_file = load_thumbnail_file(video_id)
+    if not thumb_file:
+        raise RuntimeError("Thumbnail file not saved — chạy lại bước tải video/merge trước.")
 
     context = load_video_context(video_id) or ""
     title = _load_meta_title(video_id)
-    return build_thumbnail_prompt(context, title), thumb_url
+    return build_thumbnail_prompt(context, title), f"/api/context/{video_id}/thumbnail"
 
 
 def update_thumbnail(video_id: str) -> Path:
     """Regenerate the thumbnail via fal.ai image-to-image (strength=0.3)."""
-    thumb_url = load_thumbnail(video_id)
-    if not thumb_url:
-        raise RuntimeError("Thumbnail URL not saved — run resolve first.")
+    thumb_file = load_thumbnail_file(video_id)
+    if not thumb_file:
+        raise RuntimeError("Thumbnail file not saved — chạy lại bước tải video/merge trước.")
 
     context = load_video_context(video_id) or ""
     title = _load_meta_title(video_id)
@@ -111,7 +114,7 @@ def update_thumbnail(video_id: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     input_path = out_dir / "input_thumb.jpg"
-    _download(thumb_url, input_path)
+    shutil.copyfile(thumb_file, input_path)
 
     api_key = _resolve_fal_key()
     if not api_key:

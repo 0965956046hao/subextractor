@@ -750,7 +750,7 @@ async def run_risk_check_job(
 
 
 async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
-    """Generate video context from OCR snapshots via Gemini Vision."""
+    """Generate video context from the Douyin context images (big thumbs)."""
     from app.services.context_service import generate_video_context, load_video_context
 
     job = jobs[job_id]
@@ -759,7 +759,7 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
     try:
         job["status"] = "processing"
         job["phase"] = "context"
-        await job_log_async(job, ws_clients, "Đang upload ảnh snapshot lên Gemini File Store...", "info")
+        await job_log_async(job, ws_clients, "Đang upload ảnh ngữ cảnh lên Gemini File Store...", "info")
         await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "context"})
 
         loop = asyncio.get_event_loop()
@@ -773,7 +773,7 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
         else:
             job["status"] = "done"
             job["progress"] = 100
-            await job_log_async(job, ws_clients, "Không tìm thấy ảnh snapshot để phân tích.", "warn")
+            await job_log_async(job, ws_clients, "Không tìm thấy ảnh ngữ cảnh để phân tích.", "warn")
             await notify_ws(ws_clients, job_id, {"type": "done", "progress": 100})
 
     except Exception as e:

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Parallel Range download (video/audio merge)
     parallel_download_enabled: bool = True
-    parallel_download_min_size: int = 50 * 1024 * 1024  # 50MB
+    parallel_download_min_size: int = 0  # 0 = luôn tách 4 luồng khi CDN hỗ trợ Range
     parallel_download_connections: int = 4
 
     model_config = {"env_prefix": "STE_", "env_file": ".env"}

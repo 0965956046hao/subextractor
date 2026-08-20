@@ -13,6 +13,11 @@ from app.services.retry_utils import (
 
 logger = logging.getLogger(__name__)
 
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+)
+
 VOICE_CATALOG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "capcut-tts-api" / "Voice.json"
 
 
@@ -50,6 +55,22 @@ def _files_index_path(video_id: str) -> Path:
 
 def _translation_context_path(video_id: str) -> Path:
     return settings.temp_dir / CONTEXT_DIR_NAME / video_id / TRANSLATION_CONTEXT_NAME
+
+
+def _context_images_dir(video_id: str) -> Path:
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / "context_images"
+
+
+def _thumbnail_file(video_id: str) -> Path:
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / "thumbnail.jpg"
+
+
+def _context_image_paths(video_id: str) -> list[Path]:
+    """Return the local context images (big thumbs) copied from the merge step."""
+    d = _context_images_dir(video_id)
+    if not d.exists():
+        return []
+    return sorted(d.glob("*.jpg"))
 
 
 def load_translation_context(video_id: str) -> str | None:
@@ -128,49 +149,29 @@ def load_share_text(video_id: str) -> str | None:
     return None
 
 
-def _thumbnail_path(video_id: str) -> Path:
-    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / "thumbnail.txt"
+def _thumbnail_file(video_id: str) -> Path:
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / "thumbnail.jpg"
 
 
-def save_thumbnail(video_id: str, url: str) -> None:
-    """Persist the extracted thumbnail URL for later use (fal.ai step)."""
-    p = _thumbnail_path(video_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(url, encoding="utf-8")
-
-
-def load_thumbnail(video_id: str) -> str | None:
-    """Load the saved thumbnail URL, if any."""
-    p = _thumbnail_path(video_id)
-    if p.exists():
-        try:
-            return p.read_text(encoding="utf-8").strip()
-        except Exception:
-            return None
-    return None
+def load_thumbnail_file(video_id: str) -> Path | None:
+    """Return the local thumbnail image downloaded during merge, if any."""
+    p = _thumbnail_file(video_id)
+    return p if p.exists() else None
 
 
 def generate_video_context(video_id: str) -> str | None:
-    """Upload snapshot frames to Gemini File Store, then call Vision in one request.
+    """Upload context images (big thumbs) to Gemini File Store, then call Vision.
 
-    Files are uploaded to File Store (visible via GET /api/gemini/files),
-    then all referenced in a single generate_content call.
+    Ảnh ngữ cảnh (big_thumbs) đã được tải về song song với video+audio ở bước
+    merge và copy vào context/{video_id}/context_images/. Đọc trực tiếp các file
+    này, không tạo big_thumbs.json nữa.
     """
-    snapshots_dir = settings.temp_dir / "frames" / video_id / "ocr_snapshots"
-    if not snapshots_dir.exists():
-        logger.info("No OCR snapshots found for %s, skipping context generation", video_id)
+    local_images = _context_image_paths(video_id)
+    if not local_images:
+        logger.info("No context images for %s, skipping context generation", video_id)
         return None
 
-    jpg_files = sorted(snapshots_dir.glob("*.jpg"))
-    if not jpg_files:
-        logger.info("No snapshot images found for %s", video_id)
-        return None
-
-    # Sample up to 20 frames evenly spread across the timeline (min 10 when available)
-    sample_count = min(20, len(jpg_files))
-    step = max(1, len(jpg_files) // sample_count)
-    sampled = jpg_files[::step][:sample_count]
-    logger.info("Uploading %d/%d frames to Gemini File Store (%s)", len(sampled), len(jpg_files), video_id)
+    logger.info("Using %d local context images for %s", len(local_images), video_id)
 
     try:
         from google import genai
@@ -216,12 +217,12 @@ def generate_video_context(video_id: str) -> str | None:
                 return None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(_upload_one, sampled))
+            results = list(pool.map(_upload_one, local_images))
 
         uploaded_files = [r for r in results if r is not None]
 
         if not uploaded_files:
-            logger.warning("No frames uploaded for %s", video_id)
+            logger.warning("No images uploaded for %s", video_id)
             return None
 
         _save_files_index(video_id, api_key, [gf.name for gf in uploaded_files])
@@ -254,8 +255,8 @@ def generate_video_context(video_id: str) -> str | None:
             model=settings.gemini_model,
             contents=[
                 *uploaded_files,
-                f"Analyze these {len(uploaded_files)} frames sampled from video '{video_id}'. "
-                "Synthesize ALL frames together to understand the full video context. "
+                f"Analyze these {len(uploaded_files)} context images from video '{video_id}'. "
+                "Synthesize ALL images together to understand the full video context. "
                 "Describe in Vietnamese (4-6 sentences), including:\n"
                 "- Content type (phim cổ trang / hiện đại / hoạt hình / tài liệu / tutorial...)\n"
                 "- Time period and setting (bối cảnh lịch sử, không gian)\n"

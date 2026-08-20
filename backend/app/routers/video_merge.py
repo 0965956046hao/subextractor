@@ -26,15 +26,57 @@ _USER_AGENT = (
 _merge_jobs: dict[str, dict] = {}
 
 
+def _save_context_files(ctx_dst: Path, thumbnail_url: str, big_thumbs: list[str]) -> None:
+    """Download thumbnail + big thumbs images into a context dir as local files."""
+    ctx_dst.mkdir(parents=True, exist_ok=True)
+
+    def _dl_thumb() -> None:
+        if not thumbnail_url:
+            return
+        try:
+            dest = ctx_dst / "thumbnail.jpg"
+            _download(thumbnail_url, dest)
+            logger.info("Thumbnail saved to %s", dest)
+        except Exception as e:
+            logger.warning("Thumbnail download failed: %s", e)
+
+    def _dl_big_thumbs() -> None:
+        bts = big_thumbs or []
+        if not bts:
+            return
+        thumb_dir = ctx_dst / "context_images"
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        for idx, u in enumerate(bts):
+            dest = thumb_dir / f"context_{idx}.jpg"
+            try:
+                _download(u, dest)
+            except Exception as e:
+                logger.warning("Big thumb %d download failed: %s", idx, e)
+        logger.info("%d big thumb images saved to %s", len(bts), thumb_dir)
+
+    threads = [
+        threading.Thread(target=_dl_thumb),
+        threading.Thread(target=_dl_big_thumbs),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+
 class MergeRequest(BaseModel):
     video_url: str
     audio_url: str
+    thumbnail_url: str = ""
+    big_thumbs: list[str] = []
 
 
 class ImportRequest(BaseModel):
     url: str = ""
     merge_id: str = ""
     filename: str = "douyin.mp4"
+    thumbnail_url: str = ""
+    big_thumbs: list[str] = []
 
 
 @router.post("/api/import-video")
@@ -55,13 +97,42 @@ def import_video(body: ImportRequest):
                 raise HTTPException(404, "Merged file not found")
             shutil.copyfile(src, video_path)
         else:
-            _download(body.url, video_path)
+            # Download thumbnail + big_thumbs in parallel with the video itself.
+            ctx_dst = settings.temp_dir / "context" / video_id
+            ctx_dst.mkdir(parents=True, exist_ok=True)
+            ctx_thread = None
+            if body.thumbnail_url or body.big_thumbs:
+                ctx_thread = threading.Thread(
+                    target=_save_context_files,
+                    args=(ctx_dst, body.thumbnail_url, body.big_thumbs),
+                )
+                ctx_thread.start()
+            try:
+                _download(body.url, video_path)
+            finally:
+                if ctx_thread:
+                    ctx_thread.join()
     except HTTPException:
         shutil.rmtree(video_dir, ignore_errors=True)
         raise
     except Exception as e:
         shutil.rmtree(video_dir, ignore_errors=True)
         raise HTTPException(500, f"Import failed: {e}")
+
+    # Copy any context images (thumbnail + big thumbs) downloaded during merge
+    # into the video's context dir so context generation can reuse them.
+    if body.merge_id:
+        ctx_src = settings.temp_dir / "merged" / f"{body.merge_id}_context"
+        if ctx_src.exists():
+            ctx_dst = settings.temp_dir / "context" / video_id
+            ctx_dst.mkdir(parents=True, exist_ok=True)
+            for f in ctx_src.rglob("*"):
+                if f.is_file():
+                    rel = f.relative_to(ctx_src)
+                    dst = ctx_dst / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(f, dst)
+            logger.info("Copied context images for %s from merge %s", video_id, body.merge_id)
 
     try:
         meta = {"filename": body.filename or "douyin.mp4"}
@@ -282,7 +353,7 @@ def _download_once(url: str, dest: Path, ctx, on_progress) -> None:
                     on_progress(min(99, int(done * 100 / total)))
 
 
-def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
+def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str = "", big_thumbs: list[str] | None = None) -> None:
     job = _merge_jobs[merge_id]
     out_dir = settings.temp_dir / "merged"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,43 +361,93 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str) -> None:
     video_path = out_dir / f"{merge_id}_video.mp4"
     audio_path = out_dir / f"{merge_id}_audio.mp4"
     out_path = out_dir / f"{merge_id}.mp4"
+    ctx_dir = out_dir / f"{merge_id}_context"
+    ctx_dir.mkdir(parents=True, exist_ok=True)
 
     def _cleanup():
         for p in (video_path, audio_path):
             p.unlink(missing_ok=True)
 
+    state = {"lock": threading.Lock(), "done": 0.0}
+    _times: dict[str, float] = {}
+
     def _set(stage: str, progress: int, log: str | None = None):
-        job["stage"] = stage
-        job["progress"] = progress
-        if log:
+        with state["lock"]:
+            job["stage"] = stage
+            job["progress"] = progress
+            if log:
+                job.setdefault("logs", []).append({
+                    "message": log, "ts": time.time(), "level": "info",
+                })
+
+    def _progress(part: float, weight: float):
+        # part ∈ [0,1] của nhánh đang tải; cập nhật tiến trình tổng = (video*0.5 + audio*0.4)
+        with state["lock"]:
+            state["done"] = max(state["done"], part * weight)
+            job["stage"] = "Đang tải video + audio (song song)..."
+            job["progress"] = int(state["done"] * 100)
+
+    def _download_track(label: str, url: str, dest: Path, weight: float) -> None:
+        logger.info("Downloading %s track (parallel): %s", label, url[:120])
+        start = time.time()
+        _download(
+            url, dest,
+            on_progress=lambda p: _progress(p / 100, weight),
+        )
+        elapsed = time.time() - start
+        _times[label] = elapsed
+        msg = f"Đã tải {label} xong trong {elapsed:.1f}s."
+        logger.info("%s download done for %s in %.1fs", label, merge_id, elapsed)
+        with state["lock"]:
             job.setdefault("logs", []).append({
-                "message": log, "ts": time.time(), "level": "info",
+                "message": msg, "ts": time.time(), "level": "info",
             })
 
-    try:
-        _set("Đang tải video...", 0)
-        logger.info("Downloading video track: %s", video_url[:120])
-        _t_video_start = time.time()
-        _download(
-            video_url, video_path,
-            on_progress=lambda p: _set("Đang tải video...", int(p * 0.5), "Đang tải video..."),
-        )
-        _t_video = time.time() - _t_video_start
-        msg = f"Đã tải video xong trong {_t_video:.1f}s."
-        logger.info("video download done for %s in %.1fs", merge_id, _t_video)
-        _set("Đang tải video...", 50, msg)
+    def _load_times():
+        with state["lock"]:
+            return dict(_times)
 
-        _set("Đang tải audio...", 50, "Đang tải audio...")
-        logger.info("Downloading audio track: %s", audio_url[:120])
-        _t_audio_start = time.time()
-        _download(
-            audio_url, audio_path,
-            on_progress=lambda p: _set("Đang tải audio...", 50 + int(p * 0.4)),
-        )
-        _t_audio = time.time() - _t_audio_start
-        msg = f"Đã tải audio xong trong {_t_audio:.1f}s."
-        logger.info("audio download done for %s in %.1fs", merge_id, _t_audio)
-        _set("Đang tải audio...", 90, msg)
+    try:
+        _set("Đang tải video + audio (song song)...", 0, "Bắt đầu tải video + audio + ảnh ngữ cảnh song song...")
+
+        # Tải video, audio, thumbnail và ảnh ngữ cảnh (big_thumbs) đồng thời.
+        # Trọng số tiến trình: video 0.5, audio 0.4, thumbnail 0.05, big_thumbs 0.05.
+        threads = [
+            threading.Thread(target=_download_track, args=("video", video_url, video_path, 0.5)),
+            threading.Thread(target=_download_track, args=("audio", audio_url, audio_path, 0.4)),
+        ]
+
+        def _download_thumbnail() -> None:
+            if not thumbnail_url:
+                return
+            dest = ctx_dir / "thumbnail.jpg"
+            _download(thumbnail_url, dest)
+            logger.info("Thumbnail downloaded for %s (%d bytes)", merge_id, dest.stat().st_size if dest.exists() else 0)
+            _set("Đang tải video + audio (song song)...", 5, "Đã tải thumbnail.")
+
+        def _download_big_thumbs() -> None:
+            bts = big_thumbs or []
+            if not bts:
+                return
+            thumb_dir = ctx_dir / "context_images"
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            for idx, u in enumerate(bts):
+                dest = thumb_dir / f"context_{idx}.jpg"
+                _download(u, dest)
+            logger.info("%d big thumb images downloaded for %s", len(bts), merge_id)
+            _set("Đang tải video + audio (song song)...", 5, f"Đã tải {len(bts)} ảnh ngữ cảnh.")
+
+        threads.append(threading.Thread(target=_download_thumbnail))
+        threads.append(threading.Thread(target=_download_big_thumbs))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        times = _load_times()
+        _t_video = times.get("video", 0.0)
+        _t_audio = times.get("audio", 0.0)
 
         _set("Đang merge video + audio...", 90, "Đang merge video + audio (FFmpeg)...")
 
@@ -399,7 +520,7 @@ def merge_video_audio(body: MergeRequest):
 
     threading.Thread(
         target=_run_merge,
-        args=(merge_id, body.video_url, body.audio_url),
+        args=(merge_id, body.video_url, body.audio_url, body.thumbnail_url, body.big_thumbs),
         daemon=True,
     ).start()
 

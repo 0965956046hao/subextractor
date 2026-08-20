@@ -2041,46 +2041,63 @@ function PipelineRow({
                 </button>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <p className="text-[11px] font-medium text-ink-muted mb-2">
-                    {tr("pipeline.previewThumbnail")}
-                  </p>
-                  <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
-                    {p.thumbnail ? (
-                      <img
-                        src={p.thumbnail}
-                        alt={p.title || "thumbnail"}
-                        className="w-full h-full object-cover cursor-zoom-in"
-                        onClick={() => setZoomSrc(p.thumbnail)}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-ink-light">
-                        {tr("pipeline.previewNoThumbnail")}
+<div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <p className="text-[11px] font-medium text-ink-muted mb-2">
+                      {tr("pipeline.previewThumbnail")}
+                    </p>
+                    <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                      {p.thumbnail ? (
+                        <img
+                          src={p.thumbnail}
+                          alt={p.title || "thumbnail"}
+                          className="w-full h-full object-cover cursor-zoom-in"
+                          onClick={() => setZoomSrc(p.thumbnail)}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-ink-light">
+                          {tr("pipeline.previewNoThumbnail")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-[11px] font-medium text-ink-muted mb-2">
+                        {tr("pipeline.previewVideo")}
+                      </p>
+                      <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                        {p.videoUrl ? (
+                          // eslint-disable-next-line jsx-a11y/media-has-caption
+                          <video
+                            src={p.videoUrl}
+                            controls
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-ink-light">
+                            {tr("pipeline.previewNoVideo")}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {p.audioUrl && (
+                      <div>
+                        <p className="text-[11px] font-medium text-ink-muted mb-2">
+                          {tr("pipeline.previewAudio")}
+                        </p>
+                        <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                          <video
+                            src={p.audioUrl}
+                            controls
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
                 </div>
-                <div>
-                  <p className="text-[11px] font-medium text-ink-muted mb-2">
-                    {tr("pipeline.previewVideo")}
-                  </p>
-                  <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
-                    {p.videoId ? (
-                      // eslint-disable-next-line jsx-a11y/media-has-caption
-                      <video
-                        src={getVideoUrl(p.videoId)}
-                        controls
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-ink-light">
-                        {tr("pipeline.previewNoVideo")}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
 
               <div className="mt-4">
                 <p className="text-[11px] font-medium text-ink-muted mb-2">
@@ -2963,24 +2980,41 @@ function DetailView({
                       )}
                     </div>
                   </div>
-                  <div>
-                    <p className="text-[11px] font-medium text-ink-muted mb-2">
-                      {tr("pipeline.previewVideo")}
-                    </p>
-                    <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
-                      {p.videoId ? (
-                        // eslint-disable-next-line jsx-a11y/media-has-caption
-                        <video
-                          src={getVideoUrl(p.videoId)}
-                          controls
-                          className="w-full h-full object-contain"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-ink-light">
-                          {tr("pipeline.previewNoVideo")}
-                        </div>
-                      )}
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-[11px] font-medium text-ink-muted mb-2">
+                        {tr("pipeline.previewVideo")}
+                      </p>
+                      <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                        {p.videoUrl ? (
+                          // eslint-disable-next-line jsx-a11y/media-has-caption
+                          <video
+                            src={p.videoUrl}
+                            controls
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-ink-light">
+                            {tr("pipeline.previewNoVideo")}
+                          </div>
+                        )}
+                      </div>
                     </div>
+                    {p.audioUrl && (
+                      <div>
+                        <p className="text-[11px] font-medium text-ink-muted mb-2">
+                          {tr("pipeline.previewAudio")}
+                        </p>
+                        <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video">
+                          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                          <video
+                            src={p.audioUrl}
+                            controls
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 

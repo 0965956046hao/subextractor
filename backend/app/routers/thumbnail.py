@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import settings
@@ -16,20 +16,24 @@ _thumb_jobs: dict = {}
 _thumb_lock = threading.Lock()
 
 
-@router.post("/api/context/{video_id}/thumbnail")
-async def save_thumbnail_url(video_id: str, request: Request):
-    """Persist the extracted thumbnail URL (from resolve) for later use."""
-    from app.services.context_service import save_thumbnail
+@router.get("/api/context/{video_id}/thumbnail")
+async def serve_context_thumbnail(video_id: str):
+    """Serve the local thumbnail image downloaded during merge (if any)."""
+    from app.services.context_service import load_thumbnail_file
 
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    url = (body.get("url") or "").strip()
-    if url:
-        save_thumbnail(video_id, url)
-    return {"status": "ok", "saved": bool(url)}
+    p = load_thumbnail_file(video_id)
+    if not p:
+        raise HTTPException(404, "Thumbnail not saved yet.")
+    return FileResponse(str(p), media_type="image/jpeg")
+
+
+@router.get("/api/context/{video_id}/context-images")
+async def list_context_images(video_id: str):
+    """List local context image filenames (big thumbs from merge)."""
+    from app.services.context_service import _context_image_paths
+
+    paths = _context_image_paths(video_id)
+    return {"images": [p.name for p in paths]}
 
 
 @router.post("/api/thumbnail/{video_id}")
