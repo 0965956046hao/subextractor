@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     job_timeout: int = 1800
     max_segments_per_job: int = 500
 
+    # Số luồng xử lý segment song song trong một job (mỗi luồng = 1 lệnh gọi CapCut API).
+    tts_workers: int = 3
+
     device_json: Optional[Path] = None
 
     model_config = {"env_prefix": "CTTS_", "env_file": ".env"}

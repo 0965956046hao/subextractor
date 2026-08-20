@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
 
@@ -235,50 +237,80 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
 
     client = _get_tts_client()
 
-    audio_files: List[Path] = []
     total = len(entries)
 
-    logger.info("Synthesizing %d entries (voice=%s)", total, voice_name)
+    logger.info("Synthesizing %d entries (voice=%s, workers=%d)", total, voice_name, settings.tts_workers)
     if log_fn:
-        log_fn(f"TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name}...")
+        log_fn(f"TTS: tổng hợp {total} dòng phụ đề bằng giọng {voice_name} ({settings.tts_workers} luồng song song)...")
 
+    # Pass 1 — quyết định tuần tự (không gọi API): tái sử dụng file có sẵn, chèn
+    # khoảng lặng cho dòng giống dòng trước ≥80%, còn lại đưa vào danh sách cần tổng hợp.
+    audio_files: List[Path] = [None] * len(entries)
     synth_ok = 0
     reused = 0
     silenced = 0
+    pending: List[tuple] = []
     prev_text = ""
     for i, entry in enumerate(entries):
-        if progress_callback:
-            progress_callback(i, total)
-
-        out_path = out_dir / f"{i + 1:04d}.mp3"
+        idx = i + 1
+        out_path = out_dir / f"{idx:04d}.mp3"
+        text = entry.text.strip()
+        if not text:
+            continue
         if out_path.exists() and out_path.stat().st_size > 0:
-            audio_files.append(out_path)
+            audio_files[i] = out_path
             synth_ok += 1
             reused += 1
             if log_fn:
-                log_fn(f"  ✓ Dòng {i + 1}/{total}: đã có (tái sử dụng)", level="success")
-        elif prev_text and _texts_similar(prev_text, entry.text.strip()):
+                log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
+        elif prev_text and _texts_similar(prev_text, text):
             # Nội dung giống dòng trước ≥80% → không gọi API gen voice, chèn khoảng lặng.
             _create_silence(out_path, max(entry.end - entry.start, 0.5))
-            audio_files.append(out_path)
+            audio_files[i] = out_path
             silenced += 1
             if log_fn:
-                log_fn(f"  ⏭ Dòng {i + 1}/{total}: giống dòng trước ≥80% — chèn khoảng lặng (không gọi API)", level="warning")
+                log_fn(f"  ⏭ Dòng {idx}/{total}: giống dòng trước ≥80% — chèn khoảng lặng (không gọi API)", level="warning")
         else:
-            # Retry with increasing delay until success — no silent placeholder.
+            pending.append((idx, entry, out_path))
+        prev_text = text
+
+    # Pass 2 — tổng hợp song song: mỗi luồng gọi API riêng, hoàn thành theo thứ tự bất kỳ.
+    if pending:
+        workers = max(1, settings.tts_workers)
+        if log_fn:
+            log_fn(f"  Cần tổng hợp {len(pending)} dòng ({workers} luồng đồng thời)...")
+        done = total - len(pending)
+        failures: List[tuple] = []
+        lock = threading.Lock()
+
+        def _synth_one(item: tuple):
+            nonlocal done, synth_ok
+            idx, entry, out_path = item
             try:
-                path = _synthesize_with_retry(client, entry, out_dir, i + 1, voice_name=voice_name, log_fn=log_fn)
+                path = _synthesize_with_retry(client, entry, out_dir, idx, voice_name=voice_name, log_fn=log_fn)
             except Exception as e:
-                if log_fn:
-                    log_fn(f"  ✗ Dòng {i + 1}/{total}: thất bại ({e})", level="error")
-                raise
-            if path:
-                audio_files.append(path)
+                with lock:
+                    failures.append((idx, e))
+                    done += 1
+                    if log_fn:
+                        log_fn(f"  ✗ Dòng {idx}/{total}: thất bại ({e})", level="error")
+                    if progress_callback:
+                        progress_callback(done, total)
+                return
+            with lock:
+                audio_files[idx - 1] = path
                 synth_ok += 1
+                done += 1
                 if log_fn:
-                    log_fn(f"  ✓ Dòng {i + 1}/{total}: thành công", level="success")
-        if entry.text.strip():
-            prev_text = entry.text.strip()
+                    log_fn(f"  ✓ Dòng {idx}/{total}: thành công", level="success")
+                if progress_callback:
+                    progress_callback(done, total)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(_synth_one, pending))
+        if failures:
+            idx, err = failures[0]
+            raise RuntimeError(f"TTS thất bại dòng {idx}: {err}") from err
 
     if progress_callback:
         progress_callback(total, total)
@@ -291,7 +323,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         if silenced:
             ok_note += f" {silenced} dòng giống dòng trước ≥80% (chèn khoảng lặng)."
         log_fn(ok_note, level="success" if silenced == 0 else "warning")
-    return audio_files
+    return [p for p in audio_files if p is not None]
 
 
 def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "BV421_vivn_streaming", rate: str = "1.0", log_fn=None) -> List[Path]:

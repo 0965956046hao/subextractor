@@ -185,6 +185,9 @@ Khi resolve link Douyin (`/api/video-download/resolve`), frontend `pipeline-stor
 - `download.py::_download_name` → `{original}.original.srt/txt`
 - `video.py::_meta_filename` → hiển thị tên trong library
 
+### YouTube import (`/api/video-download/yt-import`)
+`yt-dlp` **phải là nightly build** (`requirements.txt` trỏ thẳng tới GitHub release nightly). YouTube (2026) chặn yt-dlp stable bằng `HTTP Error 403: Forbidden` khi download video data → endpoint trả 500 (`Tải video thất bại: ... 403`). Nếu `pip install -r requirements.txt` đưa về stable, hãy cài lại nightly: `pip install -U "yt-dlp @ https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.tar.gz"`. Nếu vẫn 403, cần cookies trình duyệt (`--cookies-from-browser`) hoặc proxy/IP khác.
+
 ### No temp frame files
 OpenCV `VideoCapture` → in-memory frames → crop → OCR on numpy arrays. Only the first frame is written to disk (for region selector).
 

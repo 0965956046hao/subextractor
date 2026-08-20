@@ -3,10 +3,12 @@ High-level Python API Client for CapCut Text-to-Speech (TTS) and Speech-to-Text 
 """
 
 import json
+import logging
 import re
+import threading
 import time
 import uuid
-import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
@@ -587,6 +589,7 @@ class CapCutClient:
         poll_interval: float = 1.0,
         timeout: float = 120.0,
         progress_callback=None,
+        workers: int = 1,
     ) -> List[Path]:
         """
         Generate one audio file per text segment and download them into out_dir.
@@ -597,6 +600,8 @@ class CapCutClient:
 
         :param progress_callback: optional ``callable(done, total)`` invoked after
             each segment is written.
+        :param workers: number of concurrent segments to generate (each worker is
+            one CapCut API call at a time). 1 = sequential.
         :return: List of paths actually written (failures are skipped).
         """
         if isinstance(texts, str):
@@ -611,11 +616,14 @@ class CapCutClient:
 
         written: List[Path] = []
         total = len(text_list)
-        for i, text in enumerate(text_list):
+        lock = threading.Lock()
+
+        def _gen_one(i: int, text: str):
             if not text or not text.strip():
-                if progress_callback:
-                    progress_callback(i + 1, total)
-                continue
+                with lock:
+                    if progress_callback:
+                        progress_callback(len(written), total)
+                return
             target = out / (f"{prefix}_{i + 1:04d}.{ext}" if prefix else f"{i + 1:04d}.{ext}")
             try:
                 create_res = self.create_tts_task(text, voice_type, final_resource_id, rate)
@@ -646,11 +654,20 @@ class CapCutClient:
                         f"No audio URL found in response for segment {i + 1}: {str(query_res)[:500]}"
                     )
                 self.download_audio(urls[0], target)
-                written.append(target)
+                with lock:
+                    written.append(target)
             except Exception as exc:
                 logger.warning("Segment %d failed: %s", i + 1, exc)
-            if progress_callback:
-                progress_callback(i + 1, total)
+            with lock:
+                if progress_callback:
+                    progress_callback(len(written), total)
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                list(executor.map(lambda item: _gen_one(*item), enumerate(text_list)))
+        else:
+            for i, text in enumerate(text_list):
+                _gen_one(i, text)
 
         return written
 

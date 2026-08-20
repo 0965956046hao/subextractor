@@ -106,6 +106,7 @@ def process_job_sync(
         rate=rate,
         prefix=prefix,
         progress_callback=progress_cb,
+        workers=settings.tts_workers,
     )
 
     if not written:

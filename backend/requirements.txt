@@ -15,4 +15,6 @@ google-auth>=2.0.0
 httpx>=0.27.0
 fal-client>=0.6.0
 demucs
-yt-dlp>=2025.0.0
+# YouTube chặn yt-dlp stable (HTTP 403 "unable to download video data").
+# Phải dùng nightly build — nếu cài lại bằng `yt-dlp>=` sẽ gặp lại lỗi 500 khi import link YouTube.
+yt-dlp @ https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.tar.gz
