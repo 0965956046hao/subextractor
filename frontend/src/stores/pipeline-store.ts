@@ -1470,6 +1470,57 @@ async function runPrep(id: string, startStep = 0) {
   }
 }
 
+// ── Auto checks (dedup + timeline overlap) ─────────────────────────────────
+// Run twice in the pipeline — right after OCR (original SRT) and again after
+// translation (translated SRT) — so both files get the same double-check.
+async function runSrtAutoChecks(id: string, videoId: string | null) {
+  if (!videoId) return;
+  // 1) Nội dung trùng: gộp các dòng liền kề giống nhau >=80% (dedup).
+  appendLog(id, "Kiểm tra phụ đề trùng nội dung liền kề...");
+  try {
+    const dedupRes = await fetch(`/api/srt/${videoId}/dedup`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+    });
+    const dedupData = await dedupRes.json();
+    if (!dedupRes.ok) throw new Error(dedupData.detail || "Gộp phụ đề trùng thất bại");
+    const changes: { index: number; merged_into: number; from: string; to: string }[] =
+      dedupData.changes ?? [];
+    if (changes.length > 0) {
+      appendLog(id, `Đã gộp ${changes.length} dòng phụ đề trùng (nội dung giống dòng trước ≥80%):`);
+      for (const c of changes) {
+        appendLog(id, `  #${c.index} → gộp vào #${c.merged_into}: ${c.from}  →  ${c.to}`);
+      }
+    } else {
+      appendLog(id, "Không có dòng phụ đề trùng — nội dung hợp lệ.");
+    }
+  } catch (e) {
+    appendLog(id, `Bỏ qua kiểm tra trùng: ${e instanceof Error ? e.message : "lỗi"}`);
+  }
+
+  // 2) Timeline chồng lấn: cân chỉnh start/end để không dòng nào đè lên nhau.
+  appendLog(id, "Kiểm tra & sửa overlap timeline phụ đề...");
+  try {
+    const fixRes = await fetch(`/api/srt/${videoId}/auto-fix-overlaps`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+    });
+    const fixData = await fixRes.json();
+    if (!fixRes.ok) throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
+    const fixes: { index: number; from: string; to: string }[] = fixData.fixes ?? [];
+    if (fixes.length > 0) {
+      appendLog(id, `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`);
+      for (const f of fixes) {
+        appendLog(id, `  #${f.index}: ${f.from}  →  ${f.to}`);
+      }
+    } else {
+      appendLog(id, "Không phát hiện dòng nào chồng lấn — SRT hợp lệ.");
+    }
+  } catch (e) {
+    appendLog(id, `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`);
+  }
+}
+
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
 // Executed one video at a time via the sequential queue.
 async function runPipeline(id: string, startStep = 4) {
@@ -1558,6 +1609,8 @@ async function runPipeline(id: string, startStep = 4) {
         const ps = await pollJob(pd.job_id, tick(4));
         if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
         appendLog(id, "OCR xong, đã có phụ đề.");
+        // Double-check #1: chạy ngay trên SRT gốc (OCR) trước khi dịch.
+        await runSrtAutoChecks(id, videoId);
         markStepEnd(id, 4);
       }
     }
@@ -1672,45 +1725,52 @@ async function runPipeline(id: string, startStep = 4) {
           `/api/download/translated/${videoId}?lang=${translateTarget}`,
         );
         const srtText = await srtRes.text();
+
+        // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
+        // trong bản gốc mà bản dịch không phủ (dòng bị rơi mất) và dòng chưa
+        // được dịch. Chỉ báo log, không chặn pipeline.
+        appendLog(id, "Đối chiếu phụ đề dịch với file gốc...");
+        try {
+          const cmpRes = await fetch(`/api/srt/${videoId}/compare`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ content: srtText }),
+          });
+          const cmpData = await cmpRes.json();
+          if (!cmpRes.ok) throw new Error(cmpData.detail || "Đối chiếu thất bại");
+          const missing: { from: string; to: string; duration: number }[] =
+            cmpData.missing_ranges ?? [];
+          if (missing.length > 0) {
+            appendLog(id, `Cảnh báo: ${missing.length} khoảng thời gian ở bản gốc không có trong bản dịch:`);
+            for (const g of missing) {
+              appendLog(id, `  ${g.from} --> ${g.to} (${g.duration}s)`);
+            }
+          } else {
+            appendLog(id, "Timeline bản dịch phủ đầy đủ file gốc.");
+          }
+          const untranslated: { index: number; text: string }[] = cmpData.untranslated ?? [];
+          if (untranslated.length > 0) {
+            appendLog(id, `Cảnh báo: ${untranslated.length} dòng chưa được dịch (còn giữ nguyên bản gốc):`);
+            for (const u of untranslated) {
+              appendLog(id, `  #${u.index}: ${u.text}`);
+            }
+          } else {
+            appendLog(id, "Đã dịch hết — không còn dòng nào giữ nguyên bản gốc.");
+          }
+        } catch (e) {
+          appendLog(id, `Bỏ qua đối chiếu bản gốc: ${e instanceof Error ? e.message : "lỗi"}`);
+        }
+
         await fetch(`/api/srt/${videoId}`, {
           method: "PUT",
           headers: JSON_HEADERS,
           body: JSON.stringify({ content: srtText }),
         });
 
-        // Auto-fix: quét toàn bộ SRT theo số thứ tự dòng — nếu end của một dòng
-        // dài hơn start của dòng sau thì kéo end về trước start dòng sau; nếu
-        // start của một dòng bé hơn end của dòng trước thì đẩy start ra sau end
-        // của dòng trước. Chạy bằng code (không tốn Gemini), xong mới tới bước
-        // kiểm tra timeline thủ công.
-        appendLog(id, "Tự động kiểm tra & sửa overlap timeline phụ đề...");
-        try {
-          const fixRes = await fetch(`/api/srt/${videoId}/auto-fix-overlaps`, {
-            method: "POST",
-            headers: JSON_HEADERS,
-          });
-          const fixData = await fixRes.json();
-          if (!fixRes.ok)
-            throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
-          const fixes: { index: number; from: string; to: string }[] =
-            fixData.fixes ?? [];
-          if (fixes.length > 0) {
-            appendLog(
-              id,
-              `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`,
-            );
-            for (const f of fixes) {
-              appendLog(id, `  #${f.index}: ${f.from}  →  ${f.to}`);
-            }
-          } else {
-            appendLog(id, "Không phát hiện dòng nào chồng lấn — SRT hợp lệ.");
-          }
-        } catch (e) {
-          appendLog(
-            id,
-            `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`,
-          );
-        }
+// Double-check #2: chạy trên SRT đã dịch — gộp dòng trùng + sửa overlap
+        // timeline (giống check đã chạy trên SRT gốc sau OCR). Chạy bằng code
+        // (không tốn Gemini), xong mới tới bước kiểm tra timeline thủ công.
+        await runSrtAutoChecks(id, videoId);
 
         // Optional: always pause for the user to review the translated SRT in the
         // timeline-check popup (only when checkSubs is on). No auto-skip.

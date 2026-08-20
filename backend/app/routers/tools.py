@@ -12,7 +12,7 @@ from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
 from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _video_playable
-from app.services.srt_utils import entries_to_srt, fix_timeline, parse_srt, shift_overlaps, validate_timeline
+from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,36 @@ async def fix_srt_timeline(video_id: str):
     }
 
 
+# ── POST /api/srt/{video_id}/dedup ──
+# Auto-fix duplicate subtitles by code (no LLM): merge consecutive cues whose
+# text is >=80% similar, extending the previous cue's end over the duplicate.
+# Backs up the previous content first. Runs after OCR and after translation as
+# a double-check on both the original and translated SRT.
+
+@router.post("/api/srt/{video_id}/dedup")
+async def dedup_srt(video_id: str):
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    current = srt_path.read_text(encoding="utf-8")
+    entries = parse_srt(current)
+    if not entries:
+        return {"video_id": video_id, "entries": [], "changes": [], "count": 0}
+    merged, changes = merge_similar_adjacent(entries)
+    new_content = entries_to_srt(merged)
+    if new_content.strip() != current.strip():
+        backup = srt_path.with_name("subtitles_original.srt")
+        if not backup.exists():
+            backup.write_text(current, encoding="utf-8")
+    srt_path.write_text(new_content, encoding="utf-8")
+    return {
+        "video_id": video_id,
+        "entries": [e.model_dump() for e in merged],
+        "changes": changes,
+        "count": len(changes),
+    }
+
+
 # ── POST /api/srt/{video_id}/auto-fix-overlaps ──
 # Auto-fix overlapping timelines by code (no LLM): scan the SRT line by line; if
 # a line's start time is before the previous line's end time, push its start to
@@ -111,6 +141,79 @@ async def auto_fix_srt_overlaps(video_id: str):
         "entries": [e.model_dump() for e in fixed],
         "fixes": fixes,
         "count": len(fixes),
+    }
+
+
+# ── POST /api/srt/{video_id}/compare ──
+# Double-check #2: đối chiếu phụ đề (bản dịch) với file gốc còn trên đĩa, chạy
+# NGAY SAU bước dịch và TRƯỚC khi ghi đè subtitles.srt bằng bản dịch. Phát hiện:
+#   1) missing_ranges — khoảng thời gian trong bản gốc mà bản dịch không phủ
+#      (dòng bị Gemini làm rơi mất, như lỗi mất đoạn 3:05-3:29 trước đây);
+#   2) untranslated — dòng trong bản dịch còn giữ nguyên text bản gốc (chưa dịch).
+# Body: { content: "<SRT đã dịch>" }.
+
+def _merge_ranges(ranges: list[tuple[float, float]], tolerance: float) -> list[list[float]]:
+    merged: list[list[float]] = []
+    for s, e in ranges:
+        if not merged or s > merged[-1][1] + tolerance:
+            merged.append([s, e])
+        else:
+            merged[-1][1] = max(merged[-1][1], e)
+    return merged
+
+
+def _coverage_gaps(original, translated, tolerance: float = 0.3) -> list[dict]:
+    """Time ranges covered by ``original`` but not by ``translated`` (in order)."""
+    base = _merge_ranges(sorted((e.start, e.end) for e in original if e.end > e.start), tolerance)
+    cover = _merge_ranges(sorted((e.start, e.end) for e in translated if e.end > e.start), tolerance)
+    gaps: list[dict] = []
+    for bs, be in base:
+        covered = bs
+        for cs, ce in cover:
+            if ce <= covered + tolerance:
+                continue
+            if cs > be:
+                break
+            if cs > covered + tolerance:
+                gaps.append({"from": _fmt(covered), "to": _fmt(cs), "duration": round(cs - covered, 3)})
+            covered = max(covered, ce)
+            if covered >= be - tolerance:
+                break
+        if covered < be - tolerance:
+            gaps.append({"from": _fmt(covered), "to": _fmt(be), "duration": round(be - covered, 3)})
+    return gaps
+
+
+def _untranslated_lines(original, translated, threshold: float = 95.0) -> list[dict]:
+    """Lines in ``translated`` still identical to their original counterpart."""
+    from rapidfuzz import fuzz
+    out: list[dict] = []
+    for oe, te in zip(original, translated):
+        a, b = oe.text.strip(), te.text.strip()
+        if a and b and fuzz.ratio(a, b) >= threshold:
+            out.append({"index": oe.index, "text": b})
+    return out
+
+
+@router.post("/api/srt/{video_id}/compare")
+async def compare_srt(video_id: str, request: Request):
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    original = parse_srt(srt_path.read_text(encoding="utf-8"))
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    translated_content = body.get("content", "")
+    translated = parse_srt(translated_content) if (translated_content or "").strip() else []
+    return {
+        "video_id": video_id,
+        "original_count": len(original),
+        "translated_count": len(translated),
+        "missing_ranges": _coverage_gaps(original, translated),
+        "untranslated": _untranslated_lines(original, translated),
     }
 
 

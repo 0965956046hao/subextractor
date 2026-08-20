@@ -2,6 +2,7 @@ import logging
 import json
 
 from app.config import settings
+from app.models import SrtEntry
 from app.services.media_utils import _srt_path, _video_path
 from app.services.srt_utils import parse_srt, entries_to_srt
 from app.services.context_service import (
@@ -46,26 +47,24 @@ def _read_user_config() -> dict:
     return {}
 
 
-CHINESE_TO_VIETNAMESE_PROMPT = """You are a professional translator. Your ONLY job is to translate Chinese to Vietnamese.
+CHINESE_TRANSLATE_PROMPT = """You are a professional translator. Your ONLY job is to translate Chinese to {target_lang_name}.
 
-Translate EVERY subtitle line from Chinese to Vietnamese. NEVER keep any Chinese text in your output.
-IMPORTANT: You MUST replace ALL Chinese characters with Vietnamese translation. Do NOT output the original Chinese text under any circumstances.
+Translate EVERY subtitle line from Chinese to {target_lang_name}. NEVER keep any Chinese text in your output.
+IMPORTANT: You MUST replace ALL Chinese characters with {target_lang_name} translation. Do NOT output the original Chinese text under any circumstances.
 
 Rules:
 1. Read the full context of all lines first
-2. Use natural Vietnamese, not word-for-word
-3. Adapt cultural terms (将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân")
-4. Keep SRT format: index, timestamps, translated Vietnamese text
+2. Use natural {target_lang_name}, not word-for-word
+3. Adapt cultural terms ({culture_examples})
+4. Keep the SRT format: index, timestamps, translated {target_lang_name} text
 5. Keep lines similar length for subtitle timing
-6. Merge consecutive duplicate lines: if two or more lines in a row have IDENTICAL text, combine them into one line with the earliest start time and latest end time
-7. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
-8. Never use "mày" / "tao" (informal disrespectful pronouns). Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context
-9. You may ONLY merge adjacent lines whose content is identical (see rule 6). NEVER merge lines with different content. ALWAYS keep the original timeline (start/end times) unchanged — do not alter timestamps except when merging identical adjacent lines
-10. IMPORTANT — MERGE RULE: You may ONLY merge segments that are IMMEDIATELY NEXT TO EACH OTHER (adjacent, back-to-back in time) AND have IDENTICAL content. NEVER merge identical-looking content that is separated by other lines in between — if identical text reappears later after different content in between, it must stay as a separate subtitle line with its OWN timeline. ABSOLUTELY NEVER merge across a gap or over different content
-11. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
-12. Output ONLY the translated SRT — no explanations, no markdown, no code fences
+6. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
+7. {politeness_rule}
+8. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
+9. TIMELINE MUST STAY EXACTLY THE SAME: translate ONLY the text of each line. Keep the exact same number of lines, the same order, the same index number, the same start time and the same end time for every line. NEVER merge two lines into one, NEVER split one line into two, NEVER drop any line, NEVER reorder lines, NEVER change any timestamp.
+10. Output ONLY the translated SRT — no explanations, no markdown, no code fences
 
-SRT to translate from Chinese to Vietnamese:
+SRT to translate from Chinese to {target_lang_name}:
 
 """
 
@@ -73,17 +72,15 @@ GENERIC_TRANSLATE_PROMPT = """You are a professional subtitle translator. Transl
 
 Rules:
 1. Read the full context of all lines before translating.
-2. Use natural Vietnamese; avoid mechanical, word-for-word translation.
+2. Use natural {target_lang_name}; avoid mechanical, word-for-word translation.
 3. Adapt cultural terms appropriately (e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency").
-4. Maintain the SRT format: sequence number, timestamps, and translated Vietnamese content.
+4. Maintain the SRT format: sequence number, timestamps, and translated {target_lang_name} content.
 5. Keep line lengths balanced to ensure proper subtitle display timing.
-6. Merge consecutive duplicate lines: if two or more adjacent lines share over 80% identical content, merge them into a single line spanning from the start time of the first duplicate to the end time of the last duplicate.
-7. Remove all hyphens/dashes ("-", "--", "---") from the translated text.
-8. Strictly avoid "mày" or "tao" (disrespectful/crude pronouns). Use polite alternatives such as "ta," "ngươi," "anh," "cô," or "tôi" depending on the context.
-9. ONLY merge adjacent lines with identical content (see Rule 6). NEVER merge lines with different content. ALWAYS preserve original timestamps (start/end times)—do not alter them unless merging identical adjacent lines.
-10. IMPORTANT — MERGING RULE: ONLY merge lines that are IMMEDIATELY ADJACENT (consecutive line numbers) AND have IDENTICAL content. DO NOT merge identical content if it is separated by intervening lines—if the exact same content reappears after different content, it must remain a separate subtitle line with its own timestamp. DO NOT merge across gaps or different content.
-11. Remove extraneous or irrelevant characters that are not part of the subtitle content: redundant punctuation, repeated symbols (e.g., "。。", "。。。", "!!!", "~"), noise indicators, or filler characters.
-12. Output only the translated SRT content—no explanations, no Markdown formatting, and no code blocks.
+6. Remove all hyphens/dashes ("-", "--", "---") from the translated text.
+7. {politeness_rule}
+8. Remove extraneous or irrelevant characters that are not part of the subtitle content: redundant punctuation, repeated symbols (e.g., "。。", "。。。", "!!!", "~"), noise indicators, or filler characters.
+9. TIMELINE MUST STAY EXACTLY THE SAME: translate ONLY the text of each line. Keep the exact same number of lines, the same order, the same index number, the same start time and the same end time for every line. NEVER merge lines, NEVER split lines, NEVER drop any line, NEVER reorder lines, NEVER change any timestamp.
+10. Output only the translated SRT content—no explanations, no Markdown formatting, and no code blocks.
 Here is the SRT to translate:
 
 """
@@ -250,7 +247,67 @@ def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
     return voice_map
 
 
+def _extract_indices(srt_text: str) -> list[int | None]:
+    """Read the raw index number of every SRT block in Gemini's output."""
+    idx: list[int | None] = []
+    for block in srt_text.strip().split("\n\n"):
+        lines = [l.strip() for l in block.split("\n") if l.strip()]
+        first = lines[0] if lines else ""
+        idx.append(int(first) if first.isdigit() else None)
+    return idx
+
+
+def _reconcile_batch(batch: list, translated: list, translated_text: str) -> list:
+    """Force translated text back onto the batch's exact timeline (1:1).
+
+    Gemini may drop, merge, split or renumber lines. This guarantees every
+    original line survives with its exact index/timestamps: translated text is
+    matched by the index Gemini echoed (batch-relative or global), and any
+    unmatched original line falls back to its original text so no subtitle is
+    ever lost and the timeline is never altered.
+    """
+    by_raw: dict[int, object] = {}
+    positional: list = []
+    for te, ridx in zip(translated, _extract_indices(translated_text)):
+        if ridx is not None and ridx not in by_raw:
+            by_raw[ridx] = te
+        else:
+            positional.append(te)
+
+    def matched(key_for) -> dict:
+        m: dict = {}
+        for p, b in enumerate(batch):
+            te = by_raw.get(key_for(b, p))
+            if te is not None:
+                m[p] = te
+        return m
+
+    rel = matched(lambda b, p: p + 1)
+    glob = matched(lambda b, p: b.index)
+    chosen = rel if len(rel) >= len(glob) else glob
+
+    out: list = []
+    pool = positional
+    pool_i = 0
+    for p, b in enumerate(batch):
+        te = chosen.get(p)
+        if te is None and pool_i < len(pool):
+            te = pool[pool_i]
+            pool_i += 1
+        text = te.text.strip() if te is not None else ""
+        out.append(SrtEntry(
+            index=b.index,
+            start=b.start,
+            end=b.end,
+            startLabel=b.startLabel,
+            endLabel=b.endLabel,
+            text=text or b.text.strip(),
+        ))
+    return out
+
+
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None) -> str:
+    """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
         if not custom_path.exists():
@@ -280,13 +337,29 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             config=config,
         )
 
-    # Build prompt based on language pair
-    if source_lang == "zh" and target_lang == "vi":
-        base_prompt = CHINESE_TO_VIETNAMESE_PROMPT
+    # Build prompt based on language pair (target language injected, not hardcoded)
+    sn = LANG_NAMES.get(source_lang, source_lang)
+    tn = LANG_NAMES.get(target_lang, target_lang)
+    if target_lang == "vi":
+        culture_examples = '将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân"'
+        politeness_rule = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
+                           'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
     else:
-        sn = LANG_NAMES.get(source_lang, source_lang)
-        tn = LANG_NAMES.get(target_lang, target_lang)
-        base_prompt = GENERIC_TRANSLATE_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
+        culture_examples = 'e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency"'
+        politeness_rule = (f'Use an appropriate polite register for {tn}; avoid rude or overly informal '
+                           'words unless the original clearly intends them')
+    if source_lang == "zh":
+        base_prompt = CHINESE_TRANSLATE_PROMPT.format(
+            target_lang_name=tn,
+            culture_examples=culture_examples,
+            politeness_rule=politeness_rule,
+        )
+    else:
+        base_prompt = GENERIC_TRANSLATE_PROMPT.format(
+            source_lang_name=sn,
+            target_lang_name=tn,
+            politeness_rule=politeness_rule,
+        )
 
     # Load video context if available (generated from OCR snapshots)
     context = load_video_context(video_id)
@@ -370,6 +443,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 })
                 response_text2 = _clean_gemini_response(response2.text.strip())
                 translated_batch = parse_srt(response_text2)
+                response_text = response_text2
             except Exception:
                 pass
 
@@ -381,13 +455,16 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 log_fn(f"  Batch {bi + 1}: thử lại vẫn lỗi, giữ nguyên bản gốc.", level="warning")
             continue
 
-        translated_entries.extend(translated_batch)
+        # Force translated text back onto the original timeline so no line is
+        # ever dropped and timestamps stay exactly as in the source SRT.
+        reconciled = _reconcile_batch(batch, translated_batch, response_text)
+        translated_entries.extend(reconciled)
         if log_fn:
-            log_fn(f"  Batch {bi + 1}: dịch xong {len(translated_batch)} dòng:")
-            for te in translated_batch:
+            log_fn(f"  Batch {bi + 1}: dịch xong {len(reconciled)} dòng:")
+            for te in reconciled:
                 log_fn(f"    {te.index}. {te.text}")
         else:
-            logger.info("Batch %d translated %d lines", bi + 1, len(translated_batch))
+            logger.info("Batch %d translated %d lines", bi + 1, len(reconciled))
 
         # Build a context note from this patch and append it so the NEXT patch
         # keeps names, honorifics, terminology and tone consistent.

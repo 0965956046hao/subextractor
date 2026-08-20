@@ -915,10 +915,22 @@ def _burn_parallel(
                 "-movflags", "+faststart", "-shortest", out_path,
             ])
         else:
+            # Không có audio lồng tiếng → concat segment, rồi mux audio GỐC của
+            # video (giống fallback của _burn_single) để clip không bị câm.
+            joined = seg_dir / "joined.mp4"
             _run_ffmpeg([
                 "ffmpeg", "-y", "-loglevel", "error", "-fflags", "+genpts",
                 "-f", "concat", "-safe", "0", "-i", str(list_file),
-                "-c", "copy", out_path,
+                "-c", "copy", str(joined),
+            ])
+            if chunk_log_fn:
+                chunk_log_fn("Ghép audio gốc vào video (không có audio lồng tiếng)...")
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", str(joined), "-i", video_path_str,
+                "-map", "0:v:0", "-map", "1:a:0?",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-shortest", out_path,
             ])
 
         if progress_callback:

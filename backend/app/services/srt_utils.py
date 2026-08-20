@@ -168,6 +168,32 @@ def shift_overlaps(entries: list[SrtEntry]) -> tuple[list[SrtEntry], list[dict]]
     return fixed, fixes
 
 
+def merge_similar_adjacent(entries: list[SrtEntry]) -> tuple[list[SrtEntry], list[dict]]:
+    """Merge consecutive cues whose text is >=80% similar (duplicate subs).
+
+    When a cue's content is >=80% similar to the previous cue, the previous
+    cue's end time is extended to the duplicate's end time and the duplicate
+    cue is deleted — so the subtitle never re-displays the same text twice.
+    Returns (merged_entries, changes).
+    """
+    changes: list[dict] = []
+    merged: list[SrtEntry] = []
+    for e in entries:
+        if merged and _texts_similar(merged[-1].text, e.text):
+            prev = merged[-1]
+            changes.append({
+                "index": e.index,
+                "merged_into": prev.index,
+                "from": f"{prev.startLabel} --> {prev.endLabel}",
+                "to": f"{prev.startLabel} --> {_fmt(e.end)}",
+            })
+            prev.end = e.end
+            prev.endLabel = _fmt(e.end)
+        else:
+            merged.append(e.model_copy(deep=True))
+    return merged, changes
+
+
 def fix_timeline(entries: list[SrtEntry]) -> tuple[list[SrtEntry], list[dict]]:
     """Auto-fix illogical timelines.
 
