@@ -169,3 +169,32 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 6, **kwargs):
                 )
                 time.sleep(delay)
     raise last_err  # type: ignore[misc]
+
+
+def upload_audio_to_gemini(audio_path, mime_type: str = "audio/wav") -> tuple[str, str]:
+    """Upload an audio file to Gemini Files API. Returns (uri, mime_type).
+
+    Uses the first configured Gemini API key.
+    """
+    from google import genai
+
+    keys = configured_gemini_keys()
+    if not keys:
+        raise ValueError("GEMINI_API_KEY not set.")
+    client = genai.Client(api_key=keys[0])
+    uploaded = client.files.upload(file=str(audio_path), config={"mime_type": mime_type})
+    return uploaded.uri, uploaded.mime_type
+
+
+def delete_gemini_file(uri: str):
+    """Delete a file from Gemini Files API by URI."""
+    from google import genai
+
+    keys = configured_gemini_keys()
+    if not keys:
+        return
+    try:
+        client = genai.Client(api_key=keys[0])
+        client.files.delete(name=uri)
+    except Exception:
+        pass

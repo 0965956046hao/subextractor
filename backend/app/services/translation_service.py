@@ -155,14 +155,18 @@ VIDEO CONTEXT (character descriptions + suggested voices):
 AVAILABLE CAPCUT VOICES (voice_type — display name):
 {catalog}
 
+SPEAKER DIARIZATION (from audio analysis):
+{diarization}
+
 RULES:
-1. Read the video context: who is speaking (gender, age, personality, voice characteristics).
-2. Pick a voice_type for EACH SRT line from the AVAILABLE list only. Never invent a voice.
-3. MỖI NHÂN VẬT CHỈ DÙNG 1 GIỌNG duy nhất xuyên suốt video. Nếu cùng một nhân vật xuất hiện ở nhiều dòng (kể cả không liên tiếp), LUÔN gán cùng voice_type — tuyệt đối không đổi giọng cho cùng 1 nhân vật.
-4. Chỉ đổi giọng khi chắc chắn người nói khác nhân vật (nam ↔ nữ, già ↔ trẻ, khác vai trò).
-5. Giọng của nhân vật nam: ưu tiên giọng nam; nhân vật nữ: ưu tiên giọng nữ (xem tên/display_name của giọng).
-6. Narrator/background lines: pick a neutral voice.
-7. Output ONLY a JSON object mapping SRT index → voice_type, e.g. {{"1": "BV421_vivn_streaming", "2": "vi_female_huong"}}. No markdown, no explanation.
+1. Listen to the audio and read the speaker diarization to identify who speaks when.
+2. Map each SRT line to the speaker who says it based on timestamps.
+3. Pick a voice_type for EACH SRT line from the AVAILABLE list only. Never invent a voice.
+4. MỖI NHÂN VẬT CHỈ DÙNG 1 GIỌNG duy nhất xuyên suốt video. Nếu cùng một nhân vật xuất hiện ở nhiều dòng (kể cả không liên tiếp), LUÔN gán cùng voice_type — tuyệt đối không đổi giọng cho cùng 1 nhân vật.
+5. Chỉ đổi giọng khi chắc chắn người nói khác nhân vật (nam ↔ nữ, già ↔ trẻ, khác vai trò).
+6. Giọng của nhân vật nam: ưu tiên giọng nam; nhân vật nữ: ưu tiên giọng nữ (xem tên/display_name của giọng).
+7. Narrator/background lines: pick a neutral voice.
+8. Output ONLY a JSON object mapping SRT index → voice_type, e.g. {{"1": "BV421_vivn_streaming", "2": "vi_female_huong"}}. No markdown, no explanation.
 
 SRT LINES:
 {srt}
@@ -173,6 +177,7 @@ def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "
     """Assign a CapCut voice to each SRT line via Gemini; save as voice_map.json.
 
     Returns {index: voice_type}. Saves to ``translated/{video_id}/voice_map.json``.
+    Uses audio diarization for accurate speaker identification.
     """
     catalog = _load_capcut_voice_catalog(target_lang)
     if not catalog:
@@ -189,12 +194,131 @@ def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "
             log_fn("Chưa cấu hình Gemini API key — không tạo được voice_map.json.", "warning")
         return {}
 
+    # Step 1: Extract audio and get diarization from Gemini
+    diarization_text = "Không có dữ liệu diarization (dùng context để suy luận)."
+    audio_uri = None
+    try:
+        from app.services.media_utils import _merge_audio_path
+
+        # Ưu tiên dùng file audio đã merge sẵn (merged/{merge_id}_audio.mp4)
+        merged_audio = _merge_audio_path(video_id)
+        audio_dir = settings.temp_dir / "translated" / video_id
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = audio_dir / "diarization_input.wav"
+
+        if merged_audio and merged_audio.exists():
+            if log_fn:
+                log_fn(f"Dùng file audio có sẵn: {merged_audio.name}")
+            # Convert MP4 → WAV 16kHz mono (optimal for speech recognition)
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(merged_audio),
+                    "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+                    str(audio_path),
+                ],
+                check=True, capture_output=True, timeout=120,
+            )
+        else:
+            if log_fn:
+                log_fn("Không tìm thấy file audio, trích xuất từ video...")
+            video_path = _video_path(video_id)
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(video_path),
+                    "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+                    str(audio_path),
+                ],
+                check=True, capture_output=True, timeout=120,
+            )
+
+        if audio_path.exists() and audio_path.stat().st_size > 0:
+            if log_fn:
+                log_fn("Đang upload audio lên Gemini để nhận diện speaker...")
+            from app.services.retry_utils import upload_audio_to_gemini, delete_gemini_file
+            audio_uri, audio_mime = upload_audio_to_gemini(audio_path, mime_type="audio/wav")
+
+            # Ask Gemini to do speaker diarization
+            diarization_prompt = f"""Analyze this audio file and identify all distinct speakers.
+
+For each speaker, provide:
+1. A speaker label (Speaker 1, Speaker 2, etc.)
+2. The timestamps (start - end) when they speak
+3. A brief description (gender, age estimate, tone)
+
+Then map each speaker to the SRT lines below based on timing overlap.
+
+SRT LINES:
+{entries_to_srt(entries)}
+
+Output format: JSON object with SRT index → speaker info, e.g.:
+{{
+  "speakers": {{
+    "Speaker 1": {{"gender": "male", "age": "young", "description": "deep voice, authoritative"}},
+    "Speaker 2": {{"gender": "female", "age": "middle-aged", "description": "soft, gentle"}}
+  }},
+  "line_speakers": {{
+    "1": "Speaker 1",
+    "2": "Speaker 2"
+  }}
+}}"""
+
+            response = gemini_call_rotating(
+                genai_generate_content_factory,
+                model=settings.gemini_model,
+                contents=[
+                    {"type": "text", "text": diarization_prompt},
+                    {"type": "audio", "uri": audio_uri, "mime_type": audio_mime},
+                ],
+                config={
+                    "system_instruction": "You are an expert audio analyst. Identify speakers and their characteristics from the audio.",
+                    "temperature": 0.2,
+                },
+            )
+
+            raw = response.text.strip()
+            raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            diarization_data = json.loads(raw)
+
+            # Lưu raw diarization response vào context folder
+            diarization_file = settings.temp_dir / "context" / video_id / "diarization.json"
+            diarization_file.parent.mkdir(parents=True, exist_ok=True)
+            diarization_file.write_text(json.dumps(diarization_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            if log_fn:
+                log_fn(f"Đã lưu diarization.json ({diarization_file})")
+
+            # Format diarization for voice map prompt
+            speakers = diarization_data.get("speakers", {})
+            line_speakers = diarization_data.get("line_speakers", {})
+
+            diarization_lines = ["SPEAKER IDENTIFICATION:"]
+            for spk, info in speakers.items():
+                diarization_lines.append(f"  {spk}: {info.get('gender', 'unknown')}, {info.get('description', '')}")
+            diarization_lines.append("\nLINE → SPEAKER MAPPING:")
+            for idx, spk in sorted(line_speakers.items(), key=lambda x: int(x[0])):
+                diarization_lines.append(f"  Line {idx}: {spk}")
+
+            diarization_text = "\n".join(diarization_lines)
+            if log_fn:
+                log_fn(f"Đã nhận diện {len(speakers)} speaker từ audio.", "success")
+
+            # Clean up uploaded file
+            delete_gemini_file(audio_uri)
+
+    except Exception as e:
+        logger.warning("Audio diarization failed, falling back to context-only: %s", e)
+        if log_fn:
+            log_fn(f"Không phân tích được audio ({e}), dùng context để suy luận.", "warning")
+
+    # Step 2: Generate voice map with diarization info
     if log_fn:
         log_fn(f"Đang tạo voice_map.json: chọn giọng CapCut cho {len(entries)} dòng phụ đề (Gemini)...")
 
     base_prompt = VOICE_MAP_PROMPT.format(
         context=context,
         catalog=catalog,
+        diarization=diarization_text,
         srt="{srt}",
     )
 
