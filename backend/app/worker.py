@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 _executor = ThreadPoolExecutor(max_workers=1)
+_context_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def enqueue_job(
@@ -157,17 +158,11 @@ def process_job_sync(
             "text",
         )
 
-    # Create directory for OCR frame snapshots
-    job_video_id = job.get("video_id", job_id)
-    crops_dir = settings.temp_dir / "frames" / job_video_id / "ocr_snapshots"
-    crops_dir.mkdir(parents=True, exist_ok=True)
-
     srt_content = generate_srt(
         crops, region, ocr_engine,
         progress_callback=progress_cb,
         text_callback=text_cb,
         total_frames=total_crops,
-        save_crops_dir=crops_dir,
     )
     t2 = time.time()
     logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)
@@ -223,7 +218,10 @@ async def run_job(
         logger.info("job %s: processing started  |  %s", job_id, video_path)
         t_start = time.time()
 
-        srt_content = await loop.run_in_executor(_executor, fn)
+        srt_content = await asyncio.wait_for(
+            loop.run_in_executor(_executor, fn),
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
+        )
 
         t_end = time.time()
         logger.info("job %s: saving SRT...  |  total %.1fs", job_id, t_end - t_start)
@@ -263,7 +261,8 @@ async def run_job(
         from app.routers.config_router import _read_config
         cfg = _read_config()
         if cfg.get("auto_context_enabled", True):
-            asyncio.create_task(_auto_context(video_id, generate_video_context, loop))
+            target_lang = job.get("target_lang", "vi")
+            asyncio.create_task(_auto_context(video_id, generate_video_context, loop, target_lang))
         else:
             logger.info("Auto context generation disabled, skipping for %s", video_id)
 
@@ -690,10 +689,13 @@ async def run_export_job(
         await job_log_async(job, ws_clients, f"Lỗi xuất: {e}", "error")
 
 
-async def _auto_context(video_id: str, generate_fn, loop):
-    """Fire-and-forget context generation after OCR completes."""
+async def _auto_context(video_id: str, generate_fn, loop, target_lang: str = "vi"):
+    """Fire-and-forget context generation after OCR completes.
+
+    Runs on a dedicated executor so it never blocks the main job queue.
+    """
     try:
-        await loop.run_in_executor(_executor, generate_fn, video_id)
+        await loop.run_in_executor(_context_executor, generate_fn, video_id, target_lang)
         logger.info("Auto context generated for %s", video_id)
     except Exception:
         logger.warning("Auto context generation failed (non-critical)", exc_info=True)
@@ -755,6 +757,7 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
 
     job = jobs[job_id]
     video_id = job.get("video_id", job_id)
+    target_lang = job.get("target_lang", "vi")
 
     try:
         job["status"] = "processing"
@@ -763,7 +766,10 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
         await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "context"})
 
         loop = asyncio.get_event_loop()
-        context = await loop.run_in_executor(_executor, generate_video_context, video_id)
+        context = await loop.run_in_executor(
+            _executor,
+            lambda: generate_video_context(video_id, target_lang=target_lang),
+        )
 
         if context:
             job["status"] = "done"

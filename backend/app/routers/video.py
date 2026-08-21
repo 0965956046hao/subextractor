@@ -223,7 +223,7 @@ async def cleanup_video(video_id: str):
             logger.info("cleanup %s: keeping source video (hardcoded output not complete)", video_id)
         removed.append("videos")
 
-    # frames/: first frame + ocr_snapshots — intermediate
+    # frames/: first frame — intermediate
     frames_dir = settings.temp_dir / "frames" / video_id
     if frames_dir.exists():
         shutil.rmtree(frames_dir, ignore_errors=True)

@@ -234,6 +234,51 @@ async def update_srt(video_id: str, body: UpdateSrtRequest):
     return {"status": "ok", "video_id": video_id}
 
 
+# ── POST /api/srt/{video_id}/re-translate-line ──
+# Re-translate ONE SRT line with Gemini (same prompts as full SRT translation).
+# The frontend timeline-check modal uses this for the "Dịch lại" button.
+
+@router.post("/api/srt/{video_id}/re-translate-line")
+async def re_translate_srt_line(video_id: str, request: Request):
+    from app.services.translation_service import re_translate_line as _rt_line
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    index = int(body.get("index", 0))
+    source_lang = str(body.get("source_lang", "zh") or "zh")
+    target_lang = str(body.get("target_lang", "vi") or "vi")
+
+    # Read the current SRT entry text so we can re-translate the same line.
+    srt_path = _srt_path(video_id)
+    current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    entry = next((e for e in current_entries if e.index == index), None)
+    if entry is None:
+        raise HTTPException(404, f"Không tìm thấy dòng #{index}")
+
+    # Prefer the original (source-language) text so the re-translation works on
+    # the source sentence, not on an already-translated text.
+    source_text = entry.text
+    orig_path = srt_path.with_name("subtitles_original.srt")
+    if orig_path.exists():
+        orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
+        src = next((e for e in orig_entries if e.index == index), None)
+        if src is not None:
+            source_text = src.text
+
+    try:
+        new_text = _rt_line(video_id, source_text, source_lang=source_lang, target_lang=target_lang)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+    return {"status": "ok", "index": index, "text": new_text}
+
+
 # ── POST /api/srt/{video_id}/risk-check ──
 # Check-only: ask Gemini (in batches) to flag risky lines (untranslated text,
 # overlapping timeline, adjacent content still similar). Never edits the SRT.
@@ -634,28 +679,54 @@ async def translate_subtitles(video_id: str, request: Request):
 # ── GET /api/voice-map/{video_id} ──
 
 @router.get("/api/voice-map/{video_id}")
-async def get_voice_map(video_id: str):
-    """Return whether voice_map.json exists and how many lines it covers."""
+async def get_voice_map(video_id: str, lang: str = "vi"):
+    """Return the per-line CapCut voice assignment for multi-voice dubbing.
+
+    ``map`` = {index: {voice_type, display_name}} so the frontend can show which
+    voice reads each subtitle line.
+    """
     from app.services.translation_service import load_voice_map
+    from app.services.context_service import _load_capcut_voice_display_map
 
     voice_map = load_voice_map(video_id)
-    return {"exists": bool(voice_map), "voices": len(voice_map)}
+    display = _load_capcut_voice_display_map(lang)
+    detail = {}
+    for idx, vt in voice_map.items():
+        detail[str(idx)] = {
+            "voice_type": vt,
+            "display_name": display.get(vt) or vt,
+        }
+    return {
+        "exists": bool(voice_map),
+        "voices": len(voice_map),
+        "map": detail,
+        "lang": lang,
+    }
 
 
 # ── POST /api/voice-map/{video_id} ──
 
 @router.post("/api/voice-map/{video_id}")
-async def generate_voice_map_now(video_id: str):
+async def generate_voice_map_now(request: Request, video_id: str):
     """Generate (or regenerate) the CapCut voice_map.json for multi-voice dubbing."""
     from fastapi.concurrency import run_in_threadpool
     from app.services.translation_service import generate_voice_map as _gen_voice_map
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    target_lang = str(body.get("target_lang", "vi") or "vi")
 
     srt_path = _srt_path(video_id)
     entries = parse_srt(srt_path.read_text(encoding="utf-8"))
     if not entries:
         raise HTTPException(400, "No SRT entries")
 
-    voice_map = await run_in_threadpool(_gen_voice_map, video_id, entries, None)
+    voice_map = await run_in_threadpool(
+        _gen_voice_map, video_id, entries, None, target_lang
+    )
     if not voice_map:
         raise HTTPException(500, "Không tạo được voice_map.json (kiểm tra Gemini key / CapCut voice catalog).")
     return {"status": "done", "voices": len(voice_map)}
@@ -1027,10 +1098,17 @@ async def save_share_text_endpoint(video_id: str, request: Request):
 
 @router.post("/api/context/{video_id}/generate")
 async def generate_context(request: Request, video_id: str):
-    """Upload snapshots to Gemini and generate video context via Vision."""
+    """Upload context images to Gemini and generate video context via Vision."""
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    target_lang = str(body.get("target_lang", "vi") or "vi")
 
     # Check API key
     from app.services.retry_utils import configured_gemini_keys
@@ -1048,6 +1126,7 @@ async def generate_context(request: Request, video_id: str):
         "progress": 0,
         "created_at": __import__("time").time(),
         "cancelled": False,
+        "target_lang": target_lang,
     }
     ws_clients.setdefault(job_id, [])
 

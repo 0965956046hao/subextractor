@@ -1,3 +1,4 @@
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -169,7 +170,23 @@ def crops_visually_similar(
 
 
 def resolve_video_path(video_id: str) -> str:
+    """Resolve the video used for OCR.
+
+    Khi video có nguồn merge (meta.json.source_merge_id), ưu tiên dùng file
+    `merged/{merge_id}_video.mp4` — video không tiếng tải về từ Douyin — thay vì
+    bản merge video+audio trong videos/{video_id}/.
+    """
     video_dir = settings.temp_dir / "videos" / video_id
+    meta_file = video_dir / "meta.json"
+    try:
+        data = json.loads(meta_file.read_text(encoding="utf-8"))
+        merge_id = data.get("source_merge_id")
+        if merge_id:
+            raw = settings.temp_dir / "merged" / f"{merge_id}_video.mp4"
+            if raw.exists():
+                return str(raw)
+    except Exception:
+        pass
     for f in video_dir.iterdir():
         if f.stem.startswith("video"):
             return str(f)

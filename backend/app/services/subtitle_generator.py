@@ -11,16 +11,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _save_crop(crop, save_dir: Path, index: int, timestamp: float):
-    """Save cropped frame image to disk."""
-    import cv2
-    ts_str = f"{timestamp:.2f}".replace(".", "_")
-    filename = f"{index:04d}_{ts_str}s.jpg"
-    filepath = save_dir / filename
-    cv2.imwrite(str(filepath), crop)
-    logger.debug("  saved crop: %s", filename)
-
-
 # Chars often left behind by OCR (leading/trailing noise).
 ARTIFACT_CHARS = " \u3000-—–−|·•.,，。;；:：!！?？~～`'\"“”‘’()（）[]【】«»‹›"
 
@@ -169,9 +159,8 @@ def generate_srt(
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
-    save_crops_dir: Path | None = None,
 ) -> str:
-    """Build SRT from a stream of (crop, full_frame, timestamp) frames.
+    """Build SRT from a stream of (crop, _full_frame, timestamp) frames.
 
     A subtitle boundary is placed at the midpoint between the last frame that
     still showed the old text and the first frame that shows the new text,
@@ -186,15 +175,7 @@ def generate_srt(
 
     pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
-    # Save up to 20 snapshot frames evenly spread across the video timeline
-    # (target 10–20 frames: at least 10 for good context coverage).
-    snapshot_step = 1
-    if save_crops_dir and total_frames:
-        snapshot_step = max(1, (total_frames + 19) // 20)
-
-    for i, (crop, full_frame, timestamp) in enumerate(frames):
-        if save_crops_dir and i % snapshot_step == 0:
-            _save_crop(full_frame, save_crops_dir, i // snapshot_step, timestamp)
+    for i, (crop, _full_frame, timestamp) in enumerate(frames):
 
         text = ocr_engine.ocr_region_cached(crop)
         text = clean_text(text)

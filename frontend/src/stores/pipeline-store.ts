@@ -149,6 +149,7 @@ export interface Pipeline {
   autoUploadYoutube: boolean;
   watermarkPreset: string;
   checkSubs: boolean;
+  checkVoice: boolean;
   timelineCheck: TimelineCheck | null;
   resumeStep: number | null;
 }
@@ -192,6 +193,7 @@ interface PipelineState {
     watermark?: boolean,
     watermarkPreset?: string,
     checkSubs?: boolean,
+    checkVoice?: boolean,
     autoUploadYoutube?: boolean,
     useFalThumbnail?: boolean,
     useGptThumbnail?: boolean,
@@ -210,6 +212,7 @@ interface PipelineState {
     watermark?: boolean;
     watermarkPreset?: string;
     checkSubs?: boolean;
+    checkVoice?: boolean;
     useFalThumbnail?: boolean;
     useGptThumbnail?: boolean;
     translateOn?: boolean;
@@ -245,6 +248,7 @@ function newPipeline(
   watermark = false,
   watermarkPreset = "",
   checkSubs = false,
+  checkVoice = false,
   autoUploadYoutube = false,
   useFalThumbnail = true,
   useGptThumbnail = false,
@@ -299,6 +303,7 @@ function newPipeline(
     watermark,
     watermarkPreset,
     checkSubs,
+    checkVoice,
     timelineCheck: null,
     resumeStep: null,
     useFalThumbnail,
@@ -333,6 +338,7 @@ export const usePipelineStore = create<PipelineState>()(
         watermark = false,
         watermarkPreset = "",
         checkSubs = false,
+        checkVoice = false,
         autoUploadYoutube = false,
         useFalThumbnail = true,
         useGptThumbnail = false,
@@ -354,6 +360,7 @@ export const usePipelineStore = create<PipelineState>()(
               watermark,
               watermarkPreset,
               checkSubs,
+              checkVoice,
               autoUploadYoutube,
               useFalThumbnail,
               useGptThumbnail,
@@ -379,6 +386,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.watermark ?? false,
           input.watermarkPreset ?? "",
           input.checkSubs ?? false,
+          input.checkVoice ?? false,
           false,
           input.useFalThumbnail ?? true,
           input.useGptThumbnail ?? false,
@@ -1070,7 +1078,11 @@ function appendLog(id: string, msg: string, level = "info") {
 }
 
 // Đảm bảo voice_map.json tồn tại (multi-voice CapCut) và CHỜ tạo xong rồi mới tiếp tục.
-async function ensureVoiceMap(videoId: string, id: string): Promise<boolean> {
+async function ensureVoiceMap(
+  videoId: string,
+  id: string,
+  targetLang: string = "vi",
+): Promise<boolean> {
   try {
     const vmCheck = await fetch(`/api/voice-map/${videoId}`);
     const vmData = await vmCheck.json();
@@ -1085,7 +1097,11 @@ async function ensureVoiceMap(videoId: string, id: string): Promise<boolean> {
       id,
       "Đang tạo voice_map.json (chọn giọng CapCut cho từng dòng bằng Gemini)...",
     );
-    const vmRes = await fetch(`/api/voice-map/${videoId}`, { method: "POST" });
+    const vmRes = await fetch(`/api/voice-map/${videoId}`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ target_lang: targetLang }),
+    });
     const vmd = await vmRes.json();
     if (vmRes.ok && vmd.status === "done") {
       appendLog(
@@ -1657,6 +1673,10 @@ async function runPipeline(id: string, startStep = 4) {
           try {
             const cr = await fetch(`/api/context/${videoId}/generate`, {
               method: "POST",
+              headers: JSON_HEADERS,
+              body: JSON.stringify({
+                target_lang: cur.translateTarget || "vi",
+              }),
             });
             const cd = await cr.json();
             if (cr.ok && cd.job_id) {
@@ -1839,7 +1859,7 @@ async function runPipeline(id: string, startStep = 4) {
       // Multi-voice: đảm bảo voice_map.json tồn tại — kể cả khi dịch bị bỏ qua.
       // Chờ tạo xong (Gemini) rồi mới chuyển sang bước lồng tiếng.
       if (cur.multiVoice && videoId) {
-        await ensureVoiceMap(videoId, id);
+        await ensureVoiceMap(videoId, id, translateTarget);
       }
 
       if (translateSkipped) markStepSkipped(id, 6);
@@ -1887,8 +1907,8 @@ async function runPipeline(id: string, startStep = 4) {
           );
           // Multi-voice: phải chờ tạo xong voice_map.json rồi mới được lồng tiếng
           // (kể cả khi chạy lại/resume từ bước này mà voice_map chưa có).
-          if (cur.multiVoice && engine === "capcut" && videoId) {
-            await ensureVoiceMap(videoId, id);
+if (cur.multiVoice && engine === "capcut" && videoId) {
+            await ensureVoiceMap(videoId, id, cur.translateTarget || "vi");
           }
           try {
             const dr = await fetch(`/api/dub/${videoId}`, {

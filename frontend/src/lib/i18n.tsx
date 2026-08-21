@@ -330,6 +330,10 @@ const dictionaries = {
     "timeline.deleteRow": "Delete row",
     "timeline.editContent": "Edit content",
     "timeline.edit": "Edit",
+    "timeline.reTranslate": "Re-translate",
+    "timeline.reTranslateTitle": "Re-translate this line with Gemini",
+    "timeline.reTranslating": "Translating...",
+    "timeline.reTranslateFailed": "Re-translation failed",
     "timeline.enterSubtitle": "Enter subtitle text...",
     "timeline.cancel": "Cancel",
     "timeline.save": "Save",
@@ -355,6 +359,19 @@ const dictionaries = {
     "timeline.risk.notTranslated": "Not translated",
     "timeline.risk.overlap": "Timeline overlap",
     "timeline.risk.adjacentSimilar": "Adjacent similar",
+    "timeline.tabTimeline": "Timeline",
+    "timeline.tabVoice": "Voice check",
+    "timeline.voiceTabTitle": "Check the voice reading each subtitle line",
+    "timeline.voiceTitle": "{count} lines — assigned reading voice",
+    "timeline.voiceLoadFailed": "Failed to load voice map",
+    "timeline.voiceGenFailed": "Failed to generate voice map",
+    "timeline.voiceRegenerate": "Regenerate voices",
+    "timeline.voiceRegenerateTitle": "Regenerate per-line voices with Gemini",
+    "timeline.voiceGenerating": "Generating...",
+    "timeline.voiceLoading": "Loading voice map...",
+    "timeline.voiceNoMap": "No voice map yet. Generate it to assign a CapCut voice to every subtitle line.",
+    "timeline.voiceCreateMap": "Generate voice map",
+    "timeline.voiceMissing": "No voice assigned",
 
     // TranscriptPlayer
     "transcript.loadFailed": "Failed to load",
@@ -573,6 +590,9 @@ const dictionaries = {
     "pipeline.checkTimeline": "Check subtitles on timeline",
     "pipeline.checkTimelineHint":
       "Review subtitle timings on the timeline and confirm before exporting.",
+    "pipeline.checkVoice": "Check reading voices",
+    "pipeline.checkVoiceHint":
+      "Review which CapCut voice reads each subtitle line before exporting.",
     "pipeline.falThumbnail": "FAL thumbnail",
     "pipeline.falThumbnailHint":
       "Regenerate the 16:9 thumbnail with fal.ai models.",
@@ -975,6 +995,10 @@ const dictionaries = {
     "timeline.deleteRow": "Xoá dòng",
     "timeline.editContent": "Sửa nội dung",
     "timeline.edit": "Sửa",
+    "timeline.reTranslate": "Dịch lại",
+    "timeline.reTranslateTitle": "Dịch lại dòng này bằng Gemini",
+    "timeline.reTranslating": "Đang dịch lại…",
+    "timeline.reTranslateFailed": "Dịch lại thất bại",
     "timeline.enterSubtitle": "Nhập nội dung phụ đề...",
     "timeline.cancel": "Huỷ",
     "timeline.save": "Lưu",
@@ -1000,6 +1024,19 @@ const dictionaries = {
     "timeline.risk.notTranslated": "Chưa dịch",
     "timeline.risk.overlap": "Trùng timeline",
     "timeline.risk.adjacentSimilar": "Dòng liền kề giống nhau",
+    "timeline.tabTimeline": "Timeline",
+    "timeline.tabVoice": "Kiểm tra giọng",
+    "timeline.voiceTabTitle": "Kiểm tra giọng đọc của từng dòng phụ đề",
+    "timeline.voiceTitle": "{count} dòng — giọng đọc được gán",
+    "timeline.voiceLoadFailed": "Không tải được voice map",
+    "timeline.voiceGenFailed": "Không tạo được voice map",
+    "timeline.voiceRegenerate": "Tạo lại giọng",
+    "timeline.voiceRegenerateTitle": "Gán lại giọng cho từng dòng bằng Gemini",
+    "timeline.voiceGenerating": "Đang tạo giọng...",
+    "timeline.voiceLoading": "Đang tải voice map...",
+    "timeline.voiceNoMap": "Chưa có voice map. Hãy tạo để gán giọng CapCut cho từng dòng phụ đề.",
+    "timeline.voiceCreateMap": "Tạo voice map",
+    "timeline.voiceMissing": "Chưa gán giọng",
 
     // TranscriptPlayer
     "transcript.loadFailed": "Không tải được",
@@ -1208,6 +1245,9 @@ const dictionaries = {
     "pipeline.checkTimeline": "Kiểm tra phụ đề trên timeline",
     "pipeline.checkTimelineHint":
       "Rà soát thời gian xuất hiện phụ đề trên timeline và xác nhận trước khi xuất ra.",
+    "pipeline.checkVoice": "Kiểm tra giọng đọc",
+    "pipeline.checkVoiceHint":
+      "Rà soát giọng CapCut đọc từng dòng phụ đề và xác nhận trước khi xuất ra.",
     "pipeline.falThumbnail": "Thumbnail bằng FAL",
     "pipeline.falThumbnailHint":
       "Tạo lại thumbnail 16:9 bằng các mô hình fal.ai.",

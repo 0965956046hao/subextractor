@@ -169,14 +169,14 @@ SRT LINES:
 """
 
 
-def generate_voice_map(video_id: str, entries, log_fn=None) -> dict:
+def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "vi") -> dict:
     """Assign a CapCut voice to each SRT line via Gemini; save as voice_map.json.
 
     Returns {index: voice_type}. Saves to ``translated/{video_id}/voice_map.json``.
     """
-    catalog = _load_capcut_voice_catalog()
+    catalog = _load_capcut_voice_catalog(target_lang)
     if not catalog:
-        logger.warning("CapCut voice catalog unavailable — voice map skipped")
+        logger.warning("CapCut voice catalog unavailable for lang %s — voice map skipped", target_lang)
         if log_fn:
             log_fn("Không đọc được CapCut voice catalog — bỏ qua tạo voice_map.json.", "warning")
         return {}
@@ -306,6 +306,87 @@ def _reconcile_batch(batch: list, translated: list, translated_text: str) -> lis
     return out
 
 
+def _build_base_prompt(source_lang: str, target_lang: str) -> str:
+    """Build the Gemini translation prompt for a language pair."""
+    sn = LANG_NAMES.get(source_lang, source_lang)
+    tn = LANG_NAMES.get(target_lang, target_lang)
+    if target_lang == "vi":
+        culture_examples = '将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân"'
+        politeness_rule = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
+                           'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
+    else:
+        culture_examples = 'e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency"'
+        politeness_rule = (f'Use an appropriate polite register for {tn}; avoid rude or overly informal '
+                           'words unless the original clearly intends them')
+    if source_lang == "zh":
+        return CHINESE_TRANSLATE_PROMPT.format(
+            target_lang_name=tn,
+            culture_examples=culture_examples,
+            politeness_rule=politeness_rule,
+        )
+    return GENERIC_TRANSLATE_PROMPT.format(
+        source_lang_name=sn,
+        target_lang_name=tn,
+        politeness_rule=politeness_rule,
+    )
+
+
+def _call_gemini(contents, config: dict):
+    return gemini_call_rotating(
+        genai_generate_content_factory,
+        model=settings.gemini_model,
+        contents=contents,
+        config=config,
+    )
+
+
+def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", target_lang: str = "vi", log_fn=None) -> str:
+    """Re-translate a single SRT line with Gemini (same prompts as translate_srt)."""
+    if not configured_gemini_keys():
+        raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
+
+    base_prompt = _build_base_prompt(source_lang, target_lang)
+
+    # Load video context if available (same as full SRT translation).
+    context = load_video_context(video_id)
+    if context:
+        context_prefix = f"VIDEO CONTEXT (use this to understand the scene and translate more accurately):\n{context}\n\n"
+        base_prompt = context_prefix + base_prompt
+
+    patch_context = load_translation_context(video_id)
+    if patch_context:
+        patch_prefix = (
+            "PREVIOUS PATCH CONTEXT (already-translated subtitles; keep character names, "
+            "honorifics, terminology and tone CONSISTENT with these):\n"
+            f"{patch_context}\n\n"
+        )
+        base_prompt = patch_prefix + base_prompt
+
+    line_srt = entries_to_srt([SrtEntry(index=1, start=0, end=0, startLabel="00:00:00,000", endLabel="00:00:00,000", text=source_text)])
+    prompt = (
+        base_prompt
+        + "\n\nTranslate ONLY the single SRT line below. "
+        + "Output ONLY the translated text — no index, no timestamps, no explanations, no code fences.\n\n"
+        + line_srt
+    )
+    if log_fn:
+        log_fn(f"Đang dịch lại 1 dòng với Gemini ({source_lang} → {target_lang})...")
+
+    response = _call_gemini(prompt, {
+        "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+        "temperature": 0.3,
+    })
+    text = _clean_gemini_response(response.text.strip())
+    # Strip the SRT framing: take the last non-empty line (the text).
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        raise RuntimeError("Gemini trả về kết quả rỗng khi dịch lại dòng.")
+    new_text = lines[-1]
+    if log_fn:
+        log_fn(f"Đã dịch lại: {source_text}  →  {new_text}", level="success")
+    return new_text
+
+
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None) -> str:
     """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt."""
     if use_custom_srt:
@@ -329,37 +410,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     if not configured_gemini_keys():
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
-    def _call_gemini(contents, config: dict):
-        return gemini_call_rotating(
-            genai_generate_content_factory,
-            model=settings.gemini_model,
-            contents=contents,
-            config=config,
-        )
-
     # Build prompt based on language pair (target language injected, not hardcoded)
-    sn = LANG_NAMES.get(source_lang, source_lang)
-    tn = LANG_NAMES.get(target_lang, target_lang)
-    if target_lang == "vi":
-        culture_examples = '将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân"'
-        politeness_rule = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
-                           'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
-    else:
-        culture_examples = 'e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency"'
-        politeness_rule = (f'Use an appropriate polite register for {tn}; avoid rude or overly informal '
-                           'words unless the original clearly intends them')
-    if source_lang == "zh":
-        base_prompt = CHINESE_TRANSLATE_PROMPT.format(
-            target_lang_name=tn,
-            culture_examples=culture_examples,
-            politeness_rule=politeness_rule,
-        )
-    else:
-        base_prompt = GENERIC_TRANSLATE_PROMPT.format(
-            source_lang_name=sn,
-            target_lang_name=tn,
-            politeness_rule=politeness_rule,
-        )
+    base_prompt = _build_base_prompt(source_lang, target_lang)
 
     # Load video context if available (generated from OCR snapshots)
     context = load_video_context(video_id)
@@ -488,7 +540,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     if multi_voice:
         if log_fn:
             log_fn("Bật nhiều giọng nói — tạo voice_map.json ngay trong bước Dịch Gemini...")
-        generate_voice_map(video_id, translated_entries, log_fn=log_fn)
+        generate_voice_map(video_id, translated_entries, log_fn=log_fn, target_lang=target_lang)
 
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)
     if log_fn:

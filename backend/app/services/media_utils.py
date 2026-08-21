@@ -14,6 +14,24 @@ def _srt_path(video_id: str) -> Path:
     return p
 
 
+def _merge_id(video_id: str) -> str | None:
+    """Return source_merge_id from videos/{video_id}/meta.json if present."""
+    meta = settings.temp_dir / "videos" / video_id / "meta.json"
+    try:
+        return json.loads(meta.read_text(encoding="utf-8")).get("source_merge_id")
+    except Exception:
+        return None
+
+
+def _merge_audio_path(video_id: str) -> Path | None:
+    """Raw audio track downloaded during merge (merged/{merge_id}_audio.mp4)."""
+    merge_id = _merge_id(video_id)
+    if not merge_id:
+        return None
+    p = settings.temp_dir / "merged" / f"{merge_id}_audio.mp4"
+    return p if p.exists() else None
+
+
 def _video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():

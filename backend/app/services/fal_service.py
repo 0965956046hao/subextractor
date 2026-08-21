@@ -138,16 +138,6 @@ def update_thumbnail(video_id: str) -> Path:
         # leave a stray .jpg next to the generated thumbnail.png.
         input_path.unlink(missing_ok=True)
 
-
-    # snapshots_dir = settings.temp_dir / "frames" / video_id / "ocr_snapshots"
-    # snapshot_files = sorted(snapshots_dir.glob("*.jpg")) if snapshots_dir.exists() else []
-    # for snap in snapshot_files[:FAL_MAX_SNAPSHOTS]:
-    #     try:
-    #         reference_urls.append(fal_client.upload_file(str(snap)))
-    #     except Exception as exc:
-    #         logger.warning("Skip snapshot %s: %s", snap.name, exc)
-    # logger.info("fal edit reference images: %d (1 thumbnail + %d snapshots)", len(reference_urls), len(reference_urls) - 1)
-
     with _fal_lock:
         elapsed = time.time() - _fal_state["last_call"]
         if elapsed < FAL_COOLDOWN_SECONDS:

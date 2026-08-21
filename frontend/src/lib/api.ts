@@ -215,6 +215,20 @@ export async function updateSrt(
   await api.put(`/srt/${videoId}`, { content });
 }
 
+export async function reTranslateLine(
+  videoId: string,
+  index: number,
+  sourceLang: string,
+  targetLang: string,
+): Promise<string> {
+  const res = await api.post<{ text: string }>(`/srt/${videoId}/re-translate-line`, {
+    index,
+    source_lang: sourceLang,
+    target_lang: targetLang,
+  });
+  return res.data.text;
+}
+
 export interface TimelineIssue {
   index: number;
   type: "negative_duration" | "overlap" | "out_of_order";
@@ -418,6 +432,39 @@ export async function getCapCutVoices(lang = "vi-VN"): Promise<CapCutVoice[]> {
   const res = await api.get<CapCutVoice[]>("/capcut/voices", {
     params: { lang },
   });
+  return res.data;
+}
+
+export interface VoiceMapLine {
+  voice_type: string;
+  display_name: string;
+}
+
+export interface VoiceMapDetail {
+  exists: boolean;
+  voices: number;
+  lang: string;
+  map: Record<string, VoiceMapLine>;
+}
+
+export async function getVoiceMapDetail(
+  videoId: string,
+  lang = "vi",
+): Promise<VoiceMapDetail> {
+  const res = await api.get<VoiceMapDetail>(`/voice-map/${videoId}`, {
+    params: { lang },
+  });
+  return res.data;
+}
+
+export async function generateVoiceMap(
+  videoId: string,
+  lang = "vi",
+): Promise<{ status: string; voices: number }> {
+  const res = await api.post<{ status: string; voices: number }>(
+    `/voice-map/${videoId}`,
+    { target_lang: lang },
+  );
   return res.data;
 }
 

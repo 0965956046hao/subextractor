@@ -280,6 +280,7 @@ export default function AutoPipeline() {
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
   const [watermarkPreset, setWatermarkPreset] = useState("");
   const [checkSubs, setCheckSubs] = useState(false);
+  const [checkVoice, setCheckVoice] = useState(false);
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
@@ -568,6 +569,7 @@ export default function AutoPipeline() {
       watermarkOn,
       watermarkOn ? watermarkPreset : "",
       checkSubs,
+      checkVoice,
       autoUploadYoutube,
       useFalThumbnail,
       useGptThumbnail,
@@ -617,6 +619,7 @@ export default function AutoPipeline() {
       watermark: watermarkOn,
       watermarkPreset: watermarkOn ? watermarkPreset : "",
       checkSubs,
+      checkVoice,
       translateOn,
       translateTarget,
       dubOn,
@@ -1461,6 +1464,29 @@ export default function AutoPipeline() {
                       <span
                         className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
                           checkSubs ? "left-[22px]" : "left-0.5"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 mt-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                        {tr("pipeline.checkVoice")}
+                      </p>
+                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                        {tr("pipeline.checkVoiceHint")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCheckVoice(!checkVoice)}
+                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                        checkVoice ? "bg-violet-600" : "bg-black/10"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                          checkVoice ? "left-[22px]" : "left-0.5"
                         }`}
                       />
                     </button>
@@ -2917,6 +2943,8 @@ function DetailView({
           videoId={p.videoId}
           initialIssues={p.timelineCheck.issues}
           targetLang={p.translateTarget || "vi"}
+          sourceLang={p.srcLang || "zh"}
+          checkVoice={p.checkVoice}
           onResolve={() => resolveTimelineCheck(p.id, "continue")}
           onClose={() => closeTimelineCheck(p.id)}
         />

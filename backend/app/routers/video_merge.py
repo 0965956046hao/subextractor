@@ -364,10 +364,6 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
     ctx_dir = out_dir / f"{merge_id}_context"
     ctx_dir.mkdir(parents=True, exist_ok=True)
 
-    def _cleanup():
-        for p in (video_path, audio_path):
-            p.unlink(missing_ok=True)
-
     state = {"lock": threading.Lock(), "done": 0.0}
     _times: dict[str, float] = {}
 
@@ -495,7 +491,6 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
         logger.info("merge done for %s in %.1fs", merge_id, _t_merge)
         _set("Đang merge video + audio...", 100, msg)
 
-        _cleanup()
         job["status"] = "done"
         job["stage"] = "Hoàn tất"
         job["progress"] = 100
@@ -506,7 +501,6 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
         job["url"] = f"/api/download/merged/{merge_id}"
         job["filename"] = f"{merge_id}.mp4"
     except Exception as e:
-        _cleanup()
         out_path.unlink(missing_ok=True)
         job["status"] = "error"
         job["error"] = str(e)

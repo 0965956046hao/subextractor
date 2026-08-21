@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import List
@@ -12,6 +13,7 @@ from app.services.media_utils import (
     _srt_path,
     _video_path,
     _get_audio_duration,
+    _merge_audio_path,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
@@ -249,6 +251,19 @@ def _db_to_volume(db: float) -> float:
     return float(10 ** (-db / 20))
 
 
+def _voice_lang_from_name(voice_name: str) -> str:
+    """Derive a target-language code (vi/en/zh...) from a TTS voice name.
+
+    Google voice names look like "vi-VN-Standard-B" or "en-US-Standard-C";
+    CapCut voices are plain voice_type ids with no lang prefix, so fall back
+    to "vi" (the default dubbing language).
+    """
+    m = re.match(r"([a-z]{2,3})-[A-Z]{2}", voice_name or "")
+    if m:
+        return m.group(1).lower()
+    return "vi"
+
+
 def build_full_audio(
     video_id: str,
     voice_name: str = "vi-VN-Standard-B",
@@ -270,6 +285,10 @@ def build_full_audio(
     video_path = _video_path(video_id)
     out_dir = settings.temp_dir / "tts" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ưu tiên dùng file audio gốc tải về trong bước merge (merged/{merge_id}_audio.mp4)
+    # để tách voice/instrument thay vì trích audio từ video đã merge.
+    audio_source = _merge_audio_path(video_id) or video_path
 
     srt_path = _srt_path(video_id)
     srt_content = srt_path.read_text(encoding="utf-8")
@@ -312,20 +331,20 @@ def build_full_audio(
                 log_fn("Đã có nhạc nền từ lần chạy trước — tái sử dụng (bỏ qua Demucs).")
         else:
             try:
-                instrumental = separate_instrumental(video_path, out_dir)
+                instrumental = separate_instrumental(audio_source, out_dir)
                 background_volume = 1.0
                 if log_fn:
                     log_fn("Đã tách giọng xong, giữ lại nhạc nền.")
             except Exception as e:
                 logger.warning("Demucs failed (%s) — dùng audio gốc làm nền (volume 0.3)", e)
-                instrumental = extract_audio(video_path, out_dir)
+                instrumental = extract_audio(audio_source, out_dir)
                 background_volume = 0.3
                 if log_fn:
                     log_fn(f"Demucs lỗi ({e}) — dùng audio gốc làm nền (âm lượng 30%).", level="warning")
     else:
         if log_fn:
             log_fn(f"Giữ nguyên audio gốc, giảm giọng nền {original_gain_db:g} dB...")
-        instrumental = extract_audio(video_path, out_dir)
+        instrumental = extract_audio(audio_source, out_dir)
         background_volume = _db_to_volume(original_gain_db)
         if log_fn:
             log_fn(f"Âm lượng nhạc nền gốc = {background_volume:.2f} ({original_gain_db:g} dB).")
@@ -339,7 +358,12 @@ def build_full_audio(
                 # hoặc chạy lại từ bước dub — nên chủ động tạo voice_map tại đây.
                 if log_fn:
                     log_fn("Chưa có voice_map.json — đang tạo ngay tại bước lồng tiếng...")
-                generate_voice_map(video_id, entries, log_fn=log_fn)
+                generate_voice_map(
+                    video_id,
+                    entries,
+                    log_fn=log_fn,
+                    target_lang=_voice_lang_from_name(voice_name),
+                )
                 voice_map = load_voice_map(video_id)
             if not voice_map:
                 raise RuntimeError(

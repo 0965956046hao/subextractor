@@ -20,19 +20,62 @@ _USER_AGENT = (
 
 VOICE_CATALOG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "capcut-tts-api" / "Voice.json"
 
+# Map our target-language codes ("vi"/"en"/"zh"...) to CapCut voice catalog lang
+# codes ("vi-VN"/"en-US"/"zh-CN"...). Voices shown as suggestions must match the
+# language the video is being dubbed into.
+TARGET_LANG_TO_VOICE_LANG = {
+    "vi": "vi-VN",
+    "en": "en-US",
+    "zh": "zh-CN",
+    "ja": "ja-JP",
+    "ko": "ko-KR",
+    "th": "th-TH",
+    "fr": "fr-FR",
+    "es": "es-ES",
+    "de": "de-DE",
+    "pt": "pt-BR",
+    "id": "id-ID",
+}
 
-def _load_capcut_voice_catalog() -> str:
-    """Load the vi-VN CapCut voice catalog as a formatted list for the prompt."""
+
+def _voice_lang_code(target_lang: str) -> str:
+    """Translate our target-language code to the CapCut catalog lang code."""
+    return TARGET_LANG_TO_VOICE_LANG.get((target_lang or "vi").lower(), "vi-VN")
+
+
+def _load_capcut_voice_catalog(target_lang: str = "vi") -> str:
+    """Load the CapCut voice catalog for a target language as a formatted list.
+
+    Chỉ lấy các giọng thuộc ngôn ngữ đích (vd tiếng Việt → lang "vi-VN",
+    tiếng Anh → "en-US") để phần gợi ý giọng lồng tiếng chọn đúng giọng.
+    """
+    lang_code = _voice_lang_code(target_lang)
     try:
         data = json.loads(VOICE_CATALOG_PATH.read_text(encoding="utf-8"))
     except Exception as e:
         logger.debug("Không đọc được Voice.json (%s)", e)
         return ""
-    voices = [v for v in data if v.get("lang") == "vi-VN" and v.get("display_name")]
+    voices = [v for v in data if v.get("lang") == lang_code and v.get("display_name")]
     if not voices:
+        logger.debug("Không có giọng CapCut cho ngôn ngữ %s (%s)", target_lang, lang_code)
         return ""
     lines = [f"- {v['voice_type']} ({v['display_name']})" for v in voices]
     return "\n".join(lines)
+
+
+def _load_capcut_voice_display_map(target_lang: str = "vi") -> dict[str, str]:
+    """Return {voice_type: display_name} for the CapCut catalog of a target language."""
+    lang_code = _voice_lang_code(target_lang)
+    try:
+        data = json.loads(VOICE_CATALOG_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("Không đọc được Voice.json (%s)", e)
+        return {}
+    return {
+        v["voice_type"]: v["display_name"]
+        for v in data
+        if v.get("lang") == lang_code and v.get("display_name") and v.get("voice_type")
+    }
 
 CONTEXT_DIR_NAME = "context"
 CONTEXT_FILE_NAME = "context.txt"
@@ -65,8 +108,35 @@ def _thumbnail_file(video_id: str) -> Path:
     return settings.temp_dir / CONTEXT_DIR_NAME / video_id / "thumbnail.jpg"
 
 
+def _merge_context_dir(video_id: str) -> Path | None:
+    """Return the merge-step context dir (merged/{merge_id}_context) if known.
+
+    merge_id được lưu trong videos/{video_id}/meta.json dưới khóa source_merge_id.
+    """
+    meta = settings.temp_dir / "videos" / video_id / "meta.json"
+    if not meta.exists():
+        return None
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    merge_id = data.get("source_merge_id")
+    if not merge_id:
+        return None
+    d = settings.temp_dir / "merged" / f"{merge_id}_context" / "context_images"
+    return d if d.exists() else None
+
+
 def _context_image_paths(video_id: str) -> list[Path]:
-    """Return the local context images (big thumbs) copied from the merge step."""
+    """Return the local context images (big thumbs) for this video.
+
+    Ưu tiên đọc trực tiếp từ thư mục context_images của bước merge
+    (merged/{merge_id}_context/context_images), fallback về thư mục đã copy
+    vào context/{video_id}/context_images.
+    """
+    d = _merge_context_dir(video_id)
+    if d is not None:
+        return sorted(d.glob("*.jpg"))
     d = _context_images_dir(video_id)
     if not d.exists():
         return []
@@ -159,7 +229,7 @@ def load_thumbnail_file(video_id: str) -> Path | None:
     return p if p.exists() else None
 
 
-def generate_video_context(video_id: str) -> str | None:
+def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None:
     """Upload context images (big thumbs) to Gemini File Store, then call Vision.
 
     Ảnh ngữ cảnh (big_thumbs) đã được tải về song song với video+audio ở bước
@@ -238,7 +308,7 @@ def generate_video_context(video_id: str) -> str | None:
         )
 
     try:
-        voice_catalog = _load_capcut_voice_catalog()
+        voice_catalog = _load_capcut_voice_catalog(target_lang)
         voice_instruction = ""
         if voice_catalog:
             voice_instruction = (
