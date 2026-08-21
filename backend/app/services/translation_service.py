@@ -185,6 +185,143 @@ def _reconcile_batch(batch: list, translated: list, translated_text: str) -> lis
     return out
 
 
+def _build_base_prompt(source_lang: str, target_lang: str, video_id: str) -> str:
+    """Build the shared Gemini prompt prefix for a language pair (+video context)."""
+    sn = LANG_NAMES.get(source_lang, source_lang)
+    tn = LANG_NAMES.get(target_lang, target_lang)
+    if target_lang == "vi":
+        culture_examples = '将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân"'
+        politeness_rule = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
+                           'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
+    else:
+        culture_examples = 'e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency"'
+        politeness_rule = (f'Use an appropriate polite register for {tn}; avoid rude or overly informal '
+                           'words unless the original clearly intends them')
+    if source_lang == "zh":
+        base_prompt = CHINESE_TRANSLATE_PROMPT.format(
+            target_lang_name=tn,
+            culture_examples=culture_examples,
+            politeness_rule=politeness_rule,
+        )
+    else:
+        base_prompt = GENERIC_TRANSLATE_PROMPT.format(
+            source_lang_name=sn,
+            target_lang_name=tn,
+            politeness_rule=politeness_rule,
+        )
+
+    # Load video context if available (generated from OCR snapshots)
+    context = load_video_context(video_id)
+    if context:
+        context_prefix = f"VIDEO CONTEXT (use this to understand the scene and translate more accurately):\n{context}\n\n"
+        base_prompt = context_prefix + base_prompt
+        logger.info("Using video context for translation: %s", context[:100])
+    return base_prompt
+
+
+def retranslate_untranslated(
+    video_id: str,
+    translated_content: str,
+    source_lang: str = "zh",
+    target_lang: str = "vi",
+    log_fn=None,
+) -> str:
+    """Re-translate lines that were left in the original language.
+
+    Compares the translated SRT against the original on disk, finds lines still
+    identical to the source (fuzzy ratio >= 95%), asks Gemini to translate only
+    those lines, and splices the fixes back into the translated content.
+    """
+    from rapidfuzz import fuzz
+
+    original_path = _srt_path(video_id)
+    if not original_path.exists():
+        raise ValueError("SRT gốc không tồn tại")
+    original = parse_srt(original_path.read_text(encoding="utf-8"))
+    translated = parse_srt(translated_content)
+    if not original or not translated:
+        return translated_content
+
+    # Match by index so each translated line is paired with its original.
+    orig_by_idx = {e.index: e for e in original}
+    untranslated_idx: list[int] = []
+    for te in translated:
+        oe = orig_by_idx.get(te.index)
+        if oe is None:
+            continue
+        a, b = oe.text.strip(), te.text.strip()
+        if a and b and fuzz.ratio(a, b) >= 95.0:
+            untranslated_idx.append(te.index)
+    if not untranslated_idx:
+        return translated_content
+
+    if log_fn:
+        log_fn(f"Phát hiện {len(untranslated_idx)} dòng chưa dịch, gửi lại Gemini: {untranslated_idx[:20]}{'...' if len(untranslated_idx) > 20 else ''}", level="warning")
+
+    # Build a mini-SRT from the ORIGINAL untranslated lines so Gemini translates
+    # the source text (not the echoed copy inside the translated content).
+    batch = [orig_by_idx[i] for i in untranslated_idx]
+    batch_srt = entries_to_srt(batch)
+
+    base_prompt = _build_base_prompt(source_lang, target_lang, video_id)
+    patch_context = load_translation_context(video_id)
+    if patch_context:
+        base_prompt = (
+            "PREVIOUS PATCH CONTEXT (keep character names, honorifics, terminology and tone "
+            f"CONSISTENT with these):\n{patch_context}\n\n{base_prompt}"
+        )
+    prompt = base_prompt + "\nTranslate ONLY these lines (keep the exact index/timestamps):\n\n" + batch_srt
+
+    def _call_gemini(contents, config: dict):
+        return gemini_call_rotating(
+            genai_generate_content_factory,
+            model=settings.gemini_model,
+            contents=contents,
+            config=config,
+        )
+
+    try:
+        response = _call_gemini(prompt, {
+            "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+            "temperature": 0.3,
+        })
+        response_text = _clean_gemini_response(response.text.strip())
+    except Exception as e:
+        raise RuntimeError(f"Retranslation failed: {e}")
+
+    translated_batch = parse_srt(response_text)
+    if not translated_batch:
+        if log_fn:
+            log_fn("Gemini không trả về bản dịch cho các dòng chưa dịch — giữ nguyên.", level="warning")
+        return translated_content
+
+    reconciled = _reconcile_batch(batch, translated_batch, response_text)
+    fixed_by_idx = {r.index: r for r in reconciled}
+
+    out: list = []
+    retranslated: list[int] = []
+    for te in translated:
+        fixed = fixed_by_idx.get(te.index)
+        if fixed is not None and fixed.text.strip():
+            new_text = fixed.text.strip()
+            if new_text != te.text.strip():
+                retranslated.append(te.index)
+            te = SrtEntry(
+                index=te.index, start=te.start, end=te.end,
+                startLabel=te.startLabel, endLabel=te.endLabel,
+                text=new_text,
+            )
+        out.append(te)
+
+    if log_fn:
+        if retranslated:
+            log_fn(f"Đã dịch lại {len(retranslated)} dòng: {retranslated[:20]}{'...' if len(retranslated) > 20 else ''}", level="success")
+        else:
+            log_fn("Gemini trả về nội dung không đổi — giữ nguyên bản dịch hiện tại.", level="warning")
+
+    return entries_to_srt(out)
+
+
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, log_fn=None) -> str:
     """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt."""
     if use_custom_srt:
@@ -217,35 +354,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         )
 
     # Build prompt based on language pair (target language injected, not hardcoded)
-    sn = LANG_NAMES.get(source_lang, source_lang)
-    tn = LANG_NAMES.get(target_lang, target_lang)
-    if target_lang == "vi":
-        culture_examples = '将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân"'
-        politeness_rule = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
-                           'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
-    else:
-        culture_examples = 'e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency"'
-        politeness_rule = (f'Use an appropriate polite register for {tn}; avoid rude or overly informal '
-                           'words unless the original clearly intends them')
-    if source_lang == "zh":
-        base_prompt = CHINESE_TRANSLATE_PROMPT.format(
-            target_lang_name=tn,
-            culture_examples=culture_examples,
-            politeness_rule=politeness_rule,
-        )
-    else:
-        base_prompt = GENERIC_TRANSLATE_PROMPT.format(
-            source_lang_name=sn,
-            target_lang_name=tn,
-            politeness_rule=politeness_rule,
-        )
-
-    # Load video context if available (generated from OCR snapshots)
-    context = load_video_context(video_id)
-    if context:
-        context_prefix = f"VIDEO CONTEXT (use this to understand the scene and translate more accurately):\n{context}\n\n"
-        base_prompt = context_prefix + base_prompt
-        logger.info("Using video context for translation: %s", context[:100])
+    base_prompt = _build_base_prompt(source_lang, target_lang, video_id)
 
     # Load accumulated translation context built from previously translated patches
     patch_context = load_translation_context(video_id)

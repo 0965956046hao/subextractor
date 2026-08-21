@@ -472,7 +472,7 @@ def dub_video_with_tts(
             "-shortest",
             str(out_path),
         ],
-        check=True, capture_output=True, timeout=600,
+        check=True, capture_output=True, timeout=7200,
     )
     if log_fn:
         log_fn("Đã tạo video lồng tiếng xong.")

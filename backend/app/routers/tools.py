@@ -217,6 +217,41 @@ async def compare_srt(video_id: str, request: Request):
     }
 
 
+# ── POST /api/srt/{video_id}/retranslate ──
+# Sau khi đối chiếu phát hiện các dòng chưa được dịch (giữ nguyên bản gốc),
+# endpoint này tự động gọi Gemini dịch lại chỉ những dòng đó và trả về SRT đã
+# vá. Body: { content: "<SRT đã dịch>", source_lang?, target_lang? }.
+
+@router.post("/api/srt/{video_id}/retranslate")
+async def retranslate_srt(video_id: str, request: Request):
+    from app.services.translation_service import retranslate_untranslated
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    content = body.get("content", "")
+    if not (content or "").strip():
+        raise HTTPException(400, "Missing translated SRT content")
+    source_lang = body.get("source_lang", "zh")
+    target_lang = body.get("target_lang", "vi")
+    try:
+        updated = retranslate_untranslated(
+            video_id,
+            content,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {
+        "video_id": video_id,
+        "content": updated,
+        "updated": updated != content,
+    }
+
+
 # ── PUT /api/srt/{video_id} ──
 
 @router.put("/api/srt/{video_id}")

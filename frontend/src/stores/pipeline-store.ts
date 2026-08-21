@@ -547,6 +547,9 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
     await sleep(1500);
     try {
       const r = await fetch(`/api/status/${jobId}`);
+      if (r.status === 404) {
+        return { status: "error", error: "Job không tồn tại (backend đã restart?)" };
+      }
       if (!r.ok) continue;
       const d = await r.json();
       onTick({ progress: d.progress ?? 0, logs: d.logs });
@@ -1351,7 +1354,7 @@ async function runPipeline(id: string, startStep = 4) {
         patch(id, { stage: "saving" });
         appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
         const srtRes = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
-        const srtText = await srtRes.text();
+        let srtText = await srtRes.text();
 
         // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
         // trong bản gốc mà bản dịch không phủ (dòng bị rơi mất) và dòng chưa
@@ -1380,6 +1383,29 @@ async function runPipeline(id: string, startStep = 4) {
             appendLog(id, `Cảnh báo: ${untranslated.length} dòng chưa được dịch (còn giữ nguyên bản gốc):`);
             for (const u of untranslated) {
               appendLog(id, `  #${u.index}: ${u.text}`);
+            }
+            // Tự động dịch lại các dòng chưa được dịch rồi dùng bản đã vá.
+            appendLog(id, "Tự động dịch lại các dòng chưa dịch...");
+            try {
+              const retRes = await fetch(`/api/srt/${videoId}/retranslate`, {
+                method: "POST",
+                headers: JSON_HEADERS,
+                body: JSON.stringify({
+                  content: srtText,
+                  source_lang: sourceLang,
+                  target_lang: translateTarget,
+                }),
+              });
+              const retData = await retRes.json();
+              if (!retRes.ok) throw new Error(retData.detail || "Dịch lại thất bại");
+              if (retData.updated && retData.content) {
+                srtText = retData.content;
+                appendLog(id, "Đã dịch lại xong các dòng chưa dịch.");
+              } else {
+                appendLog(id, "Không có dòng nào được cập nhật thêm.");
+              }
+            } catch (e) {
+              appendLog(id, `Dịch lại thất bại: ${e instanceof Error ? e.message : "lỗi"}`);
             }
           } else {
             appendLog(id, "Đã dịch hết — không còn dòng nào giữ nguyên bản gốc.");
