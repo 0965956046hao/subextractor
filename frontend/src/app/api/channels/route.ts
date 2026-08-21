@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import {
+  openBrowser,
+  closeBrowser,
+  loadCookies,
+  saveCookies,
+  USER_AGENT,
+} from "@/lib/douyin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +21,7 @@ interface Channel {
   id: string;
   url: string;
   name: string;
+  avatar_url: string;
   added_at: string;
 }
 
@@ -43,6 +51,71 @@ function extractName(url: string): string {
   }
 }
 
+async function scrapeAvatar(channelUrl: string): Promise<{ name: string; avatar: string }> {
+  let handle;
+  try {
+    handle = await openBrowser({ headless: true });
+  } catch {
+    return { name: "", avatar: "" };
+  }
+
+  let name = "";
+  let avatar = "";
+
+  try {
+    const page = await handle.browser.newPage();
+    if (!handle.persistent) await page.setUserAgent(USER_AGENT);
+    await loadCookies(page);
+
+    const profileReady = new Promise<void>((resolve) => {
+      let done = false;
+      page.on("response", async (resp) => {
+        if (done) return;
+        const u = resp.url();
+        if (!u.includes("/aweme/v1/web/user/profile/other/")) return;
+        try {
+          const data = await resp.json();
+          const user = data?.user;
+          if (!user) return;
+          if (user.nickname) name = user.nickname;
+          const avatarList = user?.avatar_medium?.url_list;
+          if (Array.isArray(avatarList) && avatarList.length > 0) {
+            avatar = avatarList[0];
+          }
+          done = true;
+          resolve();
+        } catch {
+          // skip
+        }
+      });
+    });
+
+    await page.goto(channelUrl, { waitUntil: "networkidle2", timeout: 45000 });
+    await Promise.race([profileReady, new Promise((r) => setTimeout(r, 15000))]);
+
+    // Fallback: try to get name from DOM if API didn't return it
+    if (!name) {
+      try {
+        name = await page.evaluate(() => {
+          const el = document.querySelector(
+            '[data-e2e="user-info"] .j5WZzJdp, .e6wsjNLL span, .QXuHv3I3',
+          );
+          return el?.textContent?.trim() || "";
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    await saveCookies(page);
+  } catch {
+    // ignore
+  }
+
+  await closeBrowser(handle).catch(() => {});
+  return { name, avatar };
+}
+
 export async function GET() {
   return NextResponse.json({ channels: loadChannels() });
 }
@@ -69,10 +142,14 @@ export async function POST(req: NextRequest) {
   if (channels.some((c) => c.url === url))
     return NextResponse.json({ detail: "URL đã tồn tại" }, { status: 409 });
 
+  // Scrape avatar + name from the channel page
+  const scraped = await scrapeAvatar(url);
+
   const ch: Channel = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     url,
-    name: body.name || extractName(url),
+    name: body.name || scraped.name || extractName(url),
+    avatar_url: scraped.avatar,
     added_at: new Date().toISOString(),
   };
   channels.push(ch);

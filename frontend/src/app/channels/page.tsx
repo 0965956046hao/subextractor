@@ -9,8 +9,8 @@ interface Channel {
   id: string;
   url: string;
   name: string;
+  avatar_url: string;
   added_at: string;
-  pinned?: boolean;
 }
 
 interface AwemeVideo {
@@ -350,13 +350,29 @@ export default function ChannelsPage() {
                           <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z" />
                         </svg>
                       </button>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[13px] font-medium text-ink truncate">
-                          {ch.name}
-                        </p>
-                        <p className="text-[11px] text-ink-light font-mono truncate">
-                          {ch.url}
-                        </p>
+                      <div className="flex-1 min-w-0 flex items-center gap-3">
+                        {ch.avatar_url ? (
+                          <img
+                            src={ch.avatar_url}
+                            alt=""
+                            className="w-10 h-10 rounded-full object-cover flex-shrink-0 bg-black/[0.04]"
+                          />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-black/[0.06] flex items-center justify-center flex-shrink-0">
+                            <svg className="w-5 h-5 text-ink-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                              <circle cx="12" cy="7" r="4" />
+                            </svg>
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium text-ink truncate">
+                            {ch.name}
+                          </p>
+                          <p className="text-[11px] text-ink-light font-mono truncate">
+                            {ch.url}
+                          </p>
+                        </div>
                       </div>
                       <button
                         onClick={() => handleScan(ch)}
