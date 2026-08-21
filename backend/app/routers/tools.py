@@ -638,7 +638,10 @@ async def translate_subtitles(video_id: str, request: Request):
         custom_srt = tr_dir / "input.srt"
         custom_srt.write_text(srt_content, encoding="utf-8")
     else:
-        _srt_path(video_id)
+        try:
+            _srt_path(video_id)
+        except FileNotFoundError:
+            raise HTTPException(404, "SRT gốc không tồn tại — cần chạy OCR/trích xuất phụ đề trước.")
 
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)

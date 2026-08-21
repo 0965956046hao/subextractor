@@ -26,6 +26,8 @@ export async function uploadVideo(
   form.append("file", file);
   const res = await api.post<{ video_id: string }>("/upload", form, {
     headers: { "Content-Type": "multipart/form-data" },
+    // File video lớn có thể mất hàng chục phút để upload → timeout 120 phút.
+    timeout: 120 * 60 * 1000,
     onUploadProgress: (e) => {
       if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
     },

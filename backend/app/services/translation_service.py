@@ -384,15 +384,33 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         if log_fn:
             log_fn(f"Dịch batch {bi + 1}/{total_batches} ({len(batch)} dòng: {batch_start + 1}–{min(batch_start + batch_size, len(entries))})...")
 
-        try:
-            response = _call_gemini(prompt, {
-                "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
-                "temperature": 0.3,
-            })
-            response_text = response.text.strip()
-        except Exception as e:
-            logger.error("Gemini API error: %s", e)
-            raise RuntimeError(f"Translation failed: {e}")
+        # Gemini occasionally returns an empty/None response for a batch (safety
+        # filter, transient hiccup). Retry a few times; if it still fails, keep the
+        # original text for that batch instead of aborting the whole translation.
+        response_text = None
+        last_err: Exception | str | None = None
+        for attempt in range(3):
+            try:
+                response = _call_gemini(prompt, {
+                    "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+                    "temperature": 0.3,
+                })
+                if response is not None and (response.text or "").strip():
+                    response_text = response.text.strip()
+                    break
+                last_err = "Gemini trả về phản hồi rỗng"
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                logger.warning("Gemini batch %d attempt %d failed: %s", bi + 1, attempt + 1, e)
+            if attempt < 2:
+                import time as _t
+                _t.sleep(2 + attempt * 2)
+        if not response_text:
+            logger.warning("Gemini batch %d failed after retries (%s); giữ nguyên bản gốc.", bi + 1, last_err)
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: dịch thất bại, giữ nguyên bản gốc.", level="warning")
+            translated_entries.extend(batch)
+            continue
 
         # Strip markdown code fences that Gemini sometimes wraps around SRT
         response_text = _clean_gemini_response(response_text)

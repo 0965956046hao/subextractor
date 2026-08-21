@@ -1354,6 +1354,9 @@ async function runPipeline(id: string, startStep = 4) {
         patch(id, { stage: "saving" });
         appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
         const srtRes = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+        if (!srtRes.ok) {
+          throw new Error("Không tải được bản dịch phụ đề (máy chủ trả lỗi). Vui lòng chạy lại bước dịch.");
+        }
         let srtText = await srtRes.text();
 
         // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
