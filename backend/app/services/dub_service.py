@@ -522,7 +522,39 @@ def dub_audio_only(
         progress_callback=progress_callback,
         log_fn=log_fn,
     )
-    return full_audio
+
+    out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+    if (
+        out_path.exists() and out_path.stat().st_size > 0
+        and out_path.stat().st_mtime >= full_audio.stat().st_mtime
+    ):
+        if log_fn:
+            log_fn("Đã có video lồng tiếng từ lần chạy trước — tái sử dụng (bỏ qua mux).")
+        return out_path
+    if log_fn:
+        log_fn("Mux audio lồng tiếng vào video (FFmpeg)...")
+    vw, vh = _get_video_resolution(str(video_path))
+    tw, th = target_dims_min1080(vw, vh)
+    if (tw, th) != (vw, vh) and log_fn:
+        log_fn(f"Nâng độ phân giải video: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-i", str(full_audio),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-vf", f"scale={tw}:{th}:flags=lanczos",
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+            "-c:a", "copy",
+            "-shortest",
+            str(out_path),
+        ],
+        check=True, capture_output=True, timeout=7200,
+    )
+    if log_fn:
+        log_fn("Đã tạo video lồng tiếng xong.")
+    return out_path
 
 
 def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):

@@ -824,6 +824,12 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
     await sleep(1500);
     try {
       const r = await fetch(`/api/status/${jobId}`);
+      if (r.status === 404) {
+        return {
+          status: "error",
+          error: "Job không tồn tại (backend đã restart?)",
+        };
+      }
       if (!r.ok) continue;
       const d = await r.json();
       onTick({ progress: d.progress ?? 0, logs: d.logs });
@@ -1477,7 +1483,10 @@ async function runPrep(id: string, startStep = 0) {
         if (audioUrl && videoUrl) {
           patch(id, { stage: "merging" });
           markStepStart(id, 1);
-          appendLog(id, "Phát hiện 2 file riêng (video + audio) → tải 2 file rồi gộp...");
+          appendLog(
+            id,
+            "Phát hiện 2 file riêng (video + audio) → tải 2 file rồi gộp...",
+          );
           const mr = await fetch("/api/video-merge", {
             method: "POST",
             headers: JSON_HEADERS,
@@ -1623,19 +1632,33 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
       headers: JSON_HEADERS,
     });
     const dedupData = await dedupRes.json();
-    if (!dedupRes.ok) throw new Error(dedupData.detail || "Gộp phụ đề trùng thất bại");
-    const changes: { index: number; merged_into: number; from: string; to: string }[] =
-      dedupData.changes ?? [];
+    if (!dedupRes.ok)
+      throw new Error(dedupData.detail || "Gộp phụ đề trùng thất bại");
+    const changes: {
+      index: number;
+      merged_into: number;
+      from: string;
+      to: string;
+    }[] = dedupData.changes ?? [];
     if (changes.length > 0) {
-      appendLog(id, `Đã gộp ${changes.length} dòng phụ đề trùng (nội dung giống dòng trước ≥80%):`);
+      appendLog(
+        id,
+        `Đã gộp ${changes.length} dòng phụ đề trùng (nội dung giống dòng trước ≥80%):`,
+      );
       for (const c of changes) {
-        appendLog(id, `  #${c.index} → gộp vào #${c.merged_into}: ${c.from}  →  ${c.to}`);
+        appendLog(
+          id,
+          `  #${c.index} → gộp vào #${c.merged_into}: ${c.from}  →  ${c.to}`,
+        );
       }
     } else {
       appendLog(id, "Không có dòng phụ đề trùng — nội dung hợp lệ.");
     }
   } catch (e) {
-    appendLog(id, `Bỏ qua kiểm tra trùng: ${e instanceof Error ? e.message : "lỗi"}`);
+    appendLog(
+      id,
+      `Bỏ qua kiểm tra trùng: ${e instanceof Error ? e.message : "lỗi"}`,
+    );
   }
 
   // 2) Timeline chồng lấn: cân chỉnh start/end để không dòng nào đè lên nhau.
@@ -1646,10 +1669,15 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
       headers: JSON_HEADERS,
     });
     const fixData = await fixRes.json();
-    if (!fixRes.ok) throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
-    const fixes: { index: number; from: string; to: string }[] = fixData.fixes ?? [];
+    if (!fixRes.ok)
+      throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
+    const fixes: { index: number; from: string; to: string }[] =
+      fixData.fixes ?? [];
     if (fixes.length > 0) {
-      appendLog(id, `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`);
+      appendLog(
+        id,
+        `Đã sửa ${fixes.length} dòng chồng lấn (cân chỉnh start/end):`,
+      );
       for (const f of fixes) {
         appendLog(id, `  #${f.index}: ${f.from}  →  ${f.to}`);
       }
@@ -1657,7 +1685,10 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
       appendLog(id, "Không phát hiện dòng nào chồng lấn — SRT hợp lệ.");
     }
   } catch (e) {
-    appendLog(id, `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`);
+    appendLog(
+      id,
+      `Bỏ qua tự động sửa overlap: ${e instanceof Error ? e.message : "lỗi"}`,
+    );
   }
 }
 
@@ -1709,13 +1740,20 @@ async function runPipeline(id: string, startStep = 4) {
     if (abortedPipelines.has(id)) return;
 
     // 3.5 Watermark region selection — before delogo + OCR
-    if (startStep <= 4 && cur.removeWatermarkEnabled && !cur.removeWatermarkRegion) {
+    if (
+      startStep <= 4 &&
+      cur.removeWatermarkEnabled &&
+      !cur.removeWatermarkRegion
+    ) {
       patch(id, { stage: "watermark_region", resumeStep: 4 });
       markStepStart(id, 4);
       appendLog(id, "Kéo vùng watermark cần xoá trên video...");
       const wmRegion = await waitForWatermarkRegion(id);
       patch(id, { removeWatermarkRegion: wmRegion });
-      appendLog(id, `Vùng watermark: x ${wmRegion.x1}–${wmRegion.x2} · y ${wmRegion.y1}–${wmRegion.y2}`);
+      appendLog(
+        id,
+        `Vùng watermark: x ${wmRegion.x1}–${wmRegion.x2} · y ${wmRegion.y1}–${wmRegion.y2}`,
+      );
     }
 
     // 3.6 Delogo (remove watermark) — before OCR
@@ -1734,7 +1772,10 @@ async function runPipeline(id: string, startStep = 4) {
         }
         appendLog(id, "Đã xoá watermark thành công.");
       } catch (e) {
-        appendLog(id, `Xoá watermark lỗi: ${e instanceof Error ? e.message : e} — tiếp tục với video gốc.`);
+        appendLog(
+          id,
+          `Xoá watermark lỗi: ${e instanceof Error ? e.message : e} — tiếp tục với video gốc.`,
+        );
       }
     }
 
@@ -1898,7 +1939,12 @@ async function runPipeline(id: string, startStep = 4) {
         const srtRes = await fetch(
           `/api/download/translated/${videoId}?lang=${translateTarget}`,
         );
-        const srtText = await srtRes.text();
+        if (!srtRes.ok) {
+          throw new Error(
+            "Không tải được bản dịch phụ đề (máy chủ trả lỗi). Vui lòng chạy lại bước dịch.",
+          );
+        }
+        let srtText = await srtRes.text();
 
         // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
         // trong bản gốc mà bản dịch không phủ (dòng bị rơi mất) và dòng chưa
@@ -1911,28 +1957,69 @@ async function runPipeline(id: string, startStep = 4) {
             body: JSON.stringify({ content: srtText }),
           });
           const cmpData = await cmpRes.json();
-          if (!cmpRes.ok) throw new Error(cmpData.detail || "Đối chiếu thất bại");
+          if (!cmpRes.ok)
+            throw new Error(cmpData.detail || "Đối chiếu thất bại");
           const missing: { from: string; to: string; duration: number }[] =
             cmpData.missing_ranges ?? [];
           if (missing.length > 0) {
-            appendLog(id, `Cảnh báo: ${missing.length} khoảng thời gian ở bản gốc không có trong bản dịch:`);
+            appendLog(
+              id,
+              `Cảnh báo: ${missing.length} khoảng thời gian ở bản gốc không có trong bản dịch:`,
+            );
             for (const g of missing) {
               appendLog(id, `  ${g.from} --> ${g.to} (${g.duration}s)`);
             }
           } else {
             appendLog(id, "Timeline bản dịch phủ đầy đủ file gốc.");
           }
-          const untranslated: { index: number; text: string }[] = cmpData.untranslated ?? [];
+          const untranslated: { index: number; text: string }[] =
+            cmpData.untranslated ?? [];
           if (untranslated.length > 0) {
-            appendLog(id, `Cảnh báo: ${untranslated.length} dòng chưa được dịch (còn giữ nguyên bản gốc):`);
+            appendLog(
+              id,
+              `Cảnh báo: ${untranslated.length} dòng chưa được dịch (còn giữ nguyên bản gốc):`,
+            );
             for (const u of untranslated) {
               appendLog(id, `  #${u.index}: ${u.text}`);
             }
+            // Tự động dịch lại các dòng chưa được dịch rồi dùng bản đã vá.
+            appendLog(id, "Tự động dịch lại các dòng chưa dịch...");
+            try {
+              const retRes = await fetch(`/api/srt/${videoId}/retranslate`, {
+                method: "POST",
+                headers: JSON_HEADERS,
+                body: JSON.stringify({
+                  content: srtText,
+                  source_lang: sourceLang,
+                  target_lang: translateTarget,
+                }),
+              });
+              const retData = await retRes.json();
+              if (!retRes.ok)
+                throw new Error(retData.detail || "Dịch lại thất bại");
+              if (retData.updated && retData.content) {
+                srtText = retData.content;
+                appendLog(id, "Đã dịch lại xong các dòng chưa dịch.");
+              } else {
+                appendLog(id, "Không có dòng nào được cập nhật thêm.");
+              }
+            } catch (e) {
+              appendLog(
+                id,
+                `Dịch lại thất bại: ${e instanceof Error ? e.message : "lỗi"}`,
+              );
+            }
           } else {
-            appendLog(id, "Đã dịch hết — không còn dòng nào giữ nguyên bản gốc.");
+            appendLog(
+              id,
+              "Đã dịch hết — không còn dòng nào giữ nguyên bản gốc.",
+            );
           }
         } catch (e) {
-          appendLog(id, `Bỏ qua đối chiếu bản gốc: ${e instanceof Error ? e.message : "lỗi"}`);
+          appendLog(
+            id,
+            `Bỏ qua đối chiếu bản gốc: ${e instanceof Error ? e.message : "lỗi"}`,
+          );
         }
 
         await fetch(`/api/srt/${videoId}`, {
@@ -1941,7 +2028,7 @@ async function runPipeline(id: string, startStep = 4) {
           body: JSON.stringify({ content: srtText }),
         });
 
-// Double-check #2: chạy trên SRT đã dịch — gộp dòng trùng + sửa overlap
+        // Double-check #2: chạy trên SRT đã dịch — gộp dòng trùng + sửa overlap
         // timeline (giống check đã chạy trên SRT gốc sau OCR). Chạy bằng code
         // (không tốn Gemini), xong mới tới bước kiểm tra timeline thủ công.
         await runSrtAutoChecks(id, videoId);
@@ -2049,7 +2136,7 @@ async function runPipeline(id: string, startStep = 4) {
           );
           // Multi-voice: phải chờ tạo xong voice_map.json rồi mới được lồng tiếng
           // (kể cả khi chạy lại/resume từ bước này mà voice_map chưa có).
-if (cur.multiVoice && engine === "capcut" && videoId) {
+          if (cur.multiVoice && engine === "capcut" && videoId) {
             await ensureVoiceMap(videoId, id, cur.translateTarget || "vi");
           }
           try {
