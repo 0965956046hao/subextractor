@@ -22,13 +22,17 @@ import {
   uploadVideo,
   getDownloadUrl,
   getDubbedDownloadUrl,
+  listYoutubeChannels,
   type PipelineHealth,
   type HealthCheckResult,
   type CapCutVoice,
   type VideoMeta,
   type WatermarkPreset,
+  type Region,
+  type YouTubeChannelInfo,
 } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
+import WatermarkRegionSelector from "@/components/WatermarkRegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
 import VoiceCheckModal from "@/components/VoiceCheckModal";
@@ -237,7 +241,7 @@ function pipelineElapsed(p: Pipeline, now: number): string {
   return fmtElapsed(end - p.startedAt);
 }
 
-export default function AutoPipeline() {
+export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const { t } = useI18n();
   const tr = makeT(t);
   const pipelines = usePipelineStore((s) => s.pipelines);
@@ -249,7 +253,7 @@ export default function AutoPipeline() {
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const importDone = usePipelineStore((s) => s.importDone);
 
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl || "");
   const [sourceType, setSourceType] = useState<"douyin" | "youtube" | "upload">(
     "douyin",
   );
@@ -279,7 +283,11 @@ export default function AutoPipeline() {
   const [useFalThumbnail, setUseFalThumbnail] = useState(false);
   const [useGptThumbnail, setUseGptThumbnail] = useState(false);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
+  const [ytChannels, setYtChannels] = useState<YouTubeChannelInfo[]>([]);
+  const [ytChannel, setYtChannel] = useState("");
   const [watermarkPreset, setWatermarkPreset] = useState("");
+  const [removeWmEnabled, setRemoveWmEnabled] = useState(false);
+  const [removeWmRegion, setRemoveWmRegion] = useState<Region | null>(null);
   const [checkSubs, setCheckSubs] = useState(false);
   const [checkVoice, setCheckVoice] = useState(false);
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
@@ -368,6 +376,20 @@ export default function AutoPipeline() {
         if (!mounted) return;
         setPresets(cfg.watermark_presets || []);
         setWatermarkPreset(cfg.active_watermark_preset || "");
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Load YouTube channels for the auto-upload selector.
+  useEffect(() => {
+    let mounted = true;
+    listYoutubeChannels()
+      .then((res) => {
+        if (!mounted) return;
+        setYtChannels(res.channels || []);
       })
       .catch(() => {});
     return () => {
@@ -569,9 +591,12 @@ export default function AutoPipeline() {
       autoFitSubs,
       watermarkOn,
       watermarkOn ? watermarkPreset : "",
+      removeWmEnabled,
+      removeWmRegion,
       checkSubs,
       checkVoice,
       autoUploadYoutube,
+      ytChannel,
       useFalThumbnail,
       useGptThumbnail,
       srcLang,
@@ -619,6 +644,8 @@ export default function AutoPipeline() {
       autoFit: autoFitSubs,
       watermark: watermarkOn,
       watermarkPreset: watermarkOn ? watermarkPreset : "",
+      removeWatermarkEnabled: removeWmEnabled,
+      removeWatermarkRegion: removeWmRegion,
       checkSubs,
       checkVoice,
       translateOn,
@@ -944,9 +971,9 @@ export default function AutoPipeline() {
                           className="px-4 py-2 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:text-ink transition-colors cursor-pointer"
                         >
                           {tr("pipeline.changeVideo")}
-                        </button>
-                      </div>
-                    </div>
+                    </button>
+                  </div>
+                </div>
                   ) : uploadError ? (
                     <div className="w-full rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-4">
                       <p className="text-[13px] font-medium text-red-700">
@@ -1445,6 +1472,62 @@ export default function AutoPipeline() {
                   )}
                 </div>
 
+                {/* ── Remove Watermark (delogo) ── */}
+                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                        {tr("pipeline.removeWatermark")}
+                      </p>
+                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                        {tr("pipeline.removeWatermarkHint")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (removeWmEnabled) {
+                          setRemoveWmEnabled(false);
+                          setRemoveWmRegion(null);
+                        } else {
+                          setRemoveWmEnabled(true);
+                        }
+                      }}
+                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
+                        removeWmEnabled ? "bg-red-500" : "bg-black/10"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
+                          removeWmEnabled ? "left-[22px]" : "left-0.5"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  {removeWmEnabled && (
+                    <p className="text-[11px] text-ink-light mt-2">
+                      {tr("pipeline.removeWatermarkWillPrompt")}
+                    </p>
+                  )}
+                  {removeWmRegion && (
+                    <div className="mt-3 flex items-center gap-3">
+                      <span className="text-[11px] text-green-600">
+                        ✓ {tr("pipeline.removeWatermarkActive")}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRemoveWmRegion(null);
+                          setRemoveWmEnabled(false);
+                        }}
+                        className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
+                      >
+                        {tr("pipeline.removeWatermarkClear")}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="mt-4 border-t border-black/[0.05] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -1575,6 +1658,33 @@ export default function AutoPipeline() {
                     </button>
                   </div>
                 </div>
+
+                {autoUploadYoutube && (
+                  <div className="mt-3 border-t border-black/[0.05] pt-3">
+                    <label className="flex items-center justify-between gap-3">
+                      <span className="text-[11px] text-ink-muted">
+                        {tr("pipeline.youtubeChannel")}
+                      </span>
+                      <select
+                        value={ytChannel}
+                        onChange={(e) => setYtChannel(e.target.value)}
+                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 max-w-[200px]"
+                      >
+                        <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
+                        {ytChannels.map((ch) => (
+                          <option key={ch.id} value={ch.id}>
+                            {ch.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {ytChannels.length === 0 && (
+                      <p className="text-[10px] text-ink-light mt-1.5">
+                        {tr("pipeline.youtubeChannelEmpty")}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -2334,6 +2444,7 @@ function DetailView({
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
+  const confirmWatermarkRegion = usePipelineStore((s) => s.confirmWatermarkRegion);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
@@ -2341,6 +2452,8 @@ function DetailView({
   const resolveVoiceCheck = usePipelineStore((s) => s.resolveVoiceCheck);
   const openVoiceCheck = usePipelineStore((s) => s.openVoiceCheck);
   const closeVoiceCheck = usePipelineStore((s) => s.closeVoiceCheck);
+  const updatePipeline = usePipelineStore((s) => s.updatePipeline);
+  const clearRemoveWmRegion = (id: string) => updatePipeline(id, { removeWatermarkRegion: null });
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -2437,10 +2550,45 @@ function DetailView({
 
         {p.stage === "region" && p.videoId && (
           <div className="mb-5">
+            {p.removeWatermarkRegion && (
+              <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200">
+                <p className="text-[11px] font-semibold text-red-700 mb-2">
+                  {tr("pipeline.removeWatermark")} — {tr("pipeline.removeWatermarkActive")}
+                </p>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-green-600">
+                    ✓ {tr("pipeline.removeWatermarkRegionSet")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => clearRemoveWmRegion(p.id)}
+                    className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
+                  >
+                    {tr("pipeline.removeWatermarkClear")}
+                  </button>
+                </div>
+              </div>
+            )}
             <RegionSelector
               videoId={p.videoId}
               onConfirmed={(r) => confirmRegion(p.id, r)}
             />
+          </div>
+        )}
+
+        {p.stage === "watermark_region" && p.videoId && (
+          <div className="mb-5">
+            <div className="p-4 bg-red-50 rounded-lg border border-red-200">
+              <p className="text-[12px] font-semibold text-red-700 mb-3">
+                {tr("pipeline.removeWatermark")} — {tr("pipeline.removeWatermarkDrawHint")}
+              </p>
+              <WatermarkRegionSelector
+                videoUrl={getVideoUrl(p.videoId)}
+                onRegion={(r) => {
+                  if (r) confirmWatermarkRegion(p.id, r);
+                }}
+              />
+            </div>
           </div>
         )}
 

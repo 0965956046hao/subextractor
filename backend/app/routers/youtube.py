@@ -66,6 +66,7 @@ class UploadRequest(BaseModel):
     meta_path: str
     thumbnail_path: str = ""
     privacy: str = "private"
+    channel_id: str = ""
 
 
 @router.post("/api/youtube/pick-folder")
@@ -341,9 +342,22 @@ def _process_thumbnail(thumb_path: Path) -> Path:
     return out_path
 
 
-def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privacy: str) -> dict:
+def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privacy: str, channel_id: str = "") -> dict:
     """Start YouTube upload in background, return job_id for polling."""
-    if not CLIENT_SECRETS_PATH.exists():
+    from app.routers.config_router import get_youtube_channel_secrets, _yt_channel
+
+    # Resolve secrets and token paths based on channel_id
+    if channel_id:
+        ch_secrets, ch_token = get_youtube_channel_secrets(channel_id)
+        if not ch_secrets.exists():
+            raise HTTPException(400, f"client_secrets.json not found for channel '{channel_id}'. Please save credentials first.")
+        secrets_path = ch_secrets
+        token_path = ch_token
+    else:
+        secrets_path = CLIENT_SECRETS_PATH
+        token_path = REQUEST_TOKEN_PATH
+
+    if not secrets_path.exists():
         raise HTTPException(400, "client_secrets.json not found. Please configure YouTube API credentials first.")
     if not _uploader_bin().exists():
         raise HTTPException(500, f"youtubeuploader binary not found at {_uploader_bin()}")
@@ -362,6 +376,7 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
         "error": None,
         "video_path": str(video_path),
         "meta_path": str(meta_path),
+        "channel_id": channel_id,
     }
     _youtube_jobs[job_id] = job
 
@@ -388,11 +403,18 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
     if "thumb" in locals() and thumb.exists() and thumb.name.endswith("_1280x720.png"):
         temp_thumb = thumb
 
+    # Use channel-specific directory if channel_id provided
+    if channel_id:
+        from app.routers.config_router import _yt_channel_dir
+        upload_cwd = str(_yt_channel_dir(channel_id))
+    else:
+        upload_cwd = str(YOUTUBE_UPLOADER_DIR)
+
     def _run():
         import re
         try:
             proc = subprocess.Popen(
-                cmd, cwd=str(YOUTUBE_UPLOADER_DIR),
+                cmd, cwd=upload_cwd,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
             )
             buffer = b""
@@ -443,11 +465,11 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
 @router.post("/api/youtube/upload")
 async def upload_to_youtube(body: UploadRequest):
     """Start YouTube upload in background, return job_id for polling."""
-    return _start_upload(Path(body.video_path), Path(body.meta_path), body.thumbnail_path, body.privacy)
+    return _start_upload(Path(body.video_path), Path(body.meta_path), body.thumbnail_path, body.privacy, body.channel_id)
 
 
 @router.post("/api/youtube/upload/{video_id}")
-async def upload_video_by_id(video_id: str):
+async def upload_video_by_id(video_id: str, channel_id: str = ""):
     """Upload the hardcoded video with the generated meta to YouTube."""
     # Resolve video path
     hd_dir = settings.temp_dir / "hardcoded" / video_id
@@ -469,7 +491,7 @@ async def upload_video_by_id(video_id: str):
     if thumb_file.exists():
         thumbnail_path = str(thumb_file)
 
-    return _start_upload(video_path, meta_path, thumbnail_path, "private")
+    return _start_upload(video_path, meta_path, thumbnail_path, "private", channel_id)
 
 
 @router.get("/api/youtube/upload/{job_id}")

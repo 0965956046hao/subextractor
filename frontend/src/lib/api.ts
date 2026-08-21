@@ -311,6 +311,17 @@ export async function hardcodeSubtitles(videoId: string): Promise<JobStatus> {
   return res.data;
 }
 
+export async function delogoVideo(
+  videoId: string,
+  region: Region,
+): Promise<{ status: string; path: string }> {
+  const res = await api.post<{ status: string; path: string }>(
+    `/delogo/${videoId}`,
+    { region },
+  );
+  return res.data;
+}
+
 export function getHardcodedDownloadUrl(videoId: string): string {
   return `/api/download/hardcoded/${videoId}`;
 }
@@ -767,5 +778,70 @@ export async function saveYoutubeSecrets(
   content: string,
 ): Promise<{ status: string; path?: string }> {
   const res = await api.post("/youtube/config", { content });
+  return res.data;
+}
+
+// ── YouTube channels (multi-account) ──
+
+export interface YouTubeChannelInfo {
+  id: string;
+  name: string;
+  has_client_secrets: boolean;
+  has_request_token: boolean;
+  created_at: string;
+}
+
+export interface YouTubeChannelDetail {
+  id: string;
+  name: string;
+  client_secrets: string;
+  has_client_secrets: boolean;
+  has_request_token: boolean;
+}
+
+export async function listYoutubeChannels(): Promise<{
+  channels: YouTubeChannelInfo[];
+}> {
+  const res = await api.get("/config/youtube-channels");
+  return res.data;
+}
+
+export async function getYoutubeChannelDetail(
+  id: string,
+): Promise<YouTubeChannelDetail> {
+  const res = await api.get(`/config/youtube-channels/${id}`);
+  return res.data;
+}
+
+export async function createYoutubeChannel(
+  name: string,
+  client_secrets: string,
+): Promise<{ status: string; channel_id: string; name: string }> {
+  const res = await api.post("/config/youtube-channels", {
+    name,
+    client_secrets,
+  });
+  return res.data;
+}
+
+export async function updateYoutubeChannel(
+  id: string,
+  data: { name?: string; client_secrets?: string },
+): Promise<{ status: string }> {
+  const res = await api.put(`/config/youtube-channels/${id}`, data);
+  return res.data;
+}
+
+export async function deleteYoutubeChannel(
+  id: string,
+): Promise<{ status: string; removed: boolean }> {
+  const res = await api.delete(`/config/youtube-channels/${id}`);
+  return res.data;
+}
+
+export async function activateYoutubeChannel(
+  id: string,
+): Promise<{ status: string; active_youtube_channel: string }> {
+  const res = await api.post(`/config/youtube-channels/${id}/activate`);
   return res.data;
 }

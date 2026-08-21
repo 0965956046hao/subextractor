@@ -64,7 +64,9 @@ export default function LibraryPage() {
       setVideos(await listVideos());
     } catch (err: unknown) {
       if (!opts?.silent)
-        setError(err instanceof Error ? err.message : t("library.loadError" as string));
+        setError(
+          err instanceof Error ? err.message : t("library.loadError" as string),
+        );
     }
   }, []);
 
@@ -91,7 +93,9 @@ export default function LibraryPage() {
       await deleteVideo(id);
       setVideos((prev) => prev?.filter((v) => v.video_id !== id) ?? prev);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("library.deleteError" as string));
+      setError(
+        err instanceof Error ? err.message : t("library.deleteError" as string),
+      );
     }
   }, []);
 
@@ -101,7 +105,11 @@ export default function LibraryPage() {
         await cancelJob(jobId);
         refreshActive();
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : t("library.cancelError" as string));
+        setError(
+          err instanceof Error
+            ? err.message
+            : t("library.cancelError" as string),
+        );
       }
     },
     [refreshActive],
@@ -146,7 +154,9 @@ export default function LibraryPage() {
             href="/extract"
             className="btn-island-primary group !px-5 !py-2 text-[13px]"
           >
-            <span className="tracking-tight">{t("library.newExtractor" as string)}</span>
+            <span className="tracking-tight">
+              {t("library.newExtractor" as string)}
+            </span>
             <span className="btn-island-icon !w-7 !h-7">
               <svg
                 className="w-3.5 h-3.5"
@@ -166,7 +176,9 @@ export default function LibraryPage() {
             href="/auto"
             className="btn-island-primary group !px-5 !py-2 text-[13px]"
           >
-            <span className="tracking-tight">{t("library.autoPipeline" as string)}</span>
+            <span className="tracking-tight">
+              {t("library.autoPipeline" as string)}
+            </span>
             <span className="btn-island-icon !w-7 !h-7">
               <svg
                 className="w-3.5 h-3.5"
@@ -178,6 +190,28 @@ export default function LibraryPage() {
                 strokeLinejoin="round"
               >
                 <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+              </svg>
+            </span>
+          </Link>
+
+          <Link
+            href="/channels"
+            className="btn-island-primary group !px-5 !py-2 text-[13px]"
+          >
+            <span className="tracking-tight">{t("library.channels")}</span>
+            <span className="btn-island-icon !w-7 !h-7">
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <path d="M8 21h8" />
+                <path d="M12 17v4" />
               </svg>
             </span>
           </Link>
@@ -206,7 +240,9 @@ export default function LibraryPage() {
       {/* ── Hero ── */}
       <section className="pt-20 sm:pt-28 md:pt-36 pb-16 sm:pb-20 text-center">
         <AnimatedBlock delay={0}>
-          <div className="eyebrow mx-auto mb-6 w-max">{t("library.eyebrow" as string)}</div>
+          <div className="eyebrow mx-auto mb-6 w-max">
+            {t("library.eyebrow" as string)}
+          </div>
         </AnimatedBlock>
         <AnimatedBlock delay={100}>
           <h1 className="text-[clamp(2.6rem,8vw,6.5rem)] font-semibold tracking-tight leading-[0.92] text-balance text-ink">
@@ -228,7 +264,9 @@ export default function LibraryPage() {
               href="/extract"
               className="btn-island-primary group text-[15px]"
             >
-              <span className="tracking-tight">{t("library.startNewExtractor" as string)}</span>
+              <span className="tracking-tight">
+                {t("library.startNewExtractor" as string)}
+              </span>
               <span className="btn-island-icon">
                 <svg
                   className="w-4 h-4"
@@ -253,16 +291,24 @@ export default function LibraryPage() {
                 <span className="font-semibold text-ink tabular-nums">
                   {stats.count}
                 </span>
-                <span className="text-ink-light"> {t("library.videos" as string)}</span>
+                <span className="text-ink-light">
+                  {" "}
+                  {t("library.videos" as string)}
+                </span>
               </div>
               <div className="tag !px-4 !py-2">
                 <span className="font-semibold text-ink tabular-nums">
                   {stats.totalEntries}
                 </span>
-                <span className="text-ink-light"> {t("library.subtitleLines" as string)}</span>
+                <span className="text-ink-light">
+                  {" "}
+                  {t("library.subtitleLines" as string)}
+                </span>
               </div>
               <div className="tag !px-4 !py-2">
-                <span className="text-ink-light">{t("library.latest" as string)}&nbsp;</span>
+                <span className="text-ink-light">
+                  {t("library.latest" as string)}&nbsp;
+                </span>
                 <span className="text-ink">{formatDate(stats.newest)}</span>
               </div>
             </div>
@@ -293,7 +339,9 @@ export default function LibraryPage() {
                   onClick={() => load()}
                   className="btn-island-secondary group mt-5 text-sm"
                 >
-                  <span className="tracking-tight">{t("library.tryAgain" as string)}</span>
+                  <span className="tracking-tight">
+                    {t("library.tryAgain" as string)}
+                  </span>
                   <span className="btn-island-icon">
                     <svg
                       className="w-4 h-4"
@@ -602,7 +650,9 @@ function JobStatusBlock({
       <div className="flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90">
           <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-          {video.status === "queued" ? t("library.statusQueued" as string) : t("library.statusProcessing" as string)}
+          {video.status === "queued"
+            ? t("library.statusQueued" as string)
+            : t("library.statusProcessing" as string)}
         </span>
         <span className="text-[11px] font-mono text-blue-600 tabular-nums">
           {pct}%
@@ -788,7 +838,11 @@ function VideoRow({
                 if (confirming) onDelete(video.video_id);
                 else setConfirming(true);
               }}
-              aria-label={confirming ? t("library.confirmDelete" as string) : t("library.delete" as string)}
+              aria-label={
+                confirming
+                  ? t("library.confirmDelete" as string)
+                  : t("library.delete" as string)
+              }
               className={`flex items-center justify-center rounded-full transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
@@ -952,7 +1006,11 @@ function VideoCard({
                 if (confirming) onDelete(video.video_id);
                 else setConfirming(true);
               }}
-              aria-label={confirming ? t("library.confirmDelete" as string) : t("library.delete" as string)}
+              aria-label={
+                confirming
+                  ? t("library.confirmDelete" as string)
+                  : t("library.delete" as string)
+              }
               className={`absolute top-3 right-3 z-10 flex items-center gap-1.5 rounded-full backdrop-blur-sm transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
@@ -1024,7 +1082,9 @@ function VideoCard({
                       <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
                       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
                     </svg>
-                    {t("library.linesCount" as string, { count: video.entries })}
+                    {t("library.linesCount" as string, {
+                      count: video.entries,
+                    })}
                   </span>
                   <span className="text-[11px] text-ink-light tabular-nums">
                     {formatDate(video.created_at)}

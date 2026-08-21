@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response
 from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
-from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete
+from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _delogo_video_path
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 
@@ -576,6 +576,76 @@ def _render_preview_image(
     if not ok_jpg:
         raise HTTPException(500, "Không encode được JPEG")
     return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+# ── POST /api/delogo/{video_id} ──
+
+@router.post("/api/delogo/{video_id}")
+async def delogo_video(video_id: str, request: Request):
+    """Apply FFmpeg delogo filter to remove watermark from video."""
+    import subprocess
+
+    video_path = _video_path(video_id)
+
+    # Parse region from body: { region: { x1, y1, x2, y2 } } (normalized 0-1)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    region = body.get("region")
+    if not region or not all(
+        isinstance(region.get(k), (int, float))
+        for k in ("x1", "y1", "x2", "y2")
+    ):
+        raise HTTPException(400, "Invalid region: provide { x1, y1, x2, y2 } normalized 0-1")
+
+    # Get video resolution
+    try:
+        probe = subprocess.check_output(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=s=x:p=0", str(video_path)],
+            timeout=10,
+        )
+        w, h = map(int, probe.decode().strip().split("x"))
+    except Exception:
+        raise HTTPException(500, "Cannot probe video resolution")
+
+    # Convert normalized → pixel coordinates
+    x = int(float(region["x1"]) * w)
+    y = int(float(region["y1"]) * h)
+    rw = int((float(region["x2"]) - float(region["x1"])) * w)
+    rh = int((float(region["y2"]) - float(region["y1"])) * h)
+
+    # Clamp to valid range
+    x = max(0, min(x, w - 1))
+    y = max(0, min(y, h - 1))
+    rw = max(1, min(rw, w - x))
+    rh = max(1, min(rh, h - y))
+
+    output = _delogo_video_path(video_id)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-vf", f"delogo=x={x}:y={y}:w={rw}:h={rh}",
+                "-c:a", "copy",
+                "-movflags", "+faststart",
+                str(output),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=600,
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(500, f"FFmpeg delogo failed: {e.stderr.decode()[:500]}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "FFmpeg delogo timed out")
+
+    return {"status": "ok", "path": str(output)}
 
 
 # ── POST /api/hardcode/{video_id} ──

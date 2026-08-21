@@ -403,6 +403,183 @@ async def delete_preset_logo(preset_id: str):
     raise HTTPException(404, "Preset not found")
 
 
+# ── YouTube channels (multi-account) ──
+
+YOUTUBE_CHANNELS_DIR = settings.temp_dir / "youtube_channels"
+
+
+class YouTubeChannelCreate(BaseModel):
+    name: str = ""
+    client_secrets: str = ""
+
+
+class YouTubeChannelUpdate(BaseModel):
+    name: str | None = None
+    client_secrets: str | None = None
+
+
+def _yt_channel_dir(channel_id: str) -> Path:
+    return YOUTUBE_CHANNELS_DIR / channel_id
+
+
+def _yt_channels(cfg: dict | None = None) -> list[dict]:
+    cfg = cfg or _read_config()
+    return cfg.get("youtube_channels") or []
+
+
+def _yt_channel(channel_id: str, cfg: dict | None = None) -> dict | None:
+    return next((c for c in _yt_channels(cfg) if c["id"] == channel_id), None)
+
+
+def _yt_channel_token_path(channel_id: str) -> Path:
+    return _yt_channel_dir(channel_id) / "request.token"
+
+
+def _yt_channel_secrets_path(channel_id: str) -> Path:
+    return _yt_channel_dir(channel_id) / "client_secrets.json"
+
+
+@router.get("/api/config/youtube-channels")
+async def list_youtube_channels():
+    """List all saved YouTube channel credentials."""
+    cfg = _read_config()
+    channels = _yt_channels(cfg)
+    result = []
+    for ch in channels:
+        token_path = _yt_channel_token_path(ch["id"])
+        result.append({
+            "id": ch["id"],
+            "name": ch.get("name") or "YouTube Channel",
+            "has_client_secrets": bool(ch.get("client_secrets")),
+            "has_request_token": token_path.exists(),
+            "created_at": ch.get("created_at", ""),
+        })
+    return {"channels": result}
+
+
+@router.post("/api/config/youtube-channels")
+async def create_youtube_channel(body: YouTubeChannelCreate):
+    """Create a new YouTube channel credential entry."""
+    cfg = _read_config()
+    channels = cfg.setdefault("youtube_channels", [])
+
+    channel_id = f"yt_{uuid.uuid4().hex[:8]}"
+    name = (body.name or "").strip() or f"Channel {len(channels) + 1}"
+
+    entry = {
+        "id": channel_id,
+        "name": name,
+        "client_secrets": (body.client_secrets or "").strip(),
+        "created_at": uuid.uuid4().hex[:4],  # short tag
+    }
+    channels.append(entry)
+
+    # Write client_secrets.json to channel directory if provided
+    ch_dir = _yt_channel_dir(channel_id)
+    ch_dir.mkdir(parents=True, exist_ok=True)
+    if entry["client_secrets"]:
+        try:
+            json.loads(entry["client_secrets"])
+            (ch_dir / "client_secrets.json").write_text(
+                entry["client_secrets"], encoding="utf-8"
+            )
+        except json.JSONDecodeError:
+            pass
+
+    _write_config(cfg)
+    return {"status": "ok", "channel_id": channel_id, "name": name}
+
+
+@router.put("/api/config/youtube-channels/{channel_id}")
+async def update_youtube_channel(channel_id: str, body: YouTubeChannelUpdate):
+    """Update a YouTube channel's name and/or client_secrets."""
+    cfg = _read_config()
+    ch = _yt_channel(channel_id, cfg)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+
+    if body.name is not None:
+        ch["name"] = body.name.strip() or ch.get("name") or "YouTube Channel"
+
+    if body.client_secrets is not None:
+        content = body.client_secrets.strip()
+        ch["client_secrets"] = content
+        ch_dir = _yt_channel_dir(channel_id)
+        ch_dir.mkdir(parents=True, exist_ok=True)
+        if content:
+            try:
+                json.loads(content)
+                (ch_dir / "client_secrets.json").write_text(
+                    content, encoding="utf-8"
+                )
+            except json.JSONDecodeError:
+                pass
+        else:
+            (ch_dir / "client_secrets.json").unlink(missing_ok=True)
+
+    _write_config(cfg)
+    return {"status": "ok"}
+
+
+@router.delete("/api/config/youtube-channels/{channel_id}")
+async def delete_youtube_channel(channel_id: str):
+    """Delete a YouTube channel and its files."""
+    cfg = _read_config()
+    channels = cfg.get("youtube_channels") or []
+    ch = next((c for c in channels if c["id"] == channel_id), None)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+
+    # Remove channel directory
+    ch_dir = _yt_channel_dir(channel_id)
+    if ch_dir.exists():
+        shutil.rmtree(ch_dir, ignore_errors=True)
+
+    cfg["youtube_channels"] = [c for c in channels if c["id"] != channel_id]
+    _write_config(cfg)
+    return {"status": "ok", "removed": True}
+
+
+@router.post("/api/config/youtube-channels/{channel_id}/activate")
+async def activate_youtube_channel(channel_id: str):
+    """Set a channel as active — copies its secrets to the default youtubeuploader dir."""
+    cfg = _read_config()
+    ch = _yt_channel(channel_id, cfg)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+    cfg["active_youtube_channel"] = channel_id
+    _write_config(cfg)
+    return {"status": "ok", "active_youtube_channel": channel_id}
+
+
+@router.get("/api/config/youtube-channels/{channel_id}")
+async def get_youtube_channel_detail(channel_id: str):
+    """Get a single channel's details including client_secrets content."""
+    cfg = _read_config()
+    ch = _yt_channel(channel_id, cfg)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+    token_path = _yt_channel_token_path(channel_id)
+    return {
+        "id": ch["id"],
+        "name": ch.get("name") or "YouTube Channel",
+        "client_secrets": ch.get("client_secrets") or "",
+        "has_client_secrets": bool(ch.get("client_secrets")),
+        "has_request_token": token_path.exists(),
+    }
+
+
+def get_active_youtube_channel() -> str | None:
+    """Return the active YouTube channel ID, or None."""
+    cfg = _read_config()
+    return cfg.get("active_youtube_channel")
+
+
+def get_youtube_channel_secrets(channel_id: str) -> tuple[Path, Path]:
+    """Return (secrets_path, token_path) for a given channel."""
+    return _yt_channel_secrets_path(channel_id), _yt_channel_token_path(channel_id)
+
+
 # Legacy single-logo endpoints — operate on the active preset (backward compat).
 @router.post("/api/config/logo")
 async def upload_logo(file: UploadFile = File(...)):

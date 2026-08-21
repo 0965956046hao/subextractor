@@ -32,6 +32,11 @@ def _merge_audio_path(video_id: str) -> Path | None:
     return p if p.exists() else None
 
 
+def _delogo_video_path(video_id: str) -> Path:
+    """Path for the delogo (watermark-removed) video copy."""
+    return settings.temp_dir / "videos" / video_id / "delogo.mp4"
+
+
 def _video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():

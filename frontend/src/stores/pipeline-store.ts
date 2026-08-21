@@ -59,6 +59,7 @@ export type Stage =
   | "resolving"
   | "merging"
   | "region"
+  | "watermark_region"
   | "subtitle_preview"
   | "processing"
   | "context"
@@ -147,7 +148,10 @@ export interface Pipeline {
   useFalThumbnail: boolean;
   useGptThumbnail: boolean;
   autoUploadYoutube: boolean;
+  youtubeChannel: string;
   watermarkPreset: string;
+  removeWatermarkEnabled: boolean;
+  removeWatermarkRegion: Region | null;
   checkSubs: boolean;
   checkVoice: boolean;
   timelineCheck: TimelineCheck | null;
@@ -198,9 +202,12 @@ interface PipelineState {
     autoFit?: boolean,
     watermark?: boolean,
     watermarkPreset?: string,
+    removeWatermarkEnabled?: boolean,
+    removeWatermarkRegion?: Region | null,
     checkSubs?: boolean,
     checkVoice?: boolean,
     autoUploadYoutube?: boolean,
+    youtubeChannel?: string,
     useFalThumbnail?: boolean,
     useGptThumbnail?: boolean,
     srcLang?: string,
@@ -217,8 +224,11 @@ interface PipelineState {
     autoFit?: boolean;
     watermark?: boolean;
     watermarkPreset?: string;
+    removeWatermarkEnabled?: boolean;
+    removeWatermarkRegion?: Region | null;
     checkSubs?: boolean;
     checkVoice?: boolean;
+    youtubeChannel?: string;
     useFalThumbnail?: boolean;
     useGptThumbnail?: boolean;
     translateOn?: boolean;
@@ -241,6 +251,7 @@ interface PipelineState {
   resolveVoiceCheck: (id: string, action: string) => void;
   openVoiceCheck: (id: string) => void;
   closeVoiceCheck: (id: string) => void;
+  confirmWatermarkRegion: (id: string, region: Region) => void;
   restorePaused: () => void;
 }
 
@@ -256,9 +267,12 @@ function newPipeline(
   autoFit = false,
   watermark = false,
   watermarkPreset = "",
+  removeWatermarkEnabled = false,
+  removeWatermarkRegion: Region | null = null,
   checkSubs = false,
   checkVoice = false,
   autoUploadYoutube = false,
+  youtubeChannel = "",
   useFalThumbnail = true,
   useGptThumbnail = false,
   srcLang = "",
@@ -311,6 +325,8 @@ function newPipeline(
     autoFit,
     watermark,
     watermarkPreset,
+    removeWatermarkEnabled,
+    removeWatermarkRegion: null,
     checkSubs,
     checkVoice,
     timelineCheck: null,
@@ -319,6 +335,7 @@ function newPipeline(
     useFalThumbnail,
     useGptThumbnail,
     autoUploadYoutube,
+    youtubeChannel,
   };
 }
 
@@ -347,9 +364,12 @@ export const usePipelineStore = create<PipelineState>()(
         autoFit = true,
         watermark = false,
         watermarkPreset = "",
+        removeWatermarkEnabled = false,
+        removeWatermarkRegion = null,
         checkSubs = false,
         checkVoice = false,
         autoUploadYoutube = false,
+        youtubeChannel = "",
         useFalThumbnail = true,
         useGptThumbnail = false,
         srcLang = "",
@@ -369,9 +389,12 @@ export const usePipelineStore = create<PipelineState>()(
               autoFit,
               watermark,
               watermarkPreset,
+              removeWatermarkEnabled,
+              removeWatermarkRegion,
               checkSubs,
               checkVoice,
               autoUploadYoutube,
+              youtubeChannel,
               useFalThumbnail,
               useGptThumbnail,
               srcLang,
@@ -395,9 +418,12 @@ export const usePipelineStore = create<PipelineState>()(
           input.autoFit ?? true,
           input.watermark ?? false,
           input.watermarkPreset ?? "",
+          input.removeWatermarkEnabled ?? false,
+          input.removeWatermarkRegion ?? null,
           input.checkSubs ?? false,
           input.checkVoice ?? false,
           false,
+          input.youtubeChannel ?? "",
           input.useFalThumbnail ?? true,
           input.useGptThumbnail ?? false,
           input.srcLang ?? "zh",
@@ -593,6 +619,18 @@ export const usePipelineStore = create<PipelineState>()(
           enqueue(id, s.resumeStep ?? 4);
         }
       },
+      confirmWatermarkRegion: (id, region) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        set((st) => ({
+          pipelines: st.pipelines.map((p) =>
+            p.id === id
+              ? { ...p, removeWatermarkRegion: region, stage: "processing" }
+              : p,
+          ),
+        }));
+        confirmWatermarkRegionAction(id, region);
+      },
       cancelPipeline: async (id) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
@@ -601,6 +639,7 @@ export const usePipelineStore = create<PipelineState>()(
         set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
         rejectRegion(id);
         rejectSubtitleStyle(id);
+        rejectWatermarkRegion(id);
         rejectTimelineCheck(id);
         if (videoId) {
           try {
@@ -1002,6 +1041,10 @@ const voiceCheckWaiters = new Map<
   string,
   { resolve: (action: string) => void }
 >();
+const watermarkRegionWaiters = new Map<
+  string,
+  { resolve: (r: Region) => void; reject: () => void }
+>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -1027,6 +1070,28 @@ function rejectSubtitleStyle(id: string) {
   const w = subtitleStyleWaiters.get(id);
   if (w) {
     subtitleStyleWaiters.delete(id);
+    w.reject();
+  }
+}
+
+function waitForWatermarkRegion(id: string): Promise<Region> {
+  return new Promise<Region>((resolve, reject) => {
+    watermarkRegionWaiters.set(id, { resolve, reject });
+  });
+}
+
+function confirmWatermarkRegionAction(id: string, region: Region) {
+  const w = watermarkRegionWaiters.get(id);
+  if (w) {
+    watermarkRegionWaiters.delete(id);
+    w.resolve(region);
+  }
+}
+
+function rejectWatermarkRegion(id: string) {
+  const w = watermarkRegionWaiters.get(id);
+  if (w) {
+    watermarkRegionWaiters.delete(id);
     w.reject();
   }
 }
@@ -1643,6 +1708,36 @@ async function runPipeline(id: string, startStep = 4) {
   try {
     if (abortedPipelines.has(id)) return;
 
+    // 3.5 Watermark region selection — before delogo + OCR
+    if (startStep <= 4 && cur.removeWatermarkEnabled && !cur.removeWatermarkRegion) {
+      patch(id, { stage: "watermark_region", resumeStep: 4 });
+      markStepStart(id, 4);
+      appendLog(id, "Kéo vùng watermark cần xoá trên video...");
+      const wmRegion = await waitForWatermarkRegion(id);
+      patch(id, { removeWatermarkRegion: wmRegion });
+      appendLog(id, `Vùng watermark: x ${wmRegion.x1}–${wmRegion.x2} · y ${wmRegion.y1}–${wmRegion.y2}`);
+    }
+
+    // 3.6 Delogo (remove watermark) — before OCR
+    if (startStep <= 4 && cur.removeWatermarkRegion) {
+      patch(id, { stage: "processing" });
+      appendLog(id, "Đang xoá watermark khỏi video...");
+      try {
+        const delogoRes = await fetch(`/api/delogo/${videoId}`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ region: cur.removeWatermarkRegion }),
+        });
+        if (!delogoRes.ok) {
+          const err = await delogoRes.json().catch(() => ({}));
+          throw new Error(err.detail || "Xoá watermark thất bại");
+        }
+        appendLog(id, "Đã xoá watermark thành công.");
+      } catch (e) {
+        appendLog(id, `Xoá watermark lỗi: ${e instanceof Error ? e.message : e} — tiếp tục với video gốc.`);
+      }
+    }
+
     // 4. OCR
     if (startStep <= 4) {
       if (!region) {
@@ -2176,9 +2271,11 @@ if (cur.multiVoice && engine === "capcut" && videoId) {
         markStepStart(id, 11);
         appendLog(id, "Upload YouTube (kèm meta)...");
         try {
-          const ur = await fetch(`/api/youtube/upload/${videoId}`, {
-            method: "POST",
-          });
+          const channelId = cur.youtubeChannel || "";
+          const ur = await fetch(
+            `/api/youtube/upload/${videoId}${channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ""}`,
+            { method: "POST" },
+          );
           const ud = await ur.json();
           if (ur.ok && ud.job_id) {
             const us = await pollYoutubeUpload(ud.job_id, tick(11));

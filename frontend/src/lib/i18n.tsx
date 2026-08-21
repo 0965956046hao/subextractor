@@ -140,21 +140,34 @@ const dictionaries = {
 
     "settings.youtube.title": "5. YouTube upload",
     "settings.youtube.desc":
-      "Paste the contents of the client_secrets.json file to upload videos to YouTube.",
+      "Manage YouTube channel credentials. Add multiple channels and paste each channel's client_secrets.json.",
     "settings.youtube.howto": "How to get one:",
     "settings.youtube.console": "Google Developers Console",
     "settings.youtube.steps":
       '→ create a new project → enable "YouTube Data API v3" → create an OAuth consent screen (add a test email) → create Credentials → "OAuth client ID" (Web application) → add redirect URI ',
     "settings.youtube.paste": "Paste client_secrets.json...",
-    "settings.youtube.save": "Save client_secrets.json",
+    "settings.youtube.save": "Save",
     "settings.youtube.needSecrets": "Enter the client_secrets.json contents.",
-    "settings.youtube.saved": "client_secrets.json saved!",
-    "settings.youtube.saveFail": "Failed to save client_secrets.json.",
-    "settings.youtube.errSave": "Error saving client_secrets.json.",
+    "settings.youtube.saved": "Channel credentials saved!",
+    "settings.youtube.saveFail": "Failed to save channel credentials.",
+    "settings.youtube.errSave": "Error saving channel credentials.",
     "settings.youtube.ready": "✓ Ready",
     "settings.youtube.missing": "Missing",
     "settings.youtube.haveSecrets":
       "Secrets saved — the first upload will open a browser to sign in to Google.",
+    "settings.youtube.addChannel": "Add channel",
+    "settings.youtube.channelName": "Channel name",
+    "settings.youtube.channelNamePh": "My YouTube Channel...",
+    "settings.youtube.active": "Active",
+    "settings.youtube.useThis": "Use this",
+    "settings.youtube.edit": "Edit",
+    "settings.youtube.delete": "Delete",
+    "settings.youtube.close": "Close",
+    "settings.youtube.noChannels": "No channels configured yet. Add one below.",
+    "settings.youtube.editSecrets":
+      "Paste client_secrets.json for this channel...",
+    "settings.youtube.tokenReady": "Token obtained",
+    "settings.youtube.tokenMissing": "No token yet",
 
     "settings.style.title": "6. Subtitle style",
     "settings.style.desc":
@@ -216,6 +229,7 @@ const dictionaries = {
     "library.brand": "SubTitle Extractor",
     "library.newExtractor": "New Extractor",
     "library.autoPipeline": "Auto Pipeline",
+    "library.channels": "Channels",
     "library.settingsTitle": "Settings (API key, TTS, subtitle style)",
     "library.eyebrow": "Extracted Library",
     "library.heroTitle1": "Your subtitles,",
@@ -369,7 +383,8 @@ const dictionaries = {
     "timeline.voiceRegenerateTitle": "Regenerate per-line voices with Gemini",
     "timeline.voiceGenerating": "Generating...",
     "timeline.voiceLoading": "Loading voice map...",
-    "timeline.voiceNoMap": "No voice map yet. Generate it to assign a CapCut voice to every subtitle line.",
+    "timeline.voiceNoMap":
+      "No voice map yet. Generate it to assign a CapCut voice to every subtitle line.",
     "timeline.voiceCreateMap": "Generate voice map",
     "timeline.voiceMissing": "No voice assigned",
 
@@ -628,6 +643,22 @@ const dictionaries = {
     "pipeline.watermarkNone": "No watermark set",
     "pipeline.watermarkWithLogo": "(text + logo)",
     "pipeline.watermarkTextOnly": "(text only)",
+    "pipeline.removeWatermark": "Remove watermark",
+    "pipeline.removeWatermarkHint":
+      "Select a region to remove existing watermark from the source video using FFmpeg delogo.",
+    "pipeline.removeWatermarkWillPrompt":
+      "You will be prompted to select the watermark region before OCR.",
+    "pipeline.removeWatermarkDrawHint":
+      "Draw a rectangle over the watermark area",
+    "pipeline.removeWatermarkUploadFirst":
+      "Upload video first to select watermark region",
+    "pipeline.removeWatermarkOn": "Active",
+    "pipeline.removeWatermarkActive": "Watermark region selected",
+    "pipeline.removeWatermarkRegionSet":
+      "Region set — will be removed before OCR",
+    "pipeline.removeWatermarkClear": "Clear",
+    "pipeline.removeWatermarkConfirm": "Confirm region",
+    "pipeline.removeWatermarkRedraw": "Redraw",
     "pipeline.checkTimeline": "Check subtitles on timeline",
     "pipeline.checkTimelineHint":
       "Review subtitle timings on the timeline and confirm before exporting.",
@@ -643,6 +674,10 @@ const dictionaries = {
     "pipeline.autoYoutube": "Auto-upload YouTube",
     "pipeline.autoYoutubeHint":
       "Upload the finished video to YouTube with the generated meta.",
+    "pipeline.youtubeChannel": "YouTube channel",
+    "pipeline.youtubeChannelDefault": "Default (no channel)",
+    "pipeline.youtubeChannelEmpty":
+      "No channels configured. Add one in Settings → YouTube.",
     "pipeline.tabProgress": "Progress",
     "pipeline.tabActive": "Active",
     "pipeline.tabDone": "Finished",
@@ -722,6 +757,39 @@ const dictionaries = {
     "pipeline.voiceCheckSkip": "Continue anyway",
     "pipeline.voiceCheckOpen": "Review voices",
     "pipeline.error.interruptedReload": "Job was interrupted by a page reload.",
+
+    // Channels page
+    "channel.eyebrow": "Douyin Channels",
+    "channel.title": "Scan new channels",
+    "channel.desc":
+      "Manage saved Douyin channels and scan for new videos by date.",
+    "channel.backLibrary": "Library",
+    "channel.autoPipeline": "Auto Pipeline",
+    "channel.addTitle": "Add Douyin channel",
+    "channel.addBtn": "Add",
+    "channel.addError": "Failed to add",
+    "channel.dateFilter": "Filter by creation date",
+    "channel.fromDate": "From:",
+    "channel.empty": "No channels yet. Add a Douyin channel URL above.",
+    "channel.scanning": "Scanning...",
+    "channel.scan": "Scan",
+    "channel.scanError": "Scan failed",
+    "channel.pin": "Pin channel",
+    "channel.unpin": "Unpin channel",
+    "channel.resultsTitle": "Scan results",
+    "channel.total": "Total: {count}",
+    "channel.filtered": "Filtered: {count}",
+    "channel.noResults": "No videos found after filtering.",
+    "channel.colVideo": "Video",
+    "channel.colDate": "Created",
+    "channel.colDuration": "Duration",
+    "channel.colLikes": "Likes",
+    "channel.colShare": "Share",
+    "channel.colAutoPipeline": "Pipeline",
+    "channel.noTitle": "(no title)",
+    "channel.urlDuplicate": "URL already exists",
+    "channel.urlInvalid":
+      "Only Douyin channel links supported (douyin.com/user/...)",
   },
   vi: {
     // Layout
@@ -851,21 +919,33 @@ const dictionaries = {
 
     "settings.youtube.title": "5. YouTube upload",
     "settings.youtube.desc":
-      "Dán nội dung file client_secrets.json để upload video lên YouTube.",
+      "Quản lý thông tin đăng nhập YouTube. Thêm nhiều kênh và dán client_secrets.json cho từng kênh.",
     "settings.youtube.howto": "Cách lấy: vào",
     "settings.youtube.console": "Google Developers Console",
     "settings.youtube.steps":
       '→ tạo project mới → bật "YouTube Data API v3" → tạo OAuth consent screen (thêm email test) → tạo Credentials → "OAuth client ID" (Web application) → thêm redirect URI ',
     "settings.youtube.paste": "Paste client_secrets.json...",
-    "settings.youtube.save": "Lưu client_secrets.json",
+    "settings.youtube.save": "Lưu",
     "settings.youtube.needSecrets": "Nhập nội dung client_secrets.json.",
-    "settings.youtube.saved": "Đã lưu client_secrets.json!",
-    "settings.youtube.saveFail": "Lưu client_secrets.json thất bại.",
-    "settings.youtube.errSave": "Lỗi lưu client_secrets.json.",
+    "settings.youtube.saved": "Đã lưu thông tin kênh!",
+    "settings.youtube.saveFail": "Lưu thông tin kênh thất bại.",
+    "settings.youtube.errSave": "Lỗi lưu thông tin kênh.",
     "settings.youtube.ready": "✓ Sẵn sàng",
     "settings.youtube.missing": "Chưa có",
     "settings.youtube.haveSecrets":
       "Đã có secrets — lần upload đầu sẽ mở trình duyệt để đăng nhập Google.",
+    "settings.youtube.addChannel": "Thêm kênh",
+    "settings.youtube.channelName": "Tên kênh",
+    "settings.youtube.channelNamePh": "Kênh YouTube của tôi...",
+    "settings.youtube.active": "Đang dùng",
+    "settings.youtube.useThis": "Dùng kênh này",
+    "settings.youtube.edit": "Sửa",
+    "settings.youtube.delete": "Xoá",
+    "settings.youtube.close": "Đóng",
+    "settings.youtube.noChannels": "Chưa có kênh nào. Thêm kênh bên dưới.",
+    "settings.youtube.editSecrets": "Dán client_secrets.json cho kênh này...",
+    "settings.youtube.tokenReady": "Đã có token",
+    "settings.youtube.tokenMissing": "Chưa có token",
 
     "settings.style.title": "6. Kiểu dáng phụ đề",
     "settings.style.desc":
@@ -927,6 +1007,7 @@ const dictionaries = {
     "library.brand": "SubTitle Extractor",
     "library.newExtractor": "Trích xuất mới",
     "library.autoPipeline": "Luồng tự động",
+    "library.channels": "Kênh theo dõi",
     "library.settingsTitle": "Cài đặt (API key, TTS, style phụ đề)",
     "library.eyebrow": "Thư viện đã trích xuất",
     "library.heroTitle1": "Phụ đề của bạn,",
@@ -1080,7 +1161,8 @@ const dictionaries = {
     "timeline.voiceRegenerateTitle": "Gán lại giọng cho từng dòng bằng Gemini",
     "timeline.voiceGenerating": "Đang tạo giọng...",
     "timeline.voiceLoading": "Đang tải voice map...",
-    "timeline.voiceNoMap": "Chưa có voice map. Hãy tạo để gán giọng CapCut cho từng dòng phụ đề.",
+    "timeline.voiceNoMap":
+      "Chưa có voice map. Hãy tạo để gán giọng CapCut cho từng dòng phụ đề.",
     "timeline.voiceCreateMap": "Tạo voice map",
     "timeline.voiceMissing": "Chưa gán giọng",
 
@@ -1329,6 +1411,21 @@ const dictionaries = {
     "pipeline.watermarkNone": "Không có bộ watermark",
     "pipeline.watermarkWithLogo": "(chữ + logo)",
     "pipeline.watermarkTextOnly": "(chỉ chữ)",
+    "pipeline.removeWatermark": "Xoá watermark",
+    "pipeline.removeWatermarkHint":
+      "Chọn vùng để xoá watermark có sẵn trên video nguồn bằng FFmpeg delogo.",
+    "pipeline.removeWatermarkWillPrompt":
+      "Bạn sẽ được nhắc chọn vùng watermark trước khi OCR.",
+    "pipeline.removeWatermarkDrawHint": "Kéo vùng chứa watermark cần xoá",
+    "pipeline.removeWatermarkUploadFirst":
+      "Upload video trước để chọn vùng xoá watermark",
+    "pipeline.removeWatermarkOn": "Đang áp dụng",
+    "pipeline.removeWatermarkActive": "Đã chọn vùng xoá watermark",
+    "pipeline.removeWatermarkRegionSet":
+      "Đã chọn vùng — sẽ được xoá trước khi OCR",
+    "pipeline.removeWatermarkClear": "Xoá",
+    "pipeline.removeWatermarkConfirm": "Xác nhận vùng",
+    "pipeline.removeWatermarkRedraw": "Kéo lại",
     "pipeline.checkTimeline": "Kiểm tra phụ đề trên timeline",
     "pipeline.checkTimelineHint":
       "Rà soát thời gian xuất hiện phụ đề trên timeline và xác nhận trước khi xuất ra.",
@@ -1344,6 +1441,10 @@ const dictionaries = {
     "pipeline.autoYoutube": "Tự động đăng YouTube",
     "pipeline.autoYoutubeHint":
       "Đăng video hoàn thành lên YouTube kèm meta đã tạo.",
+    "pipeline.youtubeChannel": "Kênh YouTube",
+    "pipeline.youtubeChannelDefault": "Mặc định (không chọn kênh)",
+    "pipeline.youtubeChannelEmpty":
+      "Chưa có kênh nào. Thêm kênh trong Settings → YouTube.",
     "pipeline.tabProgress": "Tiến trình",
     "pipeline.tabActive": "Đang xử lý",
     "pipeline.tabDone": "Đã xử lý",
@@ -1422,6 +1523,38 @@ const dictionaries = {
     "pipeline.voiceCheckSkip": "Tiếp tục",
     "pipeline.voiceCheckOpen": "Xem giọng đọc",
     "pipeline.error.interruptedReload": "Job bị gián đoạn do tải lại trang.",
+
+    // Channels page
+    "channel.eyebrow": "Kênh Douyin",
+    "channel.title": "Quét kênh mới",
+    "channel.desc":
+      "Quản lý các kênh Douyin đã lưu và quét video mới theo ngày.",
+    "channel.backLibrary": "Thư viện",
+    "channel.autoPipeline": "Luồng tự động",
+    "channel.addTitle": "Thêm kênh Douyin",
+    "channel.addBtn": "Thêm",
+    "channel.addError": "Thêm thất bại",
+    "channel.dateFilter": "Lọc theo ngày tạo",
+    "channel.fromDate": "Từ ngày:",
+    "channel.empty": "Chưa có kênh nào. Hãy thêm URL kênh Douyin ở trên.",
+    "channel.scanning": "Đang quét...",
+    "channel.scan": "Quét",
+    "channel.scanError": "Quét thất bại",
+    "channel.pin": "Ghim kênh",
+    "channel.unpin": "Bỏ ghim kênh",
+    "channel.resultsTitle": "Kết quả quét",
+    "channel.total": "Tổng: {count}",
+    "channel.filtered": "Lọc được: {count}",
+    "channel.noResults": "Không có video nào sau lọc.",
+    "channel.colVideo": "Video",
+    "channel.colDate": "Ngày tạo",
+    "channel.colDuration": "Thời lượng",
+    "channel.colLikes": "Tim",
+    "channel.colShare": "Link",
+    "channel.colAutoPipeline": "Pipeline",
+    "channel.noTitle": "(không có tiêu đề)",
+    "channel.urlDuplicate": "URL đã tồn tại",
+    "channel.urlInvalid": "Chỉ hỗ trợ link kênh Douyin (douyin.com/user/...)",
   },
 } as const;
 
@@ -1493,7 +1626,7 @@ export function setGlobalLang(lang: Lang) {
 
 export function translate(
   key: string,
-  vars?: Record<string, string | number>
+  vars?: Record<string, string | number>,
 ): string {
   const dict = dictionaries[currentLang];
   let str = (dict[key] ?? dictionaries.vi[key] ?? key) as string;

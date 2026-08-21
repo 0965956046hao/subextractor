@@ -19,9 +19,15 @@ import {
   presetLogoUrl,
   getYoutubeConfig,
   saveYoutubeSecrets,
+  listYoutubeChannels,
+  createYoutubeChannel,
+  updateYoutubeChannel,
+  deleteYoutubeChannel,
+  getYoutubeChannelDetail,
+  activateYoutubeChannel,
 } from "@/lib/api";
 import type { SubtitleStyle, WatermarkPreset, ProfilesCheck } from "@/lib/api";
-import type { PipelineHealth, YoutubeConfig } from "@/lib/api";
+import type { PipelineHealth, YoutubeConfig, YouTubeChannelInfo } from "@/lib/api";
 import { useI18n, type Dict } from "@/lib/i18n";
 
 const FONT_OPTIONS = [
@@ -252,15 +258,24 @@ export default function SettingsPage() {
   const [youtube, setYoutube] = useState<YoutubeConfig | null>(null);
   const [youtubeSecrets, setYoutubeSecrets] = useState("");
   const [youtubeBusy, setYoutubeBusy] = useState(false);
+  const [ytChannels, setYtChannels] = useState<YouTubeChannelInfo[]>([]);
+  const [ytActiveChannel, setYtActiveChannel] = useState("");
+  const [ytEditingChannel, setYtEditingChannel] = useState<string | null>(null);
+  const [ytEditName, setYtEditName] = useState("");
+  const [ytEditSecrets, setYtEditSecrets] = useState("");
+  const [ytAdding, setYtAdding] = useState(false);
+  const [ytNewName, setYtNewName] = useState("");
+  const [ytNewSecrets, setYtNewSecrets] = useState("");
 
   useEffect(() => {
     (async () => {
       try {
-        const [cfg, h, pc, yt] = await Promise.all([
+        const [cfg, h, pc, yt, ytCh] = await Promise.all([
           getAppConfig(),
           getPipelineHealth(),
           getProfilesConfig().catch(() => null),
           getYoutubeConfig().catch(() => null),
+          listYoutubeChannels().catch(() => ({ channels: [] })),
         ]);
         setHasGemini(cfg.has_gemini_key);
         setHasTts(cfg.has_tts_credentials);
@@ -283,6 +298,7 @@ export default function SettingsPage() {
         setPresets(cfg.watermark_presets || []);
         setActivePreset(cfg.active_watermark_preset || "");
         setYoutube(yt);
+        setYtChannels(ytCh.channels || []);
         setHealth(h);
       } catch {
         setError(t("error.backend"));
@@ -408,6 +424,81 @@ export default function SettingsPage() {
       setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
     } finally {
       setYoutubeBusy(false);
+    }
+  };
+
+  const reloadYtChannels = async () => {
+    const ytCh = await listYoutubeChannels().catch(() => ({ channels: [] }));
+    setYtChannels(ytCh.channels || []);
+  };
+
+  const handleAddChannel = async () => {
+    setError("");
+    setYoutubeBusy(true);
+    try {
+      await createYoutubeChannel(ytNewName.trim(), ytNewSecrets.trim());
+      setYtNewName("");
+      setYtNewSecrets("");
+      setYtAdding(false);
+      await reloadYtChannels();
+      setStatus(t("settings.youtube.saved"));
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
+    } finally {
+      setYoutubeBusy(false);
+    }
+  };
+
+  const handleUpdateChannel = async (id: string) => {
+    setError("");
+    setYoutubeBusy(true);
+    try {
+      await updateYoutubeChannel(id, {
+        name: ytEditName.trim() || undefined,
+        client_secrets: ytEditSecrets.trim() || undefined,
+      });
+      setYtEditingChannel(null);
+      await reloadYtChannels();
+      setStatus(t("settings.youtube.saved"));
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
+    } finally {
+      setYoutubeBusy(false);
+    }
+  };
+
+  const handleDeleteChannel = async (id: string) => {
+    setError("");
+    try {
+      await deleteYoutubeChannel(id);
+      await reloadYtChannels();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
+    }
+  };
+
+  const handleActivateChannel = async (id: string) => {
+    setError("");
+    try {
+      await activateYoutubeChannel(id);
+      setYtActiveChannel(id);
+      await reloadYtChannels();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
+    }
+  };
+
+  const handleStartEditChannel = async (id: string) => {
+    setError("");
+    try {
+      const detail = await getYoutubeChannelDetail(id);
+      setYtEditingChannel(id);
+      setYtEditName(detail.name);
+      setYtEditSecrets(detail.client_secrets);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
     }
   };
 
@@ -831,11 +922,10 @@ export default function SettingsPage() {
               </span>
             </p>
 
+            {/* System status */}
             <div className="mb-4 space-y-1.5">
               {(
                 [
-                  ["client_secrets.json", youtube?.has_client_secrets],
-                  ["request.token (OAuth)", youtube?.has_request_token],
                   ["youtubeuploader binary", youtube?.has_binary],
                 ] as const
               ).map(([label, ok]) => (
@@ -853,37 +943,178 @@ export default function SettingsPage() {
                   </span>
                 </div>
               ))}
-              {youtube?.has_client_secrets && youtube.secrets_path && (
-                <p className="text-[10px] font-mono text-ink-light px-1 truncate">
-                  {youtube.secrets_path}
-                </p>
-              )}
             </div>
 
-            <textarea
-              value={youtubeSecrets}
-              onChange={(e) => setYoutubeSecrets(e.target.value)}
-              placeholder={t("settings.youtube.paste")}
-              rows={6}
-              className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
-            />
+            {/* Channel list */}
+            {ytChannels.length === 0 && !ytAdding && (
+              <p className="text-[12px] text-ink-light mb-4">
+                {t("settings.youtube.noChannels")}
+              </p>
+            )}
 
-            <div className="mt-3 flex items-center gap-3">
+            <div className="space-y-3 mb-4">
+              {ytChannels.map((ch) => {
+                const isEditing = ytEditingChannel === ch.id;
+                return (
+                  <div
+                    key={ch.id}
+                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] p-4"
+                  >
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[13px] font-medium text-ink truncate">
+                          {ch.name}
+                        </span>
+                        {ch.has_request_token && (
+                          <span className="text-[10px] font-medium text-emerald-700">
+                            {t("settings.youtube.tokenReady")}
+                          </span>
+                        )}
+                        {!ch.has_request_token && ch.has_client_secrets && (
+                          <span className="text-[10px] font-medium text-amber-700">
+                            {t("settings.youtube.tokenMissing")}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!isEditing && (
+                          <>
+                            <button
+                              onClick={() => handleStartEditChannel(ch.id)}
+                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
+                            >
+                              {t("settings.youtube.edit")}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteChannel(ch.id)}
+                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-red-500/15 text-red-600 hover:bg-red-500/5 transition-colors cursor-pointer"
+                            >
+                              {t("settings.youtube.delete")}
+                            </button>
+                          </>
+                        )}
+                        {isEditing && (
+                          <button
+                            onClick={() => setYtEditingChannel(null)}
+                            className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
+                          >
+                            {t("settings.youtube.close")}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {isEditing && (
+                      <div className="space-y-3 mt-3">
+                        <div>
+                          <label className="text-[11px] text-ink-muted mb-1 block">
+                            {t("settings.youtube.channelName")}
+                          </label>
+                          <input
+                            type="text"
+                            value={ytEditName}
+                            onChange={(e) => setYtEditName(e.target.value)}
+                            placeholder={t("settings.youtube.channelNamePh")}
+                            className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-ink-muted mb-1 block">
+                            client_secrets.json
+                          </label>
+                          <textarea
+                            value={ytEditSecrets}
+                            onChange={(e) => setYtEditSecrets(e.target.value)}
+                            placeholder={t("settings.youtube.editSecrets")}
+                            rows={5}
+                            className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
+                          />
+                        </div>
+                        <button
+                          onClick={() => handleUpdateChannel(ch.id)}
+                          disabled={youtubeBusy}
+                          className="btn-island-primary group text-[12px] !px-5 !py-2 disabled:opacity-50"
+                        >
+                          <span className="tracking-tight">
+                            {youtubeBusy ? t("btn.saving") : t("settings.youtube.save")}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+
+                    {!isEditing && (
+                      <div className="flex items-center gap-4 mt-1">
+                        <span
+                          className={`text-[11px] font-medium ${ch.has_client_secrets ? "text-emerald-700" : "text-amber-700"}`}
+                        >
+                          {ch.has_client_secrets
+                            ? t("settings.youtube.ready")
+                            : t("settings.youtube.missing")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Add new channel */}
+            {ytAdding ? (
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/[0.03] p-4 space-y-3">
+                <div>
+                  <label className="text-[11px] text-ink-muted mb-1 block">
+                    {t("settings.youtube.channelName")}
+                  </label>
+                  <input
+                    type="text"
+                    value={ytNewName}
+                    onChange={(e) => setYtNewName(e.target.value)}
+                    placeholder={t("settings.youtube.channelNamePh")}
+                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-ink-muted mb-1 block">
+                    client_secrets.json
+                  </label>
+                  <textarea
+                    value={ytNewSecrets}
+                    onChange={(e) => setYtNewSecrets(e.target.value)}
+                    placeholder={t("settings.youtube.paste")}
+                    rows={6}
+                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleAddChannel}
+                    disabled={youtubeBusy}
+                    className="btn-island-primary group text-[12px] !px-5 !py-2 disabled:opacity-50"
+                  >
+                    <span className="tracking-tight">
+                      {youtubeBusy ? t("btn.saving") : t("settings.youtube.save")}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setYtAdding(false);
+                      setYtNewName("");
+                      setYtNewSecrets("");
+                    }}
+                    className="btn-island-secondary text-[12px] !px-4 !py-2"
+                  >
+                    <span className="tracking-tight">{t("settings.youtube.close")}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
               <button
-                onClick={handleSaveYoutube}
-                disabled={youtubeBusy}
-                className="btn-island-primary group text-[12px] !px-5 !py-2 disabled:opacity-50"
+                onClick={() => setYtAdding(true)}
+                className="btn-island-secondary text-[12px] !px-4 !py-2"
               >
-                <span className="tracking-tight">
-                  {youtubeBusy ? t("btn.saving") : t("settings.youtube.save")}
-                </span>
+                <span className="tracking-tight">{t("settings.youtube.addChannel")}</span>
               </button>
-              {youtube?.has_client_secrets && !youtube.has_request_token && (
-                <span className="text-[11px] text-ink-light">
-                  {t("settings.youtube.haveSecrets")}
-                </span>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </AnimatedBlock>
