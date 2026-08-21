@@ -279,6 +279,77 @@ async def re_translate_srt_line(video_id: str, request: Request):
     return {"status": "ok", "index": index, "text": new_text}
 
 
+# ── POST /api/srt/{video_id}/rewrite-line ──
+# Rewrite a single SRT line using Gemini (make it shorter, keep meaning).
+
+@router.post("/api/srt/{video_id}/rewrite-line")
+async def rewrite_srt_line(video_id: str, request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    index = int(body.get("index", 0))
+    current_text = body.get("text", "").strip()
+    mode = body.get("mode", "shorter")  # "shorter" or "manual"
+    manual_text = body.get("manual_text", "").strip()
+
+    if index < 1:
+        raise HTTPException(400, "index required")
+    if mode == "manual":
+        if not manual_text:
+            raise HTTPException(400, "manual_text required for manual mode")
+        new_text = manual_text
+    elif mode == "shorter":
+        if not current_text:
+            raise HTTPException(400, "text required for shorter mode")
+        from app.services.translation_service import (
+            _call_gemini, _clean_gemini_response, load_video_context,
+            configured_gemini_keys,
+        )
+        if not configured_gemini_keys():
+            raise HTTPException(400, "Gemini API key not configured")
+
+        context = load_video_context(video_id)
+        context_block = f"\nVIDEO CONTEXT:\n{context}\n" if context else ""
+
+        prompt = (
+            f"You are a subtitle editor. Rewrite the following subtitle line to be "
+            f"SHORTER and more concise, while keeping the core meaning."
+            f"{context_block}\n"
+            f"Rules:\n"
+            f"- Output ONLY the rewritten text, nothing else\n"
+            f"- Keep it in the SAME LANGUAGE as the input\n"
+            f"- Make it significantly shorter (fewer words/characters)\n"
+            f"- Keep the meaning and emotion intact\n"
+            f"- Natural for spoken subtitles (avoid formal/literary style)\n\n"
+            f"Current text: {current_text}"
+        )
+        response = _call_gemini(prompt, {
+            "system_instruction": "You are a concise subtitle editor. Output only the rewritten text.",
+            "temperature": 0.4,
+        })
+        new_text = _clean_gemini_response(response.text.strip())
+        # Take last non-empty line
+        lines = [ln.strip() for ln in new_text.splitlines() if ln.strip()]
+        new_text = lines[-1] if lines else current_text
+    else:
+        raise HTTPException(400, f"Unknown mode: {mode}")
+
+    # Update the SRT file
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    from app.services.srt_utils import parse_srt, entries_to_srt
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    if index > len(entries):
+        raise HTTPException(400, f"Index {index} out of range (have {len(entries)} entries)")
+    entries[index - 1] = entries[index - 1].model_copy(update={"text": new_text})
+    srt_path.write_text(entries_to_srt(entries), encoding="utf-8")
+
+    return {"status": "ok", "index": index, "text": new_text}
+
+
 # ── POST /api/srt/{video_id}/risk-check ──
 # Check-only: ask Gemini (in batches) to flag risky lines (untranslated text,
 # overlapping timeline, adjacent content still similar). Never edits the SRT.
@@ -799,6 +870,145 @@ async def bulk_switch_voice(request: Request, video_id: str):
     logger.info("bulk_switch job %s: queued for %s (%s → %s)", job_id, video_id, from_voice, to_voice)
     await queue.put(job_id)
     return {"job_id": job_id, "status": "queued"}
+
+
+# ── GET /api/tts/{video_id}/check-alignment ──
+
+@router.get("/api/tts/{video_id}/check-alignment")
+async def check_tts_alignment(video_id: str):
+    """Check TTS audio duration vs SRT duration for each line.
+
+    Returns list of lines where audio is longer than the SRT time range.
+    Each item: {index, text, srt_duration, audio_duration, voice_type, display_name}.
+    """
+    from app.services.srt_utils import parse_srt
+    from app.services.media_utils import _get_audio_duration
+    from app.services.translation_service import load_voice_map
+    from app.services.context_service import _load_capcut_voice_display_map
+
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    if not entries:
+        return {"issues": [], "total": 0}
+
+    voice_map = load_voice_map(video_id)
+    display_map = _load_capcut_voice_display_map("vi")
+
+    issues = []
+    tts_dir = settings.temp_dir / "tts" / video_id
+    for i, entry in enumerate(entries):
+        idx = i + 1
+        vt = voice_map.get(idx)
+        if not vt:
+            continue
+        voice_key = vt.replace("-", "_")
+        mp3_path = tts_dir / voice_key / f"{idx:04d}.mp3"
+        if not mp3_path.exists():
+            continue
+        srt_dur = entry.end - entry.start
+        audio_dur = _get_audio_duration(mp3_path)
+        if audio_dur > 0 and audio_dur > srt_dur + 0.1:  # 100ms tolerance
+            issues.append({
+                "index": idx,
+                "text": entry.text,
+                "start": entry.start,
+                "end": entry.end,
+                "srt_duration": round(srt_dur, 3),
+                "audio_duration": round(audio_dur, 3),
+                "overshoot": round(audio_dur - srt_dur, 3),
+                "voice_type": vt,
+                "display_name": display_map.get(vt, vt),
+            })
+
+    return {"issues": issues, "total": len(entries), "checked": len(voice_map)}
+
+
+# ── GET /api/tts/{video_id}/audio/{index} ──
+
+@router.get("/api/tts/{video_id}/audio/{index}")
+async def get_tts_audio(video_id: str, index: int):
+    """Serve a single TTS MP3 file for preview."""
+    from fastapi.responses import FileResponse
+    from app.services.translation_service import load_voice_map
+
+    voice_map = load_voice_map(video_id)
+    vt = voice_map.get(index)
+    if not vt:
+        raise HTTPException(404, f"No voice assigned to index {index}")
+
+    voice_key = vt.replace("-", "_")
+    mp3_path = settings.temp_dir / "tts" / video_id / voice_key / f"{index:04d}.mp3"
+    if not mp3_path.exists():
+        raise HTTPException(404, f"MP3 not found: {mp3_path}")
+
+    return FileResponse(str(mp3_path), media_type="audio/mpeg")
+
+
+# ── POST /api/tts/{video_id}/set-speed ──
+
+@router.post("/api/tts/{video_id}/set-speed")
+async def set_tts_speed(request: Request, video_id: str):
+    """Apply atempo to a single TTS MP3 to speed it up.
+
+    Body: ``{"index": 1, "speed": 1.2}``.
+    Overwrites the original MP3 with the sped-up version.
+    """
+    import subprocess
+    import tempfile
+
+    body = await request.json()
+    index = body.get("index")
+    speed = body.get("speed")
+    if index is None or speed is None:
+        raise HTTPException(400, "index and speed required")
+    try:
+        speed = float(speed)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "speed must be a number")
+    if speed < 0.5 or speed > 3.0:
+        raise HTTPException(400, "speed must be between 0.5 and 3.0")
+
+    from app.services.translation_service import load_voice_map
+
+    voice_map = load_voice_map(video_id)
+    vt = voice_map.get(int(index))
+    if not vt:
+        raise HTTPException(404, f"No voice assigned to index {index}")
+
+    voice_key = vt.replace("-", "_")
+    tts_dir = settings.temp_dir / "tts" / video_id / voice_key
+    mp3_path = tts_dir / f"{int(index):04d}.mp3"
+    if not mp3_path.exists():
+        raise HTTPException(404, f"MP3 not found: {mp3_path}")
+
+    # Apply atempo via ffmpeg, write to temp file then replace
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp_path = tmp.name
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(mp3_path),
+            "-af", f"atempo={speed:.4f}",
+            "-ac", "1", "-ar", "24000",
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            tmp_path,
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            raise HTTPException(500, f"ffmpeg error: {proc.stderr}")
+        import shutil
+        shutil.move(tmp_path, str(mp3_path))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to set speed: {e}")
+
+    # Return new duration
+    from app.services.media_utils import _get_audio_duration
+    new_dur = _get_audio_duration(mp3_path)
+    return {"status": "ok", "index": index, "speed": speed, "new_duration": round(new_dur, 3)}
 
 
 # ── POST /api/tts/{video_id}/regenerate-line ──

@@ -106,7 +106,9 @@ def combine_tts_mp3(
             srt_dur = entry.end - entry.start
             mp3_dur = _get_audio_duration(af)
             tempo = "-"
-            if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
+            # Tolerance 10%: skip auto-atempo if audio already close to SRT timing
+            # (user may have manually adjusted speed via the alignment panel).
+            if srt_dur > 0 and mp3_dur > srt_dur * 1.10:
                 speed = min(mp3_dur / srt_dur, MAX_TEMPO)
                 adj = chunk_dir / f".tempo_{af.stem}_{i}.mp3"
                 _run_ffmpeg([

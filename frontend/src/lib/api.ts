@@ -518,6 +518,57 @@ export async function rebuildFullAudio(
   return res.data;
 }
 
+export interface AlignmentIssue {
+  index: number;
+  text: string;
+  start: number;
+  end: number;
+  srt_duration: number;
+  audio_duration: number;
+  overshoot: number;
+  voice_type: string;
+  display_name: string;
+}
+
+export async function checkTtsAlignment(
+  videoId: string,
+): Promise<{ issues: AlignmentIssue[]; total: number; checked: number }> {
+  const res = await api.get<{ issues: AlignmentIssue[]; total: number; checked: number }>(
+    `/tts/${videoId}/check-alignment`,
+  );
+  return res.data;
+}
+
+export async function setTtsSpeed(
+  videoId: string,
+  index: number,
+  speed: number,
+): Promise<{ status: string; index: number; speed: number; new_duration: number }> {
+  const res = await api.post<{ status: string; index: number; speed: number; new_duration: number }>(
+    `/tts/${videoId}/set-speed`,
+    { index, speed },
+  );
+  return res.data;
+}
+
+export function getTtsAudioUrl(videoId: string, index: number): string {
+  return `/api/tts/${videoId}/audio/${index}`;
+}
+
+export async function rewriteSrtLine(
+  videoId: string,
+  index: number,
+  mode: "shorter" | "manual",
+  currentText?: string,
+  manualText?: string,
+): Promise<{ status: string; index: number; text: string }> {
+  const res = await api.post<{ status: string; index: number; text: string }>(
+    `/srt/${videoId}/rewrite-line`,
+    { index, mode, text: currentText, manual_text: manualText },
+  );
+  return res.data;
+}
+
 export async function capCutPreview(
   voice: string,
   text?: string,

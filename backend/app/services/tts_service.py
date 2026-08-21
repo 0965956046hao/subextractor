@@ -508,16 +508,32 @@ def synthesize_srt_capcut_multi(
         written_names = {p.name for p in written}
         found = []
         for pos, i in enumerate(idxs):
-            target = out_dir / f"{i + 1:04d}.mp3"
-            if target.exists():
+            idx = i + 1
+            # Check all voice directories for existing MP3 (not just default_voice)
+            tts_base = settings.temp_dir / "tts" / video_id
+            target = None
+            for voice_dir in tts_base.iterdir():
+                if voice_dir.is_dir() and voice_dir.name != "separated":
+                    candidate = voice_dir / f"{idx:04d}.mp3"
+                    if candidate.exists() and candidate.stat().st_size > 0:
+                        target = candidate
+                        break
+            if target and target.parent != out_dir:
+                # Move file to out_dir so combine_tts_mp3 can find it
+                import shutil
+                dest = out_dir / f"{idx:04d}.mp3"
+                if not dest.exists():
+                    shutil.move(str(target), str(dest))
+                target = dest
+            if target and target.exists():
                 audio_files[i] = target
                 synth_ok += 1
                 found.append(i)
                 continue
             seg = out_dir / f"{voice_prefix}_{pos + 1:04d}.mp3"
             if seg.name in written_names and seg.exists():
-                seg.rename(target)
-                audio_files[i] = target
+                seg.rename(out_dir / f"{idx:04d}.mp3")
+                audio_files[i] = out_dir / f"{idx:04d}.mp3"
                 synth_ok += 1
                 found.append(i)
                 continue
@@ -571,15 +587,30 @@ def synthesize_srt_capcut_multi(
         written_names = {p.name for p in written}
         still_failed = []
         for pos, i in enumerate(retry_idxs):
-            target = out_dir / f"{i + 1:04d}.mp3"
-            if target.exists():
+            idx = i + 1
+            # Check all voice directories
+            tts_base = settings.temp_dir / "tts" / video_id
+            target = None
+            for voice_dir in tts_base.iterdir():
+                if voice_dir.is_dir() and voice_dir.name != "separated":
+                    candidate = voice_dir / f"{idx:04d}.mp3"
+                    if candidate.exists() and candidate.stat().st_size > 0:
+                        target = candidate
+                        break
+            if target and target.parent != out_dir:
+                import shutil
+                dest = out_dir / f"{idx:04d}.mp3"
+                if not dest.exists():
+                    shutil.move(str(target), str(dest))
+                target = dest
+            if target and target.exists():
                 audio_files[i] = target
                 synth_ok += 1
                 continue
             seg = out_dir / f"{prefix}_{pos + 1:04d}.mp3"
             if seg.name in written_names and seg.exists():
-                seg.rename(target)
-                audio_files[i] = target
+                seg.rename(out_dir / f"{idx:04d}.mp3")
+                audio_files[i] = out_dir / f"{idx:04d}.mp3"
                 synth_ok += 1
                 continue
             still_failed.append(i)

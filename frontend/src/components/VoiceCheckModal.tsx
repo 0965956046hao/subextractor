@@ -11,10 +11,14 @@ import {
   rebuildFullAudio,
   bulkSwitchVoice,
   getCapCutVoices,
+  checkTtsAlignment,
+  setTtsSpeed,
+  getTtsAudioUrl,
+  rewriteSrtLine,
   capCutPreview,
   getVideoUrl,
 } from "@/lib/api";
-import type { SrtEntry, VoiceMapDetail, CapCutVoice } from "@/lib/api";
+import type { SrtEntry, VoiceMapDetail, CapCutVoice, AlignmentIssue } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 function IconSpinner({ className = "w-4 h-4" }) {
@@ -77,6 +81,17 @@ export default function VoiceCheckModal({
   const [bulkFromOpen, setBulkFromOpen] = useState(false);
   const [bulkToOpen, setBulkToOpen] = useState(false);
   const [bulkPreviewing, setBulkPreviewing] = useState<string | null>(null);
+  const [alignmentIssues, setAlignmentIssues] = useState<AlignmentIssue[]>([]);
+  const [checkingAlignment, setCheckingAlignment] = useState(false);
+  const [showAlignment, setShowAlignment] = useState(false);
+  const [speedingIndex, setSpeedingIndex] = useState<number | null>(null);
+  const [speedValues, setSpeedValues] = useState<Record<number, number>>({});
+  const [previewSpeedIndex, setPreviewSpeedIndex] = useState<number | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
+  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
+  const [regenAudioIndex, setRegenAudioIndex] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -100,6 +115,86 @@ export default function VoiceCheckModal({
       .catch(() => {});
     return () => { cancelled = true; };
   }, [targetLang]);
+
+  const handlePreviewSpeed = useCallback((index: number, speed: number) => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (previewSpeedIndex === index) {
+      setPreviewSpeedIndex(null);
+      return;
+    }
+    const audio = new Audio(getTtsAudioUrl(videoId, index));
+    audio.playbackRate = speed;
+    audio.onended = () => { setPreviewSpeedIndex(null); };
+    audio.onerror = () => { setPreviewSpeedIndex(null); };
+    previewAudioRef.current = audio;
+    setPreviewSpeedIndex(index);
+    audio.play().catch(() => setPreviewSpeedIndex(null));
+  }, [videoId, previewSpeedIndex]);
+
+  const handleSetSpeed = useCallback(async (index: number, speed: number) => {
+    setSpeedingIndex(index);
+    setError("");
+    try {
+      const res = await setTtsSpeed(videoId, index, speed);
+      // Update the issue with new duration, remove if no longer an issue
+      setAlignmentIssues((prev) =>
+        prev.map((issue) =>
+          issue.index === index
+            ? { ...issue, audio_duration: res.new_duration, overshoot: Math.max(0, res.new_duration - issue.srt_duration) }
+            : issue
+        ).filter((issue) => issue.overshoot > 0.1)
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("voice.speedFailed" as string));
+    } finally {
+      setSpeedingIndex(null);
+    }
+  }, [videoId, t]);
+
+  const handleRewrite = useCallback(async (index: number, mode: "shorter" | "manual", manualText?: string) => {
+    setRewritingIndex(index);
+    setError("");
+    try {
+      const currentEntry = entries.find(e => e.index === index);
+      const res = await rewriteSrtLine(videoId, index, mode, currentEntry?.text, manualText);
+      setEntries(prev => prev.map(e => e.index === index ? { ...e, text: res.text } : e));
+      setEditingIndex(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("voice.rewriteFailed" as string));
+    } finally {
+      setRewritingIndex(null);
+    }
+  }, [videoId, entries, t]);
+
+  const handleRegenAudio = useCallback(async (index: number) => {
+    setRegenAudioIndex(index);
+    setError("");
+    try {
+      const voiceType = voiceMap?.map?.[String(index)]?.voice_type || "";
+      await regenerateTtsLine(videoId, index, voiceType);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("voice.rebuildFailed" as string));
+    } finally {
+      setRegenAudioIndex(null);
+    }
+  }, [videoId, voiceMap, t]);
+
+  const handleCheckAlignment = useCallback(async () => {
+    setCheckingAlignment(true);
+    setError("");
+    try {
+      const res = await checkTtsAlignment(videoId);
+      setAlignmentIssues(res.issues);
+      setShowAlignment(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("voice.alignmentCheckFailed" as string));
+    } finally {
+      setCheckingAlignment(false);
+    }
+  }, [videoId, t]);
 
   // Close bulk dropdowns on outside click
   useEffect(() => {
@@ -370,6 +465,19 @@ export default function VoiceCheckModal({
             </div>
             <div className="flex items-center gap-2">
               <button
+                onClick={handleCheckAlignment}
+                disabled={generating || loading || checkingAlignment}
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                title={t("voice.checkAlignment" as string)}
+              >
+                {checkingAlignment ? <IconSpinner className="w-3.5 h-3.5" /> : (
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+                  </svg>
+                )}
+                {checkingAlignment ? t("voice.checking" as string) : t("voice.checkAlignment" as string)}
+              </button>
+              <button
                 onClick={handleRebuildFullAudio}
                 disabled={generating || loading || rebuilding}
                 className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-amber-500 text-white hover:bg-amber-400 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
@@ -405,6 +513,118 @@ export default function VoiceCheckModal({
           {error && (
             <div className="rounded-xl bg-red-500/10 ring-1 ring-red-500/20 px-3.5 py-2.5 text-[12px] text-red-700">
               {error}
+            </div>
+          )}
+
+          {/* Alignment issues panel */}
+          {showAlignment && (
+            <div className="rounded-xl bg-blue-500/5 ring-1 ring-blue-500/15 p-3.5 max-h-48 overflow-y-auto flex-shrink-0">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[12px] font-semibold text-blue-800">
+                  {alignmentIssues.length > 0
+                    ? t("voice.alignmentIssuesFound" as string, { count: alignmentIssues.length })
+                    : t("voice.alignmentOk" as string)}
+                </p>
+                <button
+                  onClick={() => setShowAlignment(false)}
+                  className="text-[10px] text-blue-600 hover:text-blue-500 cursor-pointer"
+                >
+                  {t("voice.close" as string)}
+                </button>
+              </div>
+              {alignmentIssues.length > 0 && (
+                <div className="divide-y divide-blue-500/10">
+                  {alignmentIssues.map((issue) => {
+                    const isSpeeding = speedingIndex === issue.index;
+                    const suggestedSpeed = Math.min(issue.audio_duration / issue.srt_duration, 3.0);
+                    const targetSpeed = speedValues[issue.index] ?? Math.ceil(suggestedSpeed * 10) / 10;
+                    const newDur = (issue.audio_duration / targetSpeed).toFixed(1);
+                    return (
+                      <div
+                        key={issue.index}
+                        className="flex flex-col gap-1.5 py-2.5 px-1"
+                      >
+                        {/* Row 1: index + text + times + overshoot */}
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 flex-shrink-0 cursor-pointer hover:bg-blue-500/25"
+                            onClick={() => {
+                              if (videoRef.current) videoRef.current.currentTime = issue.start;
+                            }}
+                          >
+                            #{issue.index}
+                          </span>
+                          <span className="text-[11px] text-ink flex-1 line-clamp-1">{issue.text}</span>
+                          <span className="text-[10px] text-blue-600 font-mono flex-shrink-0">
+                            {issue.srt_duration.toFixed(1)}s → {issue.audio_duration.toFixed(1)}s
+                          </span>
+                          <span className="text-[10px] font-medium text-red-600 bg-red-500/10 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                            +{issue.overshoot.toFixed(1)}s
+                          </span>
+                        </div>
+                        {/* Row 2: speed icon + slider + preview + save */}
+                        <div className="flex items-center gap-2 ml-7">
+                          {/* Speed icon */}
+                          <svg className="w-3 h-3 text-ink-muted flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                          </svg>
+                          <input
+                            type="range"
+                            min={1.0}
+                            max={3.0}
+                            step={0.05}
+                            value={targetSpeed}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value);
+                              setSpeedValues((prev) => ({ ...prev, [issue.index]: v }));
+                            }}
+                            disabled={isSpeeding}
+                            className="flex-1 h-1.5 accent-blue-600 cursor-pointer disabled:opacity-50"
+                          />
+                          <span className="text-[10px] font-mono text-blue-700 bg-blue-500/10 px-1.5 py-0.5 rounded flex-shrink-0 min-w-[55px] text-center">
+                            {targetSpeed.toFixed(2)}x → {newDur}s
+                          </span>
+                          <button
+                            onClick={() => handleSetSpeed(issue.index, targetSpeed)}
+                            disabled={isSpeeding || targetSpeed <= 1.0}
+                            className="text-[10px] font-medium px-2 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-40 flex-shrink-0 inline-flex items-center gap-1"
+                          >
+                            {isSpeeding ? <IconSpinner className="w-3 h-3" /> : (
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
+                                <polyline points="17 21 17 13 7 13 7 21" />
+                                <polyline points="7 3 7 8 15 8" />
+                              </svg>
+                            )}
+                            {t("voice.save" as string)}
+                          </button>
+                          <button
+                            onClick={() => handlePreviewSpeed(issue.index, targetSpeed)}
+                            disabled={isSpeeding}
+                            className={`w-7 h-7 rounded-md flex items-center justify-center cursor-pointer transition-colors disabled:opacity-40 flex-shrink-0 ${
+                              previewSpeedIndex === issue.index
+                                ? "bg-blue-600 text-white"
+                                : "bg-blue-600/10 text-blue-600 hover:bg-blue-600/20"
+                            }`}
+                            title={t("voice.preview" as string)}
+                          >
+                            {previewSpeedIndex === issue.index ? (
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                                <rect x="6" y="4" width="4" height="16" rx="1" />
+                                <rect x="14" y="4" width="4" height="16" rx="1" />
+                              </svg>
+                            ) : (
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -616,7 +836,86 @@ export default function VoiceCheckModal({
                           </span>
                         )}
                       </div>
-                      <p className="text-[12px] leading-snug mt-1 line-clamp-2 text-ink">{line.text}</p>
+                      {editingIndex === line.index ? (
+                        <div className="mt-1 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <textarea
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            rows={2}
+                            className="text-[12px] leading-snug p-2 rounded-lg bg-white ring-1 ring-violet-400 text-ink resize-none focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleRewrite(line.index, "manual", editText); }}
+                              disabled={rewritingIndex === line.index || !editText.trim()}
+                              className="text-[10px] font-medium px-2.5 py-1 rounded-md bg-violet-600 text-white hover:bg-violet-700 cursor-pointer disabled:opacity-40"
+                            >
+                              {rewritingIndex === line.index ? t("voice.rewriting" as string) : t("voice.saveEdit" as string)}
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setEditingIndex(null); }}
+                              className="text-[10px] px-2 py-1 rounded-md bg-black/[0.04] text-ink-muted hover:bg-black/[0.08] cursor-pointer"
+                            >
+                              {t("voice.cancel" as string)}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-start gap-1.5 mt-1 group">
+                          <p className="text-[12px] leading-snug line-clamp-2 text-ink flex-1">{line.text}</p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingIndex(line.index);
+                              setEditText(line.text);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-violet-600 hover:bg-violet-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5"
+                            title={t("voice.editText" as string)}
+                          >
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRewrite(line.index, "shorter");
+                            }}
+                            disabled={rewritingIndex === line.index}
+                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-emerald-600 hover:bg-emerald-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5 disabled:opacity-40"
+                            title={t("voice.genShorter" as string)}
+                          >
+                            {rewritingIndex === line.index ? (
+                              <IconSpinner className="w-3 h-3" />
+                            ) : (
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                                <path d="M21 3v5h-5" />
+                              </svg>
+                            )}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRegenAudio(line.index);
+                            }}
+                            disabled={regenAudioIndex === line.index}
+                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-blue-600 hover:bg-blue-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5 disabled:opacity-40"
+                            title={t("voice.regenAudio" as string)}
+                          >
+                            {regenAudioIndex === line.index ? (
+                              <IconSpinner className="w-3 h-3" />
+                            ) : (
+                              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                                <line x1="12" x2="12" y1="19" y2="22" />
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      )}
                       {/* Expanded voice selector */}
                       {expandedIndex === line.index && hasVoice && uniqueVoices.length > 1 && (
                         <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
