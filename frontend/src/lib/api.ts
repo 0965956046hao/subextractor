@@ -468,6 +468,56 @@ export async function generateVoiceMap(
   return res.data;
 }
 
+export async function updateVoiceMapLine(
+  videoId: string,
+  index: number,
+  voiceType: string,
+): Promise<{ status: string; index: number; voice_type: string }> {
+  const res = await api.patch<{ status: string; index: number; voice_type: string }>(
+    `/voice-map/${videoId}/line`,
+    { index, voice_type: voiceType },
+  );
+  return res.data;
+}
+
+export async function bulkSwitchVoice(
+  videoId: string,
+  fromVoice: string,
+  toVoice: string,
+): Promise<{ job_id: string; status: string }> {
+  const res = await api.post<{ job_id: string; status: string }>(
+    `/voice-map/${videoId}/bulk-switch`,
+    { from_voice: fromVoice, to_voice: toVoice },
+  );
+  return res.data;
+}
+
+export async function regenerateTtsLine(
+  videoId: string,
+  index: number,
+  voiceType: string,
+): Promise<{ status: string; index: number; voice_type: string }> {
+  const res = await api.post<{ status: string; index: number; voice_type: string }>(
+    `/tts/${videoId}/regenerate-line`,
+    { index, voice_type: voiceType },
+  );
+  return res.data;
+}
+
+export async function rebuildFullAudio(
+  videoId: string,
+  opts?: { muteOriginal?: boolean; originalGainDb?: number },
+): Promise<{ status: string; audio_url: string; size: number }> {
+  const res = await api.post<{ status: string; audio_url: string; size: number }>(
+    `/tts/${videoId}/rebuild-full-audio`,
+    {
+      mute_original: opts?.muteOriginal ?? true,
+      original_gain_db: opts?.originalGainDb ?? 0,
+    },
+  );
+  return res.data;
+}
+
 export async function capCutPreview(
   voice: string,
   text?: string,

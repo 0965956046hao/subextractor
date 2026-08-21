@@ -634,6 +634,101 @@ async def run_dub_job(
         await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
+async def run_bulk_switch_job(
+    jobs: dict,
+    ws_clients: dict,
+    job_id: str,
+):
+    """Bulk switch voice for all lines using from_voice → to_voice, then regenerate TTS."""
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    video_id = job["video_id"]
+    from_voice = job["from_voice"]
+    to_voice = job["to_voice"]
+
+    try:
+        from app.services.translation_service import _voice_map_path, load_voice_map
+        from app.services.capcut_tts_client import generate_segments_to_dir
+        from app.services.srt_utils import parse_srt
+        import json as _json
+
+        job["status"] = "processing"
+        job["phase"] = "bulk_switch"
+        await job_log_async(job, ws_clients, f"Chuyển giọng {from_voice} → {to_voice}…")
+        await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "bulk_switch"})
+
+        # 1. Update voice_map.json
+        p = _voice_map_path(video_id)
+        if not p.exists():
+            raise ValueError("voice_map.json not found")
+
+        data = _json.loads(p.read_text(encoding="utf-8"))
+        changed = 0
+        affected_indices = []
+        for idx, vt in list(data.items()):
+            if vt == from_voice:
+                data[idx] = to_voice
+                changed += 1
+                affected_indices.append(int(idx))
+
+        if changed == 0:
+            await job_log_async(job, ws_clients, f"Không dòng nào dùng giọng {from_voice}.")
+            job["status"] = "done"
+            job["progress"] = 100
+            return
+
+        p.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        await job_log_async(job, ws_clients, f"Đã cập nhật voice_map: {changed} dòng.")
+        await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "bulk_switch"})
+
+        # 2. Regenerate TTS for each affected line
+        srt_path = _srt_path(video_id)
+        entries = parse_srt(srt_path.read_text(encoding="utf-8")) if srt_path.exists() else []
+        voice_key = to_voice.replace("-", "_")
+        out_dir = settings.temp_dir / "tts" / video_id / voice_key
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        loop = asyncio.get_event_loop()
+        total = len(affected_indices)
+        for i, idx in enumerate(affected_indices):
+            if idx < 1 or idx > len(entries):
+                continue
+            text = entries[idx - 1].text.strip()
+            if not text:
+                continue
+            await job_log_async(job, ws_clients, f"Gen TTS dòng #{idx}…")
+            try:
+                await loop.run_in_executor(
+                    _executor,
+                    functools.partial(
+                        generate_segments_to_dir,
+                        [text], out_dir, to_voice, "1.0", "", None, None, [idx],
+                    ),
+                )
+            except Exception as e:
+                await job_log_async(job, ws_clients, f"Lỗi gen TTS dòng #{idx}: {e}", "warn")
+            progress = 20 + int(80 * (i + 1) / total)
+            await notify_ws(ws_clients, job_id, {"type": "progress", "progress": progress, "phase": "bulk_switch"})
+
+        job["status"] = "done"
+        job["progress"] = 100
+        await job_log_async(job, ws_clients, f"Chuyển giọng xong: {changed} dòng đã đổi + TTS đã tạo lại.", "success")
+
+    except JobCancelled:
+        logger.info("bulk_switch job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        await job_log_async(job, ws_clients, "Đã hủy.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
+    except Exception as e:
+        logger.exception("bulk_switch job %s: FAILED  |  %s", job_id, e)
+        job["status"] = "error"
+        job["error"] = str(e)
+        await job_log_async(job, ws_clients, f"Lỗi: {e}", "error")
+        await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
+
+
 async def run_export_job(
     jobs: dict,
     ws_clients: dict,
@@ -816,6 +911,8 @@ async def worker_loop(
                     await run_context_job(jobs, ws_clients, job_id)
                 elif job_type == "risk_check":
                     await run_risk_check_job(jobs, ws_clients, job_id)
+                elif job_type == "bulk_switch":
+                    await run_bulk_switch_job(jobs, ws_clients, job_id)
                 else:
                     await run_job(jobs, ws_clients, ocr_engines, job_id)
         except Exception as e:

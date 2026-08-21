@@ -732,6 +732,173 @@ async def generate_voice_map_now(request: Request, video_id: str):
     return {"status": "done", "voices": len(voice_map)}
 
 
+# ── PATCH /api/voice-map/{video_id}/line ──
+
+@router.patch("/api/voice-map/{video_id}/line")
+async def update_voice_map_line(request: Request, video_id: str):
+    """Update a single line's voice in voice_map.json.
+
+    Body: ``{"index": 1, "voice_type": "BV421_vivn_streaming"}``.
+    """
+    from app.services.translation_service import _voice_map_path
+    import json as _json
+
+    body = await request.json()
+    index = body.get("index")
+    voice_type = body.get("voice_type")
+    if index is None or voice_type is None:
+        raise HTTPException(400, "index and voice_type required")
+
+    p = _voice_map_path(video_id)
+    if not p.exists():
+        raise HTTPException(404, "voice_map.json not found — generate first")
+
+    try:
+        data = _json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(500, "Cannot parse voice_map.json")
+
+    data[str(index)] = voice_type
+    p.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok", "index": index, "voice_type": voice_type}
+
+
+# ── POST /api/voice-map/{video_id}/bulk-switch ──
+
+@router.post("/api/voice-map/{video_id}/bulk-switch")
+async def bulk_switch_voice(request: Request, video_id: str):
+    """Start a bulk voice switch job: change all lines using from_voice → to_voice + regenerate TTS.
+
+    Body: ``{"from_voice": "ttnt", "to_voice": "tntt"}``.
+    Returns ``job_id`` for polling.
+    """
+    body = await request.json()
+    from_voice = body.get("from_voice")
+    to_voice = body.get("to_voice")
+    if not from_voice or not to_voice:
+        raise HTTPException(400, "from_voice and to_voice required")
+
+    jobs = get_jobs(request)
+    ws_clients = get_ws_clients(request)
+    queue = get_job_queue(request)
+
+    job_id = uuid.uuid4().hex[:12]
+    jobs[job_id] = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "job_type": "bulk_switch",
+        "status": "queued",
+        "phase": "",
+        "progress": 0,
+        "error": None,
+        "cancelled": False,
+        "from_voice": from_voice,
+        "to_voice": to_voice,
+    }
+    ws_clients.setdefault(job_id, [])
+    logger.info("bulk_switch job %s: queued for %s (%s → %s)", job_id, video_id, from_voice, to_voice)
+    await queue.put(job_id)
+    return {"job_id": job_id, "status": "queued"}
+
+
+# ── POST /api/tts/{video_id}/regenerate-line ──
+
+@router.post("/api/tts/{video_id}/regenerate-line")
+async def regenerate_tts_line(request: Request, video_id: str):
+    """Regenerate TTS for a single SRT line with a new voice.
+
+    Body: ``{"index": 1, "voice_type": "BV421_vivn_streaming"}``.
+    Writes the MP3 to ``tts/{video_id}/{voice_key}/{index:04d}.mp3``.
+    """
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.capcut_tts_client import generate_segments_to_dir
+    from app.services.srt_utils import parse_srt
+
+    body = await request.json()
+    index = body.get("index")
+    voice_type = body.get("voice_type")
+    if index is None or voice_type is None:
+        raise HTTPException(400, "index and voice_type required")
+
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    if not entries or index < 1 or index > len(entries):
+        raise HTTPException(400, f"Invalid index {index} (have {len(entries)} entries)")
+
+    text = entries[index - 1].text.strip()
+    if not text:
+        raise HTTPException(400, f"Entry #{index} is empty")
+
+    voice_key = voice_type.replace("-", "_")
+    out_dir = settings.temp_dir / "tts" / video_id / voice_key
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        await run_in_threadpool(
+            generate_segments_to_dir,
+            [text],
+            out_dir,
+            voice_type,
+            "1.0",
+            "",  # prefix empty → files named {index:04d}.mp3
+            None,
+            None,
+            [index],
+        )
+    except Exception as e:
+        raise HTTPException(500, f"TTS failed: {e}")
+
+    target = out_dir / f"{index:04d}.mp3"
+    if not target.exists():
+        raise HTTPException(500, "TTS file not created")
+
+    return {"status": "ok", "index": index, "voice_type": voice_type, "file": str(target)}
+
+
+# ── POST /api/tts/{video_id}/rebuild-full-audio ──
+
+@router.post("/api/tts/{video_id}/rebuild-full-audio")
+async def rebuild_full_audio(request: Request, video_id: str):
+    """Rebuild full_audio.m4a from existing per-line TTS MP3s + background music.
+
+    Body (optional): ``{"mute_original": true, "original_gain_db": 0}``.
+    """
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.dub_service import build_full_audio
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    mute_original = body.get("mute_original", True)
+    original_gain_db = body.get("original_gain_db", 0.0)
+
+    try:
+        full_audio = await run_in_threadpool(
+            build_full_audio,
+            video_id,
+            "vi-VN-Standard-B",  # voice_name ignored for rebuild
+            "capcut",
+            mute_original,
+            original_gain_db,
+            True,  # multi_voice
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Rebuild failed: {e}")
+
+    if not full_audio or not full_audio.exists():
+        raise HTTPException(500, "full_audio.m4a not created")
+
+    return {
+        "status": "ok",
+        "audio_url": f"/api/download/dubbed/{video_id}",
+        "size": full_audio.stat().st_size,
+    }
+
+
 # ── GET /api/download/translated/{video_id} ──
 
 @router.get("/api/download/translated/{video_id}")

@@ -11,14 +11,11 @@ import {
   getSrtRiskResult,
   validateSrtTimeline,
   reTranslateLine,
-  getVoiceMapDetail,
-  generateVoiceMap,
 } from "@/lib/api";
 import type {
   SrtEntry,
   TimelineIssue,
   SubtitleRisk,
-  VoiceMapDetail,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -96,7 +93,6 @@ interface TimelineCheckModalProps {
   onClose: () => void;
   targetLang?: string;
   sourceLang?: string;
-  checkVoice?: boolean;
 }
 
 type DragMode = "move" | "resize-start" | "resize-end" | null;
@@ -116,7 +112,6 @@ export default function TimelineCheckModal({
   onClose,
   targetLang = "vi",
   sourceLang = "zh",
-  checkVoice = false,
 }: TimelineCheckModalProps) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<SrtEntry[]>([]);
@@ -139,11 +134,6 @@ export default function TimelineCheckModal({
   const [editingIndex, setEditingIndex] = useState(-1);
   const [retranslatingIndex, setRetranslatingIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
-  const [voiceView, setVoiceView] = useState(checkVoice);
-  const [voiceMap, setVoiceMap] = useState<VoiceMapDetail | null>(null);
-  const [voiceLoading, setVoiceLoading] = useState(false);
-  const [voiceGenerating, setVoiceGenerating] = useState(false);
-  const [voiceError, setVoiceError] = useState("");
 
   useEffect(() => {
     setMounted(true);
@@ -165,47 +155,6 @@ export default function TimelineCheckModal({
       cancelled = true;
     };
   }, [videoId]);
-
-  // Load the per-line voice map (each subtitle line's assigned reading voice).
-  const loadVoiceMap = useCallback(async () => {
-    setVoiceLoading(true);
-    setVoiceError("");
-    try {
-      const v = await getVoiceMapDetail(videoId, targetLang);
-      setVoiceMap(v);
-      setVoiceLoading(false);
-      return v;
-    } catch (e) {
-      setVoiceError(e instanceof Error ? e.message : t("timeline.voiceLoadFailed" as string));
-      setVoiceLoading(false);
-      return null;
-    }
-  }, [videoId, targetLang]);
-
-  const toggleVoiceView = useCallback(async () => {
-    setVoiceView((prev) => {
-      if (prev) {
-        // Switching back to timeline: re-validate timing.
-        validateSrtTimeline(videoId).then((v) => setTimelineIssues(v.issues ?? []));
-        return false;
-      }
-      return true;
-    });
-    if (!voiceView) loadVoiceMap();
-  }, [voiceView, loadVoiceMap, videoId]);
-
-  const regenerateVoiceMap = useCallback(async () => {
-    setVoiceGenerating(true);
-    setVoiceError("");
-    try {
-      await generateVoiceMap(videoId, targetLang);
-      await loadVoiceMap();
-    } catch (e) {
-      setVoiceError(e instanceof Error ? e.message : t("timeline.voiceGenFailed" as string));
-    } finally {
-      setVoiceGenerating(false);
-    }
-  }, [videoId, targetLang, loadVoiceMap]);
 
   const issueIndexes = useMemo(() => new Set(timelineIssues.map((i) => i.index)), [timelineIssues]);
   const riskIndexes = useMemo(() => new Set(risks.map((r) => r.index)), [risks]);
@@ -564,32 +513,6 @@ export default function TimelineCheckModal({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {checkVoice && (
-              <div className="flex items-center rounded-full bg-black/[0.04] ring-1 ring-black/[0.05] p-1">
-                <button
-                  onClick={() => toggleVoiceView()}
-                  className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer ${
-                    !voiceView
-                      ? "bg-white shadow-sm text-ink"
-                      : "text-ink-muted hover:text-ink"
-                  }`}
-                  title={t("timeline.voiceTabTitle" as string)}
-                >
-                  {t("timeline.tabTimeline" as string)}
-                </button>
-                <button
-                  onClick={() => toggleVoiceView()}
-                  className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer ${
-                    voiceView
-                      ? "bg-white shadow-sm text-ink"
-                      : "text-ink-muted hover:text-ink"
-                  }`}
-                  title={t("timeline.voiceTabTitle" as string)}
-                >
-                  {t("timeline.tabVoice" as string)}
-                </button>
-              </div>
-              )}
               <button
                 onClick={runRiskCheck}
                 disabled={checking || entries.length === 0}
@@ -655,102 +578,6 @@ export default function TimelineCheckModal({
           )}
 
           {/* Body: video (left) + SRT list (right), timeline editor full-width below */}
-          {voiceView ? (
-            <div className="flex flex-col gap-4 min-h-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-                  {t("timeline.voiceTitle" as string, { count: entries.length })}
-                </p>
-                <div className="flex items-center gap-2">
-                  {voiceError && (
-                    <span className="text-[10px] text-red-600">{voiceError}</span>
-                  )}
-                  <button
-                    onClick={regenerateVoiceMap}
-                    disabled={voiceGenerating || voiceLoading}
-                    className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
-                    title={t("timeline.voiceRegenerateTitle" as string)}
-                  >
-                    {voiceGenerating ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
-                    {voiceGenerating
-                      ? t("timeline.voiceGenerating" as string)
-                      : t("timeline.voiceRegenerate" as string)}
-                  </button>
-                </div>
-              </div>
-
-              {voiceLoading && (
-                <div className="flex items-center gap-2 text-[12px] text-ink-muted">
-                  <IconSpinner className="w-4 h-4" /> {t("timeline.voiceLoading" as string)}
-                </div>
-              )}
-
-              {!voiceLoading && voiceMap && !voiceMap.exists && (
-                <div className="rounded-xl bg-violet-500/10 ring-1 ring-violet-500/25 px-3.5 py-2.5">
-                  <p className="text-[12px] text-violet-800">
-                    {t("timeline.voiceNoMap" as string)}
-                  </p>
-                  <button
-                    onClick={regenerateVoiceMap}
-                    disabled={voiceGenerating}
-                    className="mt-2 px-3 py-1.5 rounded-full text-[11px] font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
-                  >
-                    {voiceGenerating ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
-                    {voiceGenerating
-                      ? t("timeline.voiceGenerating" as string)
-                      : t("timeline.voiceCreateMap" as string)}
-                  </button>
-                </div>
-              )}
-
-              <div className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] divide-y divide-black/[0.04]">
-                {entries.map((entry) => {
-                  const voice = voiceMap?.map?.[String(entry.index)];
-                  const active = entry.index === activeIndex;
-                  return (
-                    <div
-                      key={entry.index}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => selectEntry(entry.index, entry.start)}
-                      className={`group w-full text-left px-3 py-2.5 cursor-pointer transition-colors ${
-                        active ? "bg-violet-500/10" : "hover:bg-black/[0.02]"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-700">
-                          #{entry.index}
-                        </span>
-                        <span className="font-mono text-[10px] text-ink-light">
-                          {secToSrt(entry.start).replace(",", ".").slice(0, 11)} → {secToSrt(entry.end).replace(",", ".").slice(0, 11)}
-                        </span>
-                        <span
-                          className={`ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
-                            voice
-                              ? "bg-emerald-500/15 text-emerald-700"
-                              : "bg-red-500/10 text-red-600"
-                          }`}
-                        >
-                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M11 5L6 9H2v6h4l5 4V5z" />
-                            <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
-                          </svg>
-                          {voice ? voice.display_name : t("timeline.voiceMissing" as string)}
-                        </span>
-                      </div>
-                      <p className="text-[12px] leading-snug mt-1 line-clamp-2 text-ink">{entry.text}</p>
-                      {voice && (
-                        <p className="text-[10px] text-ink-light mt-0.5 font-mono truncate">{voice.voice_type}</p>
-                      )}
-                    </div>
-                  );
-                })}
-                {entries.length === 0 && !loadError && (
-                  <p className="text-[12px] text-ink-light p-4">{t("timeline.loadingSubtitles" as string)}</p>
-                )}
-              </div>
-            </div>
-          ) : (
           <div className="flex flex-col gap-4 min-h-0 flex-1">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 flex-1">
             {/* Left: video */}
@@ -1067,7 +894,6 @@ export default function TimelineCheckModal({
             </div>
 
           </div>
-          )}
 
           {/* Footer */}
           <div className="flex items-center gap-2 pt-1">

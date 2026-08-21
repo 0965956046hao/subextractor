@@ -31,6 +31,7 @@ import {
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
+import VoiceCheckModal from "@/components/VoiceCheckModal";
 import {
   usePipelineStore,
   STEPS,
@@ -2337,6 +2338,9 @@ function DetailView({
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
+  const resolveVoiceCheck = usePipelineStore((s) => s.resolveVoiceCheck);
+  const openVoiceCheck = usePipelineStore((s) => s.openVoiceCheck);
+  const closeVoiceCheck = usePipelineStore((s) => s.closeVoiceCheck);
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -2938,15 +2942,73 @@ function DetailView({
         </div>
       )}
 
+      {p.voiceCheck?.waiting && !p.voiceCheck.open && p.videoId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards",
+            }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-9 h-9 rounded-full bg-violet-500/15 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-violet-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 5L6 9H2v6h4l5 4V5z" />
+                    <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-ink">
+                    {tr("pipeline.voiceCheckTitle")}
+                  </p>
+                  <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
+                    {tr("pipeline.voiceCheckHint")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 mt-5">
+                <button
+                  onClick={() => resolveVoiceCheck(p.id, "continue")}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                >
+                  {tr("pipeline.voiceCheckSkip")}
+                </button>
+                <button
+                  onClick={() => openVoiceCheck(p.id)}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 5L6 9H2v6h4l5 4V5z" />
+                    <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
+                  </svg>
+                  {tr("pipeline.voiceCheckOpen")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {p.timelineCheck?.waiting && p.timelineCheck.open && p.videoId && (
         <TimelineCheckModal
           videoId={p.videoId}
           initialIssues={p.timelineCheck.issues}
           targetLang={p.translateTarget || "vi"}
           sourceLang={p.srcLang || "zh"}
-          checkVoice={p.checkVoice}
           onResolve={() => resolveTimelineCheck(p.id, "continue")}
           onClose={() => closeTimelineCheck(p.id)}
+        />
+      )}
+
+      {p.voiceCheck?.waiting && p.voiceCheck.open && p.videoId && (
+        <VoiceCheckModal
+          videoId={p.videoId}
+          targetLang={p.translateTarget || "vi"}
+          dubbedAudioUrl={p.dubbedUrl}
+          onResolve={() => resolveVoiceCheck(p.id, "continue")}
+          onClose={() => closeVoiceCheck(p.id)}
         />
       )}
 

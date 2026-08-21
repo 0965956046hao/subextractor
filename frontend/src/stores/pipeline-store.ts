@@ -151,6 +151,7 @@ export interface Pipeline {
   checkSubs: boolean;
   checkVoice: boolean;
   timelineCheck: TimelineCheck | null;
+  voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
 }
 
@@ -159,6 +160,11 @@ export interface TimelineCheck {
   open: boolean;
   issues: TimelineIssue[];
   fixing: boolean;
+}
+
+export interface VoiceCheck {
+  waiting: boolean;
+  open: boolean;
 }
 
 export interface DubOptions {
@@ -232,6 +238,9 @@ interface PipelineState {
   resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
   openTimelineCheck: (id: string) => void;
   closeTimelineCheck: (id: string) => void;
+  resolveVoiceCheck: (id: string, action: string) => void;
+  openVoiceCheck: (id: string) => void;
+  closeVoiceCheck: (id: string) => void;
   restorePaused: () => void;
 }
 
@@ -305,6 +314,7 @@ function newPipeline(
     checkSubs,
     checkVoice,
     timelineCheck: null,
+    voiceCheck: null,
     resumeStep: null,
     useFalThumbnail,
     useGptThumbnail,
@@ -670,6 +680,33 @@ export const usePipelineStore = create<PipelineState>()(
         patch(id, { timelineCheck: { ...s.timelineCheck, open: false } });
         if (s.videoId) reportTimelineAction(s.videoId, "close").catch(() => {});
       },
+      resolveVoiceCheck: (id, action) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.voiceCheck?.waiting) return;
+        patch(id, {
+          voiceCheck: { ...s.voiceCheck, waiting: false, open: false },
+        });
+        const w = voiceCheckWaiters.get(id);
+        if (w) {
+          voiceCheckWaiters.delete(id);
+          w.resolve(action);
+        }
+        if (!liveRunners.has(id)) {
+          markStepEnd(id, 6);
+          patch(id, { voiceCheck: null });
+          enqueue(id, s.resumeStep ?? 7);
+        }
+      },
+      openVoiceCheck: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.voiceCheck?.waiting || s.voiceCheck.open) return;
+        patch(id, { voiceCheck: { ...s.voiceCheck, open: true } });
+      },
+      closeVoiceCheck: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.voiceCheck?.waiting || !s.voiceCheck.open) return;
+        patch(id, { voiceCheck: { ...s.voiceCheck, open: false } });
+      },
       restorePaused: () => {
         runRestorePaused();
       },
@@ -961,6 +998,10 @@ const timelineCheckWaiters = new Map<
   string,
   { resolve: (a: "fix" | "continue") => void; reject: (e: Error) => void }
 >();
+const voiceCheckWaiters = new Map<
+  string,
+  { resolve: (action: string) => void }
+>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -993,6 +1034,12 @@ function rejectSubtitleStyle(id: string) {
 function waitForTimelineCheck(id: string): Promise<"fix" | "continue"> {
   return new Promise<"fix" | "continue">((resolve, reject) => {
     timelineCheckWaiters.set(id, { resolve, reject });
+  });
+}
+
+function waitForVoiceCheck(id: string): Promise<string> {
+  return new Promise<string>((resolve) => {
+    voiceCheckWaiters.set(id, { resolve });
   });
 }
 
@@ -1804,7 +1851,7 @@ async function runPipeline(id: string, startStep = 4) {
         // (không tốn Gemini), xong mới tới bước kiểm tra timeline thủ công.
         await runSrtAutoChecks(id, videoId);
 
-        // Optional: always pause for the user to review the translated SRT in the
+        // Optional: pause for the user to review the translated SRT in the
         // timeline-check popup (only when checkSubs is on). No auto-skip.
         if (cur.checkSubs && videoId) {
           appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
@@ -1941,6 +1988,26 @@ if (cur.multiVoice && engine === "capcut" && videoId) {
             appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
           }
           markStepEnd(id, 7);
+        }
+      }
+
+      // Voice check: pause for user to review per-line voice assignment AFTER dub
+      if (cur.checkVoice && videoId) {
+        appendLog(id, "Kiểm tra giọng đọc từng dòng...");
+        patch(id, {
+          voiceCheck: { waiting: true, open: false },
+        });
+        patch(id, { resumeStep: 8 });
+        try {
+          await waitForVoiceCheck(id);
+          appendLog(id, "Đã xác nhận giọng đọc.");
+        } catch (e) {
+          appendLog(
+            id,
+            `Bỏ qua kiểm tra giọng: ${e instanceof Error ? e.message : "lỗi"}`,
+          );
+        } finally {
+          patch(id, { voiceCheck: null });
         }
       }
     }
