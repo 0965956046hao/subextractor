@@ -160,7 +160,7 @@ SPEAKER DIARIZATION (from audio analysis):
 
 RULES:
 1. Listen to the audio and read the speaker diarization to identify who speaks when.
-2. Map each SRT line to the speaker who says it based on timestamps.
+2. Map each SRT line to the speaker who says it based on timestamps (start --> end).
 3. Pick a voice_type for EACH SRT line from the AVAILABLE list only. Never invent a voice.
 4. MỖI NHÂN VẬT CHỈ DÙNG 1 GIỌNG duy nhất xuyên suốt video. Nếu cùng một nhân vật xuất hiện ở nhiều dòng (kể cả không liên tiếp), LUÔN gán cùng voice_type — tuyệt đối không đổi giọng cho cùng 1 nhân vật.
 5. Chỉ đổi giọng khi chắc chắn người nói khác nhân vật (nam ↔ nữ, già ↔ trẻ, khác vai trò).
@@ -168,7 +168,8 @@ RULES:
 7. Narrator/background lines: pick a neutral voice.
 8. Output ONLY a JSON object mapping SRT index → voice_type, e.g. {{"1": "BV421_vivn_streaming", "2": "vi_female_huong"}}. No markdown, no explanation.
 
-SRT LINES:
+{previous_assignments}
+SRT LINES (with timestamps):
 {srt}
 """
 
@@ -195,43 +196,55 @@ def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "
         return {}
 
     # Step 1: Extract audio and get diarization from Gemini
+    # Ưu tiên: vocals.wav (demucs) > merged audio > video
     diarization_text = "Không có dữ liệu diarization (dùng context để suy luận)."
     audio_uri = None
     try:
-        from app.services.media_utils import _merge_audio_path
+        import subprocess
 
-        # Ưu tiên dùng file audio đã merge sẵn (merged/{merge_id}_audio.mp4)
-        merged_audio = _merge_audio_path(video_id)
         audio_dir = settings.temp_dir / "translated" / video_id
         audio_dir.mkdir(parents=True, exist_ok=True)
         audio_path = audio_dir / "diarization_input.wav"
 
-        if merged_audio and merged_audio.exists():
+        # Fix 1: Ưu tiên vocals.wav từ demucs (đã tách voice, không có nhạc nền)
+        demucs_vocals = settings.temp_dir / "tts" / video_id / "separated" / "htdemucs" / "audio" / "vocals.wav"
+        if demucs_vocals.exists() and demucs_vocals.stat().st_size > 0:
             if log_fn:
-                log_fn(f"Dùng file audio có sẵn: {merged_audio.name}")
-            # Convert MP4 → WAV 16kHz mono (optimal for speech recognition)
-            import subprocess
+                log_fn(f"Dùng vocals.wav từ demucs: {demucs_vocals.name}")
             subprocess.run(
                 [
-                    "ffmpeg", "-y", "-i", str(merged_audio),
+                    "ffmpeg", "-y", "-i", str(demucs_vocals),
                     "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
                     str(audio_path),
                 ],
                 check=True, capture_output=True, timeout=120,
             )
         else:
-            if log_fn:
-                log_fn("Không tìm thấy file audio, trích xuất từ video...")
-            video_path = _video_path(video_id)
-            import subprocess
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-i", str(video_path),
-                    "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
-                    str(audio_path),
-                ],
-                check=True, capture_output=True, timeout=120,
-            )
+            from app.services.media_utils import _merge_audio_path
+            merged_audio = _merge_audio_path(video_id)
+            if merged_audio and merged_audio.exists():
+                if log_fn:
+                    log_fn(f"Dùng file audio có sẵn: {merged_audio.name}")
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", str(merged_audio),
+                        "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+                        str(audio_path),
+                    ],
+                    check=True, capture_output=True, timeout=120,
+                )
+            else:
+                if log_fn:
+                    log_fn("Không tìm thấy file audio, trích xuất từ video...")
+                video_path = _video_path(video_id)
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", str(video_path),
+                        "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+                        str(audio_path),
+                    ],
+                    check=True, capture_output=True, timeout=120,
+                )
 
         if audio_path.exists() and audio_path.stat().st_size > 0:
             if log_fn:
@@ -239,7 +252,8 @@ def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "
             from app.services.retry_utils import upload_audio_to_gemini, delete_gemini_file
             audio_uri, audio_mime = upload_audio_to_gemini(audio_path, mime_type="audio/wav")
 
-            # Ask Gemini to do speaker diarization
+            # Fix 3: Include timestamps in SRT for diarization mapping
+            srt_with_timestamps = entries_to_srt(entries)
             diarization_prompt = f"""Analyze this audio file and identify all distinct speakers.
 
 For each speaker, provide:
@@ -247,12 +261,12 @@ For each speaker, provide:
 2. The timestamps (start - end) when they speak
 3. A brief description (gender, age estimate, tone)
 
-Then map each speaker to the SRT lines below based on timing overlap.
+Then map each speaker to the SRT lines below based on timing overlap. Use the start/end timestamps to match speakers to lines.
 
-SRT LINES:
-{entries_to_srt(entries)}
+SRT LINES (with timestamps):
+{srt_with_timestamps}
 
-Output format: JSON object with SRT index → speaker info, e.g.:
+Output format: JSON object with SRT index -> speaker info, e.g.:
 {{
   "speakers": {{
     "Speaker 1": {{"gender": "male", "age": "young", "description": "deep voice, authoritative"}},
@@ -274,7 +288,7 @@ Output format: JSON object with SRT index → speaker info, e.g.:
                 model=settings.gemini_model,
                 contents=contents,
                 config={
-                    "system_instruction": "You are an expert audio analyst. Identify speakers and their characteristics from the audio.",
+                    "system_instruction": "You are an expert audio analyst. Identify speakers and their characteristics from the audio. Use timestamps to accurately map speakers to subtitle lines.",
                     "temperature": 0.2,
                 },
             )
@@ -283,8 +297,8 @@ Output format: JSON object with SRT index → speaker info, e.g.:
             raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             diarization_data = json.loads(raw)
 
-            # Lưu raw diarization response vào context folder
-            diarization_file = settings.temp_dir / "context" / video_id / "diarization.json"
+            # Lưu raw diarization response vào translated folder
+            diarization_file = settings.temp_dir / "translated" / video_id / "diarization.json"
             diarization_file.parent.mkdir(parents=True, exist_ok=True)
             diarization_file.write_text(json.dumps(diarization_data, ensure_ascii=False, indent=2), encoding="utf-8")
             if log_fn:
@@ -297,7 +311,7 @@ Output format: JSON object with SRT index → speaker info, e.g.:
             diarization_lines = ["SPEAKER IDENTIFICATION:"]
             for spk, info in speakers.items():
                 diarization_lines.append(f"  {spk}: {info.get('gender', 'unknown')}, {info.get('description', '')}")
-            diarization_lines.append("\nLINE → SPEAKER MAPPING:")
+            diarization_lines.append("\nLINE -> SPEAKER MAPPING:")
             for idx, spk in sorted(line_speakers.items(), key=lambda x: int(x[0])):
                 diarization_lines.append(f"  Line {idx}: {spk}")
 
@@ -321,6 +335,7 @@ Output format: JSON object with SRT index → speaker info, e.g.:
         context=context,
         catalog=catalog,
         diarization=diarization_text,
+        previous_assignments="",
         srt="{srt}",
     )
 
@@ -332,7 +347,24 @@ Output format: JSON object with SRT index → speaker info, e.g.:
     for bi, batch_start in enumerate(range(0, total, batch_size)):
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
-        prompt = base_prompt.replace("{srt}", batch_srt)
+
+        # Fix 2: Cross-batch memory — tell Gemini đã assign giọng gì ở các batch trước
+        previous_assignments = ""
+        if voice_map:
+            prev_lines = []
+            for prev_idx in sorted(voice_map.keys()):
+                if prev_idx <= batch_start:
+                    entry = entries[prev_idx - 1] if 0 < prev_idx <= len(entries) else None
+                    if entry:
+                        prev_lines.append(f"  Line {prev_idx}: {voice_map[prev_idx]} ({entry.text[:40]}...)")
+            if prev_lines:
+                previous_assignments = (
+                    "PREVIOUS VOICE ASSIGNMENTS (MUST stay consistent - do NOT change these):\n"
+                    + "\n".join(prev_lines)
+                    + "\n\n"
+                )
+
+        prompt = base_prompt.replace("{srt}", batch_srt).replace("{previous_assignments}", previous_assignments)
         if log_fn:
             log_fn(f"  Chọn giọng đọc batch {bi + 1}/{total_batches} ({len(batch)} dòng)...")
         try:
@@ -341,7 +373,7 @@ Output format: JSON object with SRT index → speaker info, e.g.:
                 model=settings.gemini_model,
                 contents=prompt,
                 config={
-                    "system_instruction": "You assign CapCut voices to subtitle lines. Output JSON only.",
+                    "system_instruction": "You assign CapCut voices to subtitle lines. Output JSON only. Keep voice assignments consistent with PREVIOUS VOICE ASSIGNMENTS.",
                     "temperature": 0.2,
                 },
             )

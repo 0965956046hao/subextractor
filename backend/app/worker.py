@@ -13,6 +13,18 @@ from app.services.subtitle_generator import generate_srt, sec_to_srt
 from app.services.hardcode_service import run_hardcode_sync
 from app.services.align_service import run_align_sync
 from app.services.job_utils import JobCancelled, notify_ws_sync
+
+from datetime import datetime
+
+
+async def _tg_notify(text: str):
+    """Send Telegram notification to all connected chats (fire-and-forget)."""
+    try:
+        from app.services.telegram_service import telegram_service
+        if telegram_service.has_connected_chats():
+            await telegram_service.broadcast(text)
+    except Exception:
+        pass
 from app.services.media_utils import _srt_path, _duration_covers, _get_duration
 
 logger = logging.getLogger(__name__)
@@ -257,16 +269,16 @@ async def run_job(
         logger.info("job %s: done  |  %.1fKB  |  %.1fs total", job_id, size_kb, time.time() - t_start)
 
         # Telegram notification
-        try:
-            from app.services.telegram_service import telegram_service
-            if telegram_service.has_connected_chats():
-                await telegram_service.broadcast(
-                    f"✅ <b>OCR hoàn tất!</b>\n"
-                    f"🎬 {video_id}\n"
-                    f"📄 {line_count} dòng phụ đề"
-                )
-        except Exception:
-            pass
+        elapsed = time.time() - t_start
+        mins, secs = divmod(int(elapsed), 60)
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(
+            f"✅ <b>OCR hoàn tất!</b>\n"
+            f"🎬 {video_id}\n"
+            f"📄 {line_count} dòng phụ đề\n"
+            f"⏱ {mins}m {secs}s\n"
+            f"🕐 {now_str}"
+        )
 
         # Fire-and-forget: auto-generate context (runs after "done" notification)
         from app.services.context_service import generate_video_context
@@ -405,16 +417,13 @@ async def run_hardcode_job(
         })
 
         # Telegram notification
-        try:
-            from app.services.telegram_service import telegram_service
-            if telegram_service.has_connected_chats():
-                await telegram_service.broadcast(
-                    f"✅ <b>Video đã xử lý xong!</b>\n"
-                    f"🎬 {final_path.name}\n"
-                    f"📦 {size_mb:.1f} MB"
-                )
-        except Exception:
-            pass
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(
+            f"✅ <b>Video đã xử lý xong!</b>\n"
+            f"🎬 {final_path.name}\n"
+            f"📦 {size_mb:.1f} MB\n"
+            f"🕐 {now_str}"
+        )
 
     except JobCancelled:
         logger.info("hardcode job %s: cancelled", job_id)
@@ -473,6 +482,9 @@ async def run_align_job(
             "success",
         )
 
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(f"✅ <b>Căn chỉnh phụ đề xong!</b>\n🎬 {video_id}\n🕐 {now_str}")
+
     except JobCancelled:
         logger.info("align job %s: cancelled", job_id)
         job["status"] = "cancelled"
@@ -527,6 +539,9 @@ async def run_translate_job(
         job["status"] = "done"
         job["progress"] = 100
         await job_log_async(job, ws_clients, "Dịch hoàn tất! File SRT tiếng Việt đã sẵn sàng.", "success")
+
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(f"✅ <b>Dịch phụ đề xong!</b>\n🎬 {video_id}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("translate job %s: cancelled", job_id)
@@ -583,6 +598,9 @@ async def run_tts_job(
         job["progress"] = 100
         await job_log_async(job, ws_clients, "TTS hoàn tất! Video lồng tiếng đã sẵn sàng.", "success")
 
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(f"✅ <b>TTS hoàn tất!</b>\n🎬 {video_id}\n🕐 {now_str}")
+
     except JobCancelled:
         logger.info("tts job %s: cancelled", job_id)
         job["status"] = "cancelled"
@@ -637,6 +655,9 @@ async def run_dub_job(
         job["status"] = "done"
         job["progress"] = 100
         await job_log_async(job, ws_clients, "Lồng tiếng Việt hoàn tất!", "success")
+
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(f"✅ <b>Lồng tiếng hoàn tất!</b>\n🎬 {video_id}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("dub job %s: cancelled", job_id)
@@ -799,15 +820,12 @@ async def run_export_job(
         await job_log_async(job, ws_clients, "Xuất video hoàn tất!", "success")
 
         # Telegram notification
-        try:
-            from app.services.telegram_service import telegram_service
-            if telegram_service.has_connected_chats():
-                await telegram_service.broadcast(
-                    f"✅ <b>Video đã xuất xong!</b>\n"
-                    f"🎬 {video_id}"
-                )
-        except Exception:
-            pass
+        now_str = datetime.now().strftime("%H:%M:%S")
+        await _tg_notify(
+            f"✅ <b>Video đã xuất xong!</b>\n"
+            f"🎬 {video_id}\n"
+            f"🕐 {now_str}"
+        )
 
     except JobCancelled:
         job["status"] = "cancelled"

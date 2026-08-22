@@ -6,14 +6,22 @@ import { useI18n } from "@/lib/i18n";
 
 interface Props {
   videoUrl: string;
-  onRegion: (region: Region | null) => void;
+  onRegions: (regions: Region[]) => void;
 }
+
+const REGION_COLORS = [
+  { fill: "rgba(239,68,68,0.18)", stroke: "rgba(239,68,68,0.85)", text: "rgba(239,68,68,0.9)" },
+  { fill: "rgba(59,130,246,0.18)", stroke: "rgba(59,130,246,0.85)", text: "rgba(59,130,246,0.9)" },
+  { fill: "rgba(34,197,94,0.18)", stroke: "rgba(34,197,94,0.85)", text: "rgba(34,197,94,0.9)" },
+  { fill: "rgba(249,115,22,0.18)", stroke: "rgba(249,115,22,0.85)", text: "rgba(249,115,22,0.9)" },
+  { fill: "rgba(168,85,247,0.18)", stroke: "rgba(168,85,247,0.85)", text: "rgba(168,85,247,0.9)" },
+];
 
 function clamp(v: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, v));
 }
 
-export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
+export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -21,7 +29,8 @@ export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
   const [size, setSize] = useState({ w: 400, h: 225 });
   const [drawing, setDrawing] = useState(false);
   const [startPt, setStartPt] = useState<{ x: number; y: number } | null>(null);
-  const [preview, setPreview] = useState<Region | null>(null);
+  const [regions, setRegions] = useState<Region[]>([]);
+  const [drawingPreview, setDrawingPreview] = useState<Region | null>(null);
 
   // Resize observer
   useEffect(() => {
@@ -35,7 +44,7 @@ export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  // Draw overlay
+  // Draw overlay — all regions + current drawing preview
   const redraw = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return;
@@ -43,24 +52,40 @@ export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
     if (!ctx) return;
     ctx.clearRect(0, 0, c.width, c.height);
 
-    if (preview) {
-      const p = { x1: preview.x1 * c.width, y1: preview.y1 * c.height, x2: preview.x2 * c.width, y2: preview.y2 * c.height };
-      // Dim outside
-      ctx.fillStyle = "rgba(239,68,68,0.15)";
-      ctx.fillRect(0, 0, c.width, c.height);
-      ctx.clearRect(p.x1, p.y1, p.x2 - p.x1, p.y2 - p.y1);
-      // Border
-      ctx.strokeStyle = "rgba(239,68,68,0.8)";
+    // Draw all confirmed regions
+    regions.forEach((r, i) => {
+      const color = REGION_COLORS[i % REGION_COLORS.length];
+      const px = {
+        x1: r.x1 * c.width, y1: r.y1 * c.height,
+        x2: r.x2 * c.width, y2: r.y2 * c.height,
+      };
+      ctx.fillStyle = color.fill;
+      ctx.fillRect(px.x1, px.y1, px.x2 - px.x1, px.y2 - px.y1);
+      ctx.strokeStyle = color.stroke;
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 3]);
-      ctx.strokeRect(p.x1, p.y1, p.x2 - p.x1, p.y2 - p.y1);
+      ctx.strokeRect(px.x1, px.y1, px.x2 - px.x1, px.y2 - px.y1);
       ctx.setLineDash([]);
-      // Label
-      ctx.fillStyle = "rgba(239,68,68,0.9)";
-      ctx.font = "11px sans-serif";
-      ctx.fillText("WATERMARK", p.x1 + 4, p.y1 + 14);
+      ctx.fillStyle = color.text;
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillText(`${i + 1}`, px.x1 + 4, px.y1 + 14);
+    });
+
+    // Draw current preview (being drawn)
+    if (drawingPreview) {
+      const px = {
+        x1: drawingPreview.x1 * c.width, y1: drawingPreview.y1 * c.height,
+        x2: drawingPreview.x2 * c.width, y2: drawingPreview.y2 * c.height,
+      };
+      ctx.fillStyle = "rgba(239,68,68,0.12)";
+      ctx.fillRect(px.x1, px.y1, px.x2 - px.x1, px.y2 - px.y1);
+      ctx.strokeStyle = "rgba(239,68,68,0.6)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(px.x1, px.y1, px.x2 - px.x1, px.y2 - px.y1);
+      ctx.setLineDash([]);
     }
-  }, [preview]);
+  }, [regions, drawingPreview]);
 
   useEffect(() => { redraw(); }, [redraw, size]);
 
@@ -75,19 +100,18 @@ export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
     const pt = toNorm(e);
     setStartPt(pt);
     setDrawing(true);
-    setPreview(null);
+    setDrawingPreview(null);
   };
 
   const handleMove = (e: React.MouseEvent) => {
     if (!drawing || !startPt) return;
     const pt = toNorm(e);
-    const r: Region = {
+    setDrawingPreview({
       x1: Math.min(startPt.x, pt.x),
       y1: Math.min(startPt.y, pt.y),
       x2: Math.max(startPt.x, pt.x),
       y2: Math.max(startPt.y, pt.y),
-    };
-    setPreview(r);
+    });
   };
 
   const handleUp = () => {
@@ -96,14 +120,29 @@ export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
     setStartPt(null);
   };
 
-  const handleConfirm = () => {
-    if (preview && preview.x2 - preview.x1 >= 0.01 && preview.y2 - preview.y1 >= 0.01) {
-      onRegion(preview);
+  const handleAddRegion = () => {
+    if (drawingPreview && drawingPreview.x2 - drawingPreview.x1 >= 0.01 && drawingPreview.y2 - drawingPreview.y1 >= 0.01) {
+      const updated = [...regions, drawingPreview];
+      setRegions(updated);
+      setDrawingPreview(null);
+      onRegions(updated);
     }
   };
 
-  const handleClear = () => {
-    setPreview(null);
+  const handleRemoveRegion = (index: number) => {
+    const updated = regions.filter((_, i) => i !== index);
+    setRegions(updated);
+    onRegions(updated);
+  };
+
+  const handleClearAll = () => {
+    setRegions([]);
+    setDrawingPreview(null);
+    onRegions([]);
+  };
+
+  const handleConfirm = () => {
+    onRegions(regions);
   };
 
   return (
@@ -129,29 +168,83 @@ export default function WatermarkRegionSelector({ videoUrl, onRegion }: Props) {
         onMouseUp={handleUp}
         onMouseLeave={handleUp}
       />
-      {!preview && (
+
+      {/* Hint when empty */}
+      {regions.length === 0 && !drawingPreview && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <span className="bg-black/50 text-white text-[11px] px-2 py-1 rounded">
             {t("pipeline.removeWatermarkDrawHint")}
           </span>
         </div>
       )}
-      {preview && (
+
+      {/* Drawing preview buttons */}
+      {drawingPreview && (
         <div className="absolute bottom-3 right-3 flex gap-2">
           <button
             type="button"
-            onClick={handleClear}
+            onClick={() => setDrawingPreview(null)}
             className="px-3 py-1.5 text-[11px] font-medium bg-white/90 text-gray-600 rounded-lg shadow hover:bg-white cursor-pointer"
           >
             {t("pipeline.removeWatermarkRedraw")}
           </button>
           <button
             type="button"
-            onClick={handleConfirm}
+            onClick={handleAddRegion}
             className="px-3 py-1.5 text-[11px] font-medium bg-red-500 text-white rounded-lg shadow hover:bg-red-600 cursor-pointer"
           >
-            {t("pipeline.removeWatermarkConfirm")}
+            {t("pipeline.removeWatermarkAdd")}
           </button>
+        </div>
+      )}
+
+      {/* Regions list + confirm */}
+      {regions.length > 0 && !drawingPreview && (
+        <div className="absolute bottom-3 left-3 right-3">
+          <div className="bg-white/95 rounded-lg shadow-lg p-2 mb-2 max-h-32 overflow-y-auto">
+            {regions.map((r, i) => {
+              const color = REGION_COLORS[i % REGION_COLORS.length];
+              return (
+                <div key={i} className="flex items-center justify-between py-1 px-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-4 h-4 rounded text-[9px] font-bold text-white flex items-center justify-center"
+                      style={{ backgroundColor: color.stroke }}
+                    >
+                      {i + 1}
+                    </span>
+                    <span className="text-[10px] font-mono text-gray-500">
+                      x:{(r.x1 * 100).toFixed(0)}%–{(r.x2 * 100).toFixed(0)}%
+                      &nbsp;y:{(r.y1 * 100).toFixed(0)}%–{(r.y2 * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveRegion(i)}
+                    className="text-[10px] text-red-500 hover:text-red-600 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="px-3 py-1.5 text-[11px] font-medium bg-white/90 text-gray-600 rounded-lg shadow hover:bg-white cursor-pointer"
+            >
+              {t("pipeline.removeWatermarkClearAll")}
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              className="px-3 py-1.5 text-[11px] font-medium bg-red-500 text-white rounded-lg shadow hover:bg-red-600 cursor-pointer"
+            >
+              {t("pipeline.removeWatermarkConfirm")} ({regions.length})
+            </button>
+          </div>
         </div>
       )}
     </div>

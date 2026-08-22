@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SubTitle Extractor - Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    .container {
+      text-align: center;
+      max-width: 400px;
+      padding: 40px;
+    }
+    .logo {
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-bottom: 32px;
+    }
+    .tools-list {
+      text-align: left;
+      margin-bottom: 32px;
+    }
+    .tool-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    .tool-icon {
+      width: 20px;
+      text-align: center;
+    }
+    .tool-name {
+      flex: 1;
+      font-weight: 500;
+    }
+    .tool-status {
+      font-size: 12px;
+      opacity: 0.7;
+    }
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .checkmark {
+      color: #4ade80;
+    }
+    .skip {
+      color: #fbbf24;
+    }
+    .error {
+      color: #f87171;
+    }
+    .progress-bar {
+      height: 4px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: white;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+    .message {
+      font-size: 12px;
+      opacity: 0.7;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🎬</div>
+    <h1>SubTitle Extractor</h1>
+    <p class="subtitle">Setting up your environment...</p>
+    
+    <div class="progress-bar">
+      <div class="progress-fill" id="progress" style="width: 0%"></div>
+    </div>
+
+    <div class="tools-list" id="tools">
+      <div class="tool-item" id="tool-ffmpeg">
+        <span class="tool-icon">🔧</span>
+        <span class="tool-name">FFmpeg</span>
+        <span class="tool-status" id="status-ffmpeg">Waiting...</span>
+      </div>
+      <div class="tool-item" id="tool-demucs">
+        <span class="tool-icon">🎵</span>
+        <span class="tool-name">Demucs</span>
+        <span class="tool-status" id="status-demucs">Waiting...</span>
+      </div>
+      <div class="tool-item" id="tool-youtubeuploader">
+        <span class="tool-icon">📺</span>
+        <span class="tool-name">YouTube Uploader</span>
+        <span class="tool-status" id="status-youtubeuploader">Waiting...</span>
+      </div>
+    </div>
+
+    <p class="message" id="message">Preparing to install tools...</p>
+  </div>
+
+  <script>
+    const tools = ['ffmpeg', 'demucs', 'youtubeuploader'];
+    const total = tools.length;
+    let completed = 0;
+
+    function updateProgress() {
+      const pct = Math.round((completed / total) * 100);
+      document.getElementById('progress').style.width = pct + '%';
+    }
+
+    function updateTool(name, status, message) {
+      const statusEl = document.getElementById('status-' + name);
+      if (!statusEl) return;
+
+      if (status === 'downloading') {
+        statusEl.innerHTML = '<span class="spinner"></span>';
+      } else if (status === 'ready') {
+        statusEl.innerHTML = '<span class="checkmark">✓</span>';
+        completed++;
+      } else if (status === 'skipped') {
+        statusEl.innerHTML = '<span class="skip">—</span>';
+        completed++;
+      } else if (status === 'error') {
+        statusEl.innerHTML = '<span class="error">✗</span>';
+        completed++;
+      }
+      updateProgress();
+    }
+
+    document.getElementById('message').textContent = 'Downloading required tools...';
+
+    // Listen for messages from Tauri backend
+    window.__TAURI_IPC__?.listen('tools-progress', (event) => {
+      const { name, status, message } = event.payload;
+      document.getElementById('message').textContent = message;
+      
+      if (name === 'done') {
+        document.getElementById('message').textContent = 'Environment ready! Starting app...';
+        // Navigate to main app after a short delay
+        setTimeout(() => {
+          window.location.href = 'http://localhost:3000';
+        }, 500);
+      } else {
+        updateTool(name, status, message);
+      }
+    });
+
+    // Fallback: poll health endpoint when backend starts
+    let pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:8000/api/health');
+        if (res.ok) {
+          clearInterval(pollInterval);
+          document.getElementById('message').textContent = 'Environment ready! Starting app...';
+          setTimeout(() => {
+            window.location.href = 'http://localhost:3000';
+          }, 500);
+        }
+      } catch {
+        // Backend not ready yet
+      }
+    }, 1000);
+  </script>
+</body>
+</html>

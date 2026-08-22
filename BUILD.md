@@ -106,15 +106,7 @@ Sản phẩm:
 
 > `beforeBuildCommand` tự chạy `npm run build` trong `frontend/` (Tauri CLI chạy hook với cwd = `frontend/`). Nếu chạy Bước 1 rồi, bước này chỉ cần cho phần Rust + bundle.
 
-### Bước 6 — Sign + verify app (bắt buộc trước khi share)
-
-`tauri build` để lại signature thiếu seal resource → chạy script này để ký ad-hoc cho chuẩn:
-
-```bash
-bash sign.sh
-```
-
-### Bước 7 — Smoke test (mở app)
+### Bước 5 — Smoke test (mở app)
 
 Lần đầu mở, app tự tải tools vào data dir (theo dõi log: `[tools] ffmpeg ready`, `[tools] demucs ready`, `[tools] youtubeuploader ready`). Chờ tools xong rồi kiểm tra:
 

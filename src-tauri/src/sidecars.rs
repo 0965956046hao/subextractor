@@ -50,9 +50,24 @@ impl SidecarManager {
         let tools = crate::tools::tools_dir(base, data_dir);
         let demucs = tools.join("demucs");
         let path = std::env::var("PATH").unwrap_or_default();
+        // Add system paths as fallback for ffmpeg/demucs if not bundled
+        let system_paths = [
+            "/opt/homebrew/bin",   // Homebrew on Apple Silicon
+            "/usr/local/bin",      // Homebrew on Intel / manual installs
+            "/usr/bin",            // System
+        ];
+        let mut extra = String::new();
+        for p in &system_paths {
+            if std::path::Path::new(p).exists() {
+                if !extra.is_empty() {
+                    extra.push(':');
+                }
+                extra.push_str(p);
+            }
+        }
         cmd.env(
             "PATH",
-            format!("{}:{}:{}", tools.display(), demucs.display(), path),
+            format!("{}:{}:{}:{}", tools.display(), demucs.display(), extra, path),
         );
         cmd.env("STE_BASE_DIR", data_dir);
         let yt_dir = data_dir.join("youtube");

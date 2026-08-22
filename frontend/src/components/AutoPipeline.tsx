@@ -23,6 +23,7 @@ import {
   getDownloadUrl,
   getDubbedDownloadUrl,
   listYoutubeChannels,
+  chatgptLogin,
   type PipelineHealth,
   type HealthCheckResult,
   type CapCutVoice,
@@ -287,7 +288,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [ytChannel, setYtChannel] = useState("");
   const [watermarkPreset, setWatermarkPreset] = useState("");
   const [removeWmEnabled, setRemoveWmEnabled] = useState(false);
-  const [removeWmRegion, setRemoveWmRegion] = useState<Region | null>(null);
+  const [removeWmRegions, setRemoveWmRegions] = useState<Region[]>([]);
   const [checkSubs, setCheckSubs] = useState(false);
   const [checkVoice, setCheckVoice] = useState(false);
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
@@ -592,7 +593,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       watermarkOn,
       watermarkOn ? watermarkPreset : "",
       removeWmEnabled,
-      removeWmRegion,
+      removeWmRegions,
       checkSubs,
       checkVoice,
       autoUploadYoutube,
@@ -645,7 +646,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       watermark: watermarkOn,
       watermarkPreset: watermarkOn ? watermarkPreset : "",
       removeWatermarkEnabled: removeWmEnabled,
-      removeWatermarkRegion: removeWmRegion,
+      removeWatermarkRegions: removeWmRegions,
       checkSubs,
       checkVoice,
       translateOn,
@@ -1488,7 +1489,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => {
                         if (removeWmEnabled) {
                           setRemoveWmEnabled(false);
-                          setRemoveWmRegion(null);
+                          setRemoveWmRegions([]);
                         } else {
                           setRemoveWmEnabled(true);
                         }
@@ -1509,7 +1510,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       {tr("pipeline.removeWatermarkWillPrompt")}
                     </p>
                   )}
-                  {removeWmRegion && (
+                  {removeWmRegions.length > 0 && (
                     <div className="mt-3 flex items-center gap-3">
                       <span className="text-[11px] text-green-600">
                         ✓ {tr("pipeline.removeWatermarkActive")}
@@ -1517,7 +1518,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <button
                         type="button"
                         onClick={() => {
-                          setRemoveWmRegion(null);
+                          setRemoveWmRegions([]);
                           setRemoveWmEnabled(false);
                         }}
                         className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
@@ -2444,7 +2445,7 @@ function DetailView({
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
-  const confirmWatermarkRegion = usePipelineStore((s) => s.confirmWatermarkRegion);
+  const confirmWatermarkRegions = usePipelineStore((s) => s.confirmWatermarkRegions);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
@@ -2453,7 +2454,7 @@ function DetailView({
   const openVoiceCheck = usePipelineStore((s) => s.openVoiceCheck);
   const closeVoiceCheck = usePipelineStore((s) => s.closeVoiceCheck);
   const updatePipeline = usePipelineStore((s) => s.updatePipeline);
-  const clearRemoveWmRegion = (id: string) => updatePipeline(id, { removeWatermarkRegion: null });
+  const clearRemoveWmRegion = (id: string) => updatePipeline(id, { removeWatermarkRegions: [] });
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -2550,7 +2551,7 @@ function DetailView({
 
         {p.stage === "region" && p.videoId && (
           <div className="mb-5">
-            {p.removeWatermarkRegion && (
+            {p.removeWatermarkRegions.length > 0 && (
               <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200">
                 <p className="text-[11px] font-semibold text-red-700 mb-2">
                   {tr("pipeline.removeWatermark")} — {tr("pipeline.removeWatermarkActive")}
@@ -2584,8 +2585,8 @@ function DetailView({
               </p>
               <WatermarkRegionSelector
                 videoUrl={getVideoUrl(p.videoId)}
-                onRegion={(r) => {
-                  if (r) confirmWatermarkRegion(p.id, r);
+                onRegions={(regions) => {
+                  if (regions.length > 0) confirmWatermarkRegions(p.id, regions);
                 }}
               />
             </div>
@@ -2599,6 +2600,33 @@ function DetailView({
               region={p.region ?? DEFAULT_REGION}
               onConfirmed={(s) => confirmSubtitleStyle(p.id, s)}
             />
+          </div>
+        )}
+
+        {p.needChatgptLogin && (
+          <div className="mb-5 p-4 bg-amber-50 rounded-lg border border-amber-200 flex items-center justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-amber-700">
+                {tr("pipeline.chatgptNeedLogin")}
+              </p>
+              <p className="text-[11px] text-amber-600 mt-0.5">
+                {tr("pipeline.chatgptNeedLoginHint")}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => chatgptLogin()}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                <span className="tracking-tight">{tr("pipeline.chatgptOpenProfile")}</span>
+              </button>
+              <button
+                onClick={() => rerunPipeline(p.id, 10)}
+                className="px-3 py-1.5 text-[11px] font-medium bg-amber-500 text-white rounded-full hover:bg-amber-600 transition-colors cursor-pointer"
+              >
+                {tr("pipeline.retryStep")}
+              </button>
+            </div>
           </div>
         )}
 

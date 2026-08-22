@@ -617,23 +617,35 @@ def _render_preview_image(
 
 @router.post("/api/delogo/{video_id}")
 async def delogo_video(video_id: str, request: Request):
-    """Apply FFmpeg delogo filter to remove watermark from video."""
+    """Apply FFmpeg delogo filter to remove watermark(s) from video.
+
+    Accepts either:
+      - { region: { x1, y1, x2, y2 } }  (single region, legacy)
+      - { regions: [ {x1,y1,x2,y2}, ... ] }  (multiple regions)
+    """
     import subprocess
 
     video_path = _video_path(video_id)
 
-    # Parse region from body: { region: { x1, y1, x2, y2 } } (normalized 0-1)
+    # Parse body
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
-    region = body.get("region")
-    if not region or not all(
-        isinstance(region.get(k), (int, float))
-        for k in ("x1", "y1", "x2", "y2")
-    ):
-        raise HTTPException(400, "Invalid region: provide { x1, y1, x2, y2 } normalized 0-1")
+
+    # Support both legacy single region and new regions array
+    raw_regions = body.get("regions") or []
+    if not raw_regions and body.get("region"):
+        raw_regions = [body["region"]]
+
+    if not raw_regions:
+        raise HTTPException(400, "Provide regions: [{ x1, y1, x2, y2 }] normalized 0-1")
+
+    # Validate all regions
+    for r in raw_regions:
+        if not all(isinstance(r.get(k), (int, float)) for k in ("x1", "y1", "x2", "y2")):
+            raise HTTPException(400, f"Invalid region: {r}")
 
     # Get video resolution
     try:
@@ -647,17 +659,14 @@ async def delogo_video(video_id: str, request: Request):
     except Exception:
         raise HTTPException(500, "Cannot probe video resolution")
 
-    # Convert normalized → pixel coordinates
-    x = int(float(region["x1"]) * w)
-    y = int(float(region["y1"]) * h)
-    rw = int((float(region["x2"]) - float(region["x1"])) * w)
-    rh = int((float(region["y2"]) - float(region["y1"])) * h)
-
-    # Clamp to valid range
-    x = max(0, min(x, w - 1))
-    y = max(0, min(y, h - 1))
-    rw = max(1, min(rw, w - x))
-    rh = max(1, min(rh, h - y))
+    # Convert all regions to pixel coordinates and build delogo filters
+    delogo_filters = []
+    for r in raw_regions:
+        x = max(0, min(int(float(r["x1"]) * w), w - 1))
+        y = max(0, min(int(float(r["y1"]) * h), h - 1))
+        rw = max(1, min(int((float(r["x2"]) - float(r["x1"])) * w), w - x))
+        rh = max(1, min(int((float(r["y2"]) - float(r["y1"])) * h), h - y))
+        delogo_filters.append(f"delogo=x={x}:y={y}:w={rw}:h={rh}")
 
     output = _delogo_video_path(video_id)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -666,7 +675,7 @@ async def delogo_video(video_id: str, request: Request):
         subprocess.run(
             [
                 "ffmpeg", "-y", "-i", str(video_path),
-                "-vf", f"delogo=x={x}:y={y}:w={rw}:h={rh}",
+                "-vf", ",".join(delogo_filters),
                 "-c:a", "copy",
                 "-movflags", "+faststart",
                 str(output),
@@ -680,7 +689,7 @@ async def delogo_video(video_id: str, request: Request):
     except subprocess.TimeoutExpired:
         raise HTTPException(500, "FFmpeg delogo timed out")
 
-    return {"status": "ok", "path": str(output)}
+    return {"status": "ok", "path": str(output), "regions": len(delogo_filters)}
 
 
 # ── POST /api/hardcode/{video_id} ──

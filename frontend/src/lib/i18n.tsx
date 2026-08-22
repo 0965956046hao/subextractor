@@ -691,6 +691,8 @@ const dictionaries = {
       "Region set — will be removed before OCR",
     "pipeline.removeWatermarkClear": "Clear",
     "pipeline.removeWatermarkConfirm": "Confirm region",
+    "pipeline.removeWatermarkAdd": "Add region",
+    "pipeline.removeWatermarkClearAll": "Clear all",
     "pipeline.removeWatermarkRedraw": "Redraw",
     "pipeline.checkTimeline": "Check subtitles on timeline",
     "pipeline.checkTimelineHint":
@@ -728,6 +730,10 @@ const dictionaries = {
     "pipeline.running": "Running",
     "pipeline.jobTitle": "Job #{id}",
     "pipeline.cancelProcess": "Cancel",
+    "pipeline.chatgptNeedLogin": "ChatGPT not logged in",
+    "pipeline.chatgptNeedLoginHint": "Open the ChatGPT profile, log in, then click Retry.",
+    "pipeline.chatgptOpenProfile": "Open Profile",
+    "pipeline.retryStep": "Retry",
     "pipeline.delete": "Delete",
     "pipeline.cancelProcessTitle": "Cancel pipeline?",
     "pipeline.cancelProcessBody":
@@ -1493,6 +1499,8 @@ const dictionaries = {
       "Đã chọn vùng — sẽ được xoá trước khi OCR",
     "pipeline.removeWatermarkClear": "Xoá",
     "pipeline.removeWatermarkConfirm": "Xác nhận vùng",
+    "pipeline.removeWatermarkAdd": "Thêm vùng",
+    "pipeline.removeWatermarkClearAll": "Xoá tất cả",
     "pipeline.removeWatermarkRedraw": "Kéo lại",
     "pipeline.checkTimeline": "Kiểm tra phụ đề trên timeline",
     "pipeline.checkTimelineHint":
@@ -1530,6 +1538,10 @@ const dictionaries = {
     "pipeline.running": "Đang chạy",
     "pipeline.jobTitle": "Job #{id}",
     "pipeline.cancelProcess": "Huỷ",
+    "pipeline.chatgptNeedLogin": "Chưa đăng nhập ChatGPT",
+    "pipeline.chatgptNeedLoginHint": "Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại.",
+    "pipeline.chatgptOpenProfile": "Mở Profile",
+    "pipeline.retryStep": "Thử lại",
     "pipeline.delete": "Xoá",
     "pipeline.cancelProcessTitle": "Huỷ pipeline?",
     "pipeline.cancelProcessBody":

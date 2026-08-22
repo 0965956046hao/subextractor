@@ -151,12 +151,13 @@ export interface Pipeline {
   youtubeChannel: string;
   watermarkPreset: string;
   removeWatermarkEnabled: boolean;
-  removeWatermarkRegion: Region | null;
+  removeWatermarkRegions: Region[];
   checkSubs: boolean;
   checkVoice: boolean;
   timelineCheck: TimelineCheck | null;
   voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
+  needChatgptLogin: boolean;
 }
 
 export interface TimelineCheck {
@@ -203,7 +204,7 @@ interface PipelineState {
     watermark?: boolean,
     watermarkPreset?: string,
     removeWatermarkEnabled?: boolean,
-    removeWatermarkRegion?: Region | null,
+    removeWatermarkRegions?: Region[],
     checkSubs?: boolean,
     checkVoice?: boolean,
     autoUploadYoutube?: boolean,
@@ -225,7 +226,7 @@ interface PipelineState {
     watermark?: boolean;
     watermarkPreset?: string;
     removeWatermarkEnabled?: boolean;
-    removeWatermarkRegion?: Region | null;
+    removeWatermarkRegions?: Region[] | null;
     checkSubs?: boolean;
     checkVoice?: boolean;
     youtubeChannel?: string;
@@ -251,7 +252,7 @@ interface PipelineState {
   resolveVoiceCheck: (id: string, action: string) => void;
   openVoiceCheck: (id: string) => void;
   closeVoiceCheck: (id: string) => void;
-  confirmWatermarkRegion: (id: string, region: Region) => void;
+  confirmWatermarkRegions: (id: string, regions: Region[]) => void;
   restorePaused: () => void;
 }
 
@@ -268,7 +269,7 @@ function newPipeline(
   watermark = false,
   watermarkPreset = "",
   removeWatermarkEnabled = false,
-  removeWatermarkRegion: Region | null = null,
+  removeWatermarkRegions: Region[] = [],
   checkSubs = false,
   checkVoice = false,
   autoUploadYoutube = false,
@@ -326,12 +327,13 @@ function newPipeline(
     watermark,
     watermarkPreset,
     removeWatermarkEnabled,
-    removeWatermarkRegion: null,
+    removeWatermarkRegions,
     checkSubs,
     checkVoice,
     timelineCheck: null,
     voiceCheck: null,
     resumeStep: null,
+    needChatgptLogin: false,
     useFalThumbnail,
     useGptThumbnail,
     autoUploadYoutube,
@@ -365,7 +367,7 @@ export const usePipelineStore = create<PipelineState>()(
         watermark = false,
         watermarkPreset = "",
         removeWatermarkEnabled = false,
-        removeWatermarkRegion = null,
+        removeWatermarkRegions = [],
         checkSubs = false,
         checkVoice = false,
         autoUploadYoutube = false,
@@ -390,7 +392,7 @@ export const usePipelineStore = create<PipelineState>()(
               watermark,
               watermarkPreset,
               removeWatermarkEnabled,
-              removeWatermarkRegion,
+              removeWatermarkRegions,
               checkSubs,
               checkVoice,
               autoUploadYoutube,
@@ -419,7 +421,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.watermark ?? false,
           input.watermarkPreset ?? "",
           input.removeWatermarkEnabled ?? false,
-          input.removeWatermarkRegion ?? null,
+          input.removeWatermarkRegions ?? [],
           input.checkSubs ?? false,
           input.checkVoice ?? false,
           false,
@@ -619,17 +621,17 @@ export const usePipelineStore = create<PipelineState>()(
           enqueue(id, s.resumeStep ?? 4);
         }
       },
-      confirmWatermarkRegion: (id, region) => {
+      confirmWatermarkRegions: (id, regions) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
         set((st) => ({
           pipelines: st.pipelines.map((p) =>
             p.id === id
-              ? { ...p, removeWatermarkRegion: region, stage: "processing" }
+              ? { ...p, removeWatermarkRegions: regions, stage: "processing" }
               : p,
           ),
         }));
-        confirmWatermarkRegionAction(id, region);
+        confirmWatermarkRegionAction(id, regions);
       },
       cancelPipeline: async (id) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -1067,7 +1069,7 @@ const voiceCheckWaiters = new Map<
 >();
 const watermarkRegionWaiters = new Map<
   string,
-  { resolve: (r: Region) => void; reject: () => void }
+  { resolve: (r: Region[]) => void; reject: () => void }
 >();
 
 function waitForRegion(id: string): Promise<Region> {
@@ -1098,17 +1100,17 @@ function rejectSubtitleStyle(id: string) {
   }
 }
 
-function waitForWatermarkRegion(id: string): Promise<Region> {
-  return new Promise<Region>((resolve, reject) => {
+function waitForWatermarkRegion(id: string): Promise<Region[]> {
+  return new Promise<Region[]>((resolve, reject) => {
     watermarkRegionWaiters.set(id, { resolve, reject });
   });
 }
 
-function confirmWatermarkRegionAction(id: string, region: Region) {
+function confirmWatermarkRegionAction(id: string, regions: Region[]) {
   const w = watermarkRegionWaiters.get(id);
   if (w) {
     watermarkRegionWaiters.delete(id);
-    w.resolve(region);
+    w.resolve(regions);
   }
 }
 
@@ -1761,28 +1763,28 @@ async function runPipeline(id: string, startStep = 4) {
     if (
       startStep <= 4 &&
       cur.removeWatermarkEnabled &&
-      !cur.removeWatermarkRegion
+      cur.removeWatermarkRegions.length === 0
     ) {
       patch(id, { stage: "watermark_region", resumeStep: 4 });
       markStepStart(id, 4);
       appendLog(id, "Kéo vùng watermark cần xoá trên video...");
-      const wmRegion = await waitForWatermarkRegion(id);
-      patch(id, { removeWatermarkRegion: wmRegion });
+      const wmRegions = await waitForWatermarkRegion(id);
+      patch(id, { removeWatermarkRegions: wmRegions });
       appendLog(
         id,
-        `Vùng watermark: x ${wmRegion.x1}–${wmRegion.x2} · y ${wmRegion.y1}–${wmRegion.y2}`,
+        `Đã chọn ${wmRegions.length} vùng watermark`,
       );
     }
 
     // 3.6 Delogo (remove watermark) — before OCR
-    if (startStep <= 4 && cur.removeWatermarkRegion) {
+    if (startStep <= 4 && cur.removeWatermarkRegions.length > 0) {
       patch(id, { stage: "processing" });
       appendLog(id, "Đang xoá watermark khỏi video...");
       try {
         const delogoRes = await fetch(`/api/delogo/${videoId}`, {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ region: cur.removeWatermarkRegion }),
+          body: JSON.stringify({ regions: cur.removeWatermarkRegions }),
         });
         if (!delogoRes.ok) {
           const err = await delogoRes.json().catch(() => ({}));
@@ -2294,13 +2296,16 @@ async function runPipeline(id: string, startStep = 4) {
           });
           const d = await r.json();
           if (d.status === "done" && d.thumbnail_url) {
-            patch(id, { updatedThumbnailUrl: d.thumbnail_url });
+            patch(id, { updatedThumbnailUrl: d.thumbnail_url, needChatgptLogin: false });
             appendLog(id, `Thumbnail mới (ChatGPT): ${d.thumbnail_url}`);
           } else if (d.status === "need_login") {
+            patch(id, { needChatgptLogin: true, status: "error", stage: "thumbnail" });
             appendLog(
               id,
-              `Cần đăng nhập ChatGPT: ${d.detail || "đăng nhập trong cửa sổ Chrome vừa mở rồi chạy lại."}`,
+              `Cần đăng nhập ChatGPT: ${d.detail || "Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại."}`,
             );
+            markStepEnd(id, 10);
+            return;
           } else {
             appendLog(
               id,
