@@ -14,6 +14,41 @@ def _srt_path(video_id: str) -> Path:
     return p
 
 
+def _srt_original_path(video_id: str) -> Path:
+    """SRT gốc từ OCR — luôn ở srt/{id}/subtitles.srt."""
+    return settings.temp_dir / "srt" / video_id / "subtitles.srt"
+
+
+def _srt_translated_path(video_id: str, lang: str = "vi") -> Path | None:
+    """SRT đã dịch — ưu tiên translated/{id}/subtitles_{lang}.srt.
+
+    Trả về None nếu chưa có bản dịch.
+    """
+    translated_dir = settings.temp_dir / "translated" / video_id
+    if not translated_dir.exists():
+        return None
+    # Ưu tiên file theo lang yêu cầu
+    preferred = translated_dir / f"subtitles_{lang}.srt"
+    if preferred.exists() and preferred.stat().st_size > 0:
+        return preferred
+    # Fallback: tìm bất kỳ subtitles_*.srt nào (trừ backup)
+    for f in sorted(translated_dir.glob("subtitles_*.srt"), reverse=True):
+        if f.name != "subtitles_original.srt" and f.stat().st_size > 0:
+            return f
+    return None
+
+
+def _srt_best_path(video_id: str, lang: str = "vi") -> Path:
+    """Trả về SRT tốt nhất: ưu tiên bản dịch, fallback bản gốc.
+
+    Luôn trả về Path (không None) — nếu chưa dịch thì trả SRT gốc.
+    """
+    translated = _srt_translated_path(video_id, lang)
+    if translated:
+        return translated
+    return settings.temp_dir / "srt" / video_id / "subtitles.srt"
+
+
 def _merge_id(video_id: str) -> str | None:
     """Return source_merge_id from videos/{video_id}/meta.json if present."""
     meta = settings.temp_dir / "videos" / video_id / "meta.json"

@@ -155,8 +155,8 @@ export default function VideoPlayer({
           <button
             onClick={togglePlay}
             aria-label={playing ? t("videoplayer.pause") : t("videoplayer.play")}
-            className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center
-                       hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300
+            className="w-10 h-10 rounded-full bg-accent text-white flex items-center justify-center
+                       hover:bg-accent-light shadow-sm active:scale-[0.95] transition-all duration-300
                        ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer"
           >
             {playing ? (
@@ -188,7 +188,7 @@ export default function VideoPlayer({
           />
         </div>
         <div
-          className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-white border-2 border-blue-500 shadow-sm transition-opacity duration-200 opacity-0 group-hover:opacity-100 pointer-events-none"
+          className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-white border-2 border-accent shadow-sm transition-opacity duration-200 opacity-0 group-hover:opacity-100 pointer-events-none"
           style={{ left: `calc(${pct}% - 7px)` }}
         />
         <div className="absolute -bottom-5 inset-x-0 flex justify-between text-[10px] font-mono text-ink-light pointer-events-none">

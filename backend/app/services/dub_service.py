@@ -11,6 +11,8 @@ from app.config import settings
 from app.services.srt_utils import entries_to_srt, merge_similar_adjacent, parse_srt
 from app.services.media_utils import (
     _srt_path,
+    _srt_best_path,
+    _srt_original_path,
     _video_path,
     _get_audio_duration,
     _merge_audio_path,
@@ -292,7 +294,14 @@ def build_full_audio(
     # để tách voice/instrument thay vì trích audio từ video đã merge.
     audio_source = _merge_audio_path(video_id) or video_path
 
-    srt_path = _srt_path(video_id)
+    # Ưu tiên SRT đã dịch (translated/{id}/subtitles_{lang}.srt) — dùng text Việt để TTS.
+    srt_path = _srt_best_path(video_id)
+    if "translated" in str(srt_path):
+        if log_fn:
+            log_fn(f"Dùng bản dịch: {srt_path.name}")
+    else:
+        if log_fn:
+            log_fn("Chưa có bản dịch — dùng SRT gốc.")
     srt_content = srt_path.read_text(encoding="utf-8")
 
     # Kiểm tra phụ đề trùng lặp trước khi tạo voice: nếu nội dung một dòng giống

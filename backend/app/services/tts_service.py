@@ -12,7 +12,7 @@ from typing import List
 
 from app.config import settings
 from app.services.srt_utils import _texts_similar, parse_srt
-from app.services.media_utils import _srt_path
+from app.services.media_utils import _srt_path, _srt_best_path
 from app.services.job_utils import notify_ws_sync, job_log_sync
 
 logger = logging.getLogger(__name__)
@@ -227,7 +227,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
             raise ValueError("Custom SRT input not found")
         content = custom_path.read_text(encoding="utf-8")
     else:
-        srt_path = _srt_path(video_id)
+        srt_path = _srt_best_path(video_id)
         content = srt_path.read_text(encoding="utf-8")
 
     entries = parse_srt(content)
@@ -348,7 +348,7 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
             raise ValueError("Custom SRT input not found")
         content = custom_path.read_text(encoding="utf-8")
     else:
-        srt_path = _srt_path(video_id)
+        srt_path = _srt_best_path(video_id)
         content = srt_path.read_text(encoding="utf-8")
 
     entries = parse_srt(content)

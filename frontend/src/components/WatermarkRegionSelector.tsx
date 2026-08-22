@@ -6,22 +6,22 @@ import { useI18n } from "@/lib/i18n";
 
 interface Props {
   videoUrl: string;
-  onRegions: (regions: Region[]) => void;
+  onConfirm: (regions: Region[]) => void;
 }
 
 const REGION_COLORS = [
-  { fill: "rgba(239,68,68,0.18)", stroke: "rgba(239,68,68,0.85)", text: "rgba(239,68,68,0.9)" },
-  { fill: "rgba(59,130,246,0.18)", stroke: "rgba(59,130,246,0.85)", text: "rgba(59,130,246,0.9)" },
-  { fill: "rgba(34,197,94,0.18)", stroke: "rgba(34,197,94,0.85)", text: "rgba(34,197,94,0.9)" },
-  { fill: "rgba(249,115,22,0.18)", stroke: "rgba(249,115,22,0.85)", text: "rgba(249,115,22,0.9)" },
-  { fill: "rgba(168,85,247,0.18)", stroke: "rgba(168,85,247,0.85)", text: "rgba(168,85,247,0.9)" },
+  { fill: "rgba(239,68,68,0.18)", stroke: "rgba(239,68,68,0.85)" },
+  { fill: "rgba(59,130,246,0.18)", stroke: "rgba(59,130,246,0.85)" },
+  { fill: "rgba(34,197,94,0.18)", stroke: "rgba(34,197,94,0.85)" },
+  { fill: "rgba(249,115,22,0.18)", stroke: "rgba(249,115,22,0.85)" },
+  { fill: "rgba(168,85,247,0.18)", stroke: "rgba(168,85,247,0.85)" },
 ];
 
 function clamp(v: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, v));
 }
 
-export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) {
+export default function WatermarkRegionSelector({ videoUrl, onConfirm }: Props) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -44,7 +44,7 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
     return () => ro.disconnect();
   }, []);
 
-  // Draw overlay — all regions + current drawing preview
+  // Draw overlay
   const redraw = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return;
@@ -52,7 +52,6 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
     if (!ctx) return;
     ctx.clearRect(0, 0, c.width, c.height);
 
-    // Draw all confirmed regions
     regions.forEach((r, i) => {
       const color = REGION_COLORS[i % REGION_COLORS.length];
       const px = {
@@ -66,12 +65,11 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
       ctx.setLineDash([6, 3]);
       ctx.strokeRect(px.x1, px.y1, px.x2 - px.x1, px.y2 - px.y1);
       ctx.setLineDash([]);
-      ctx.fillStyle = color.text;
+      ctx.fillStyle = color.stroke;
       ctx.font = "bold 11px sans-serif";
       ctx.fillText(`${i + 1}`, px.x1 + 4, px.y1 + 14);
     });
 
-    // Draw current preview (being drawn)
     if (drawingPreview) {
       const px = {
         x1: drawingPreview.x1 * c.width, y1: drawingPreview.y1 * c.height,
@@ -120,29 +118,28 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
     setStartPt(null);
   };
 
+  // Add region to local list — does NOT call onConfirm
   const handleAddRegion = () => {
     if (drawingPreview && drawingPreview.x2 - drawingPreview.x1 >= 0.01 && drawingPreview.y2 - drawingPreview.y1 >= 0.01) {
-      const updated = [...regions, drawingPreview];
-      setRegions(updated);
+      setRegions((prev) => [...prev, drawingPreview]);
       setDrawingPreview(null);
-      onRegions(updated);
     }
   };
 
   const handleRemoveRegion = (index: number) => {
-    const updated = regions.filter((_, i) => i !== index);
-    setRegions(updated);
-    onRegions(updated);
+    setRegions((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleClearAll = () => {
     setRegions([]);
     setDrawingPreview(null);
-    onRegions([]);
   };
 
+  // Confirm — sends all regions to parent
   const handleConfirm = () => {
-    onRegions(regions);
+    if (regions.length > 0) {
+      onConfirm(regions);
+    }
   };
 
   return (
@@ -169,7 +166,6 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
         onMouseLeave={handleUp}
       />
 
-      {/* Hint when empty */}
       {regions.length === 0 && !drawingPreview && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <span className="bg-black/50 text-white text-[11px] px-2 py-1 rounded">
@@ -178,7 +174,6 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
         </div>
       )}
 
-      {/* Drawing preview buttons */}
       {drawingPreview && (
         <div className="absolute bottom-3 right-3 flex gap-2">
           <button
@@ -191,14 +186,13 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
           <button
             type="button"
             onClick={handleAddRegion}
-            className="px-3 py-1.5 text-[11px] font-medium bg-red-500 text-white rounded-lg shadow hover:bg-red-600 cursor-pointer"
+            className="px-3 py-1.5 text-[11px] font-medium bg-danger text-white rounded-lg shadow hover:bg-danger cursor-pointer"
           >
             {t("pipeline.removeWatermarkAdd")}
           </button>
         </div>
       )}
 
-      {/* Regions list + confirm */}
       {regions.length > 0 && !drawingPreview && (
         <div className="absolute bottom-3 left-3 right-3">
           <div className="bg-white/95 rounded-lg shadow-lg p-2 mb-2 max-h-32 overflow-y-auto">
@@ -221,7 +215,7 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
                   <button
                     type="button"
                     onClick={() => handleRemoveRegion(i)}
-                    className="text-[10px] text-red-500 hover:text-red-600 cursor-pointer"
+                    className="text-[10px] text-danger hover:text-danger/80 cursor-pointer"
                   >
                     ✕
                   </button>
@@ -240,7 +234,7 @@ export default function WatermarkRegionSelector({ videoUrl, onRegions }: Props) 
             <button
               type="button"
               onClick={handleConfirm}
-              className="px-3 py-1.5 text-[11px] font-medium bg-red-500 text-white rounded-lg shadow hover:bg-red-600 cursor-pointer"
+              className="px-3 py-1.5 text-[11px] font-medium bg-danger text-white rounded-lg shadow hover:bg-danger cursor-pointer"
             >
               {t("pipeline.removeWatermarkConfirm")} ({regions.length})
             </button>

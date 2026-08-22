@@ -52,8 +52,8 @@ const LOG_STYLE: Record<
   { icon: React.ReactNode; fg: string; bg: string }
 > = {
   info: {
-    fg: "text-blue-500",
-    bg: "bg-blue-500/10 ring-blue-500/20",
+    fg: "text-accent",
+    bg: "bg-accent-muted ring-accent/15",
     icon: (
       <svg
         className="w-3.5 h-3.5"
@@ -70,8 +70,8 @@ const LOG_STYLE: Record<
     ),
   },
   success: {
-    fg: "text-emerald-500",
-    bg: "bg-emerald-500/10 ring-emerald-500/20",
+    fg: "text-success",
+    bg: "bg-success-muted ring-success/15",
     icon: (
       <svg
         className="w-3.5 h-3.5"
@@ -88,8 +88,8 @@ const LOG_STYLE: Record<
     ),
   },
   warn: {
-    fg: "text-amber-500",
-    bg: "bg-amber-500/10 ring-amber-500/20",
+    fg: "text-warn",
+    bg: "bg-warn-muted ring-warn/15",
     icon: (
       <svg
         className="w-3.5 h-3.5"
@@ -124,8 +124,8 @@ const LOG_STYLE: Record<
     ),
   },
   error: {
-    fg: "text-red-500",
-    bg: "bg-red-500/10 ring-red-500/20",
+    fg: "text-danger",
+    bg: "bg-danger-muted ring-danger/15",
     icon: (
       <svg
         className="w-3.5 h-3.5"
@@ -186,7 +186,7 @@ function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
       <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.05] bg-white/40">
         <span
           className={`w-2 h-2 rounded-full transition-colors duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] ${
-            active ? "bg-blue-500 animate-pulse" : "bg-emerald-500"
+            active ? "bg-accent animate-pulse" : "bg-success"
           }`}
         />
         <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
@@ -206,7 +206,7 @@ function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
         {logs.length === 0 && (
           <div className="flex items-center gap-2.5 px-3 py-3">
             <svg
-              className="w-4 h-4 text-blue-500 animate-spin"
+              className="w-4 h-4 text-accent animate-spin"
               viewBox="0 0 24 24"
               fill="none"
             >
@@ -238,7 +238,7 @@ function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
 function SuccessIcon() {
   return (
     <div
-      className="w-16 h-16 rounded-full bg-emerald-500/15 ring-1 ring-emerald-500/30 flex items-center justify-center mx-auto"
+      className="w-16 h-16 rounded-full bg-success-muted ring-1 ring-success/20 flex items-center justify-center mx-auto"
       style={{
         animation: "scale-in 0.7s cubic-bezier(0.32,0.72,0,1) 0.3s forwards",
         opacity: 0,
@@ -246,7 +246,7 @@ function SuccessIcon() {
       }}
     >
       <svg
-        className="w-8 h-8 text-emerald-500"
+        className="w-8 h-8 text-success"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -439,7 +439,7 @@ export default function ResultPage({
         <div className="double-bezel">
           <div className="double-bezel-inner p-6 sm:p-10 text-center">
             <svg
-              className="w-6 h-6 text-amber-500 mx-auto"
+              className="w-6 h-6 text-warn mx-auto"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -509,7 +509,7 @@ export default function ResultPage({
             <div className="text-center mb-6">
               {phase === "error" ? (
                 <svg
-                  className="w-6 h-6 text-red-500 mx-auto"
+                  className="w-6 h-6 text-danger mx-auto"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -522,7 +522,7 @@ export default function ResultPage({
                 </svg>
               ) : (
                 <svg
-                  className="w-6 h-6 text-blue-500 animate-spin mx-auto"
+                  className="w-6 h-6 text-accent animate-spin mx-auto"
                   viewBox="0 0 24 24"
                   fill="none"
                 >
@@ -551,7 +551,7 @@ export default function ResultPage({
               <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
-                    ${phase === "error" ? "bg-red-500" : "bg-gradient-to-r from-blue-600 to-blue-400"}`}
+                    ${phase === "error" ? "bg-danger" : "bg-gradient-to-r from-blue-600 to-blue-400"}`}
                   style={{ width: `${Math.max(progress, 2)}%` }}
                 />
               </div>
@@ -567,7 +567,7 @@ export default function ResultPage({
               <button
                 onClick={handleCancel}
                 disabled={cancelling || phase === "error"}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium tracking-tight text-danger ring-1 ring-danger/20 hover:bg-danger-muted transition-colors duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {cancelling ? (
                   <svg
@@ -614,7 +614,7 @@ export default function ResultPage({
 
             {error && (
               <div
-                className="mt-6 p-4 rounded-2xl bg-red-500/10 ring-1 ring-red-500/15"
+                className="mt-6 p-4 rounded-2xl bg-danger-muted ring-1 ring-danger/15"
                 style={{
                   animation:
                     "fade-in 0.7s cubic-bezier(0.32,0.72,0,1) forwards",
@@ -622,7 +622,7 @@ export default function ResultPage({
               >
                 <div className="flex items-start gap-3">
                   <svg
-                    className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5"
+                    className="w-5 h-5 text-danger flex-shrink-0 mt-0.5"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
@@ -633,7 +633,7 @@ export default function ResultPage({
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
-                  <p className="text-sm text-red-600/80">{error}</p>
+                  <p className="text-sm text-danger/80">{error}</p>
                 </div>
               </div>
             )}

@@ -1776,15 +1776,19 @@ async function runPipeline(id: string, startStep = 4) {
       );
     }
 
+    // Re-read from store after patch to get updated removeWatermarkRegions
+    const curAfterWm = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    const wmRegionsNow = curAfterWm?.removeWatermarkRegions ?? [];
+
     // 3.6 Delogo (remove watermark) — before OCR
-    if (startStep <= 4 && cur.removeWatermarkRegions.length > 0) {
+    if (startStep <= 4 && wmRegionsNow.length > 0) {
       patch(id, { stage: "processing" });
       appendLog(id, "Đang xoá watermark khỏi video...");
       try {
         const delogoRes = await fetch(`/api/delogo/${videoId}`, {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ regions: cur.removeWatermarkRegions }),
+          body: JSON.stringify({ regions: wmRegionsNow }),
         });
         if (!delogoRes.ok) {
           const err = await delogoRes.json().catch(() => ({}));
@@ -2041,12 +2045,6 @@ async function runPipeline(id: string, startStep = 4) {
             `Bỏ qua đối chiếu bản gốc: ${e instanceof Error ? e.message : "lỗi"}`,
           );
         }
-
-        await fetch(`/api/srt/${videoId}`, {
-          method: "PUT",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ content: srtText }),
-        });
 
         // Double-check #2: chạy trên SRT đã dịch — gộp dòng trùng + sửa overlap
         // timeline (giống check đã chạy trên SRT gốc sau OCR). Chạy bằng code

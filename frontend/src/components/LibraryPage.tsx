@@ -132,7 +132,7 @@ export default function LibraryPage() {
       <header className="sticky top-0 pt-4 sm:pt-5 z-40 pointer-events-none">
         <div className="mx-auto w-max glass-panel rounded-full pl-5 pr-2 py-2 flex items-center gap-6 pointer-events-auto shadow-[0_12px_40px_-16px_rgba(0,0,0,0.12)]">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center">
+            <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center">
               <svg
                 className="w-3.5 h-3.5 text-white"
                 viewBox="0 0 24 24"
@@ -323,7 +323,7 @@ export default function LibraryPage() {
             <div className="double-bezel">
               <div className="double-bezel-inner p-10 text-center">
                 <svg
-                  className="w-6 h-6 text-red-500 mx-auto mb-3"
+                  className="w-6 h-6 text-danger mx-auto mb-3"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -334,7 +334,7 @@ export default function LibraryPage() {
                   <line x1="12" y1="8" x2="12" y2="12" />
                   <line x1="12" y1="16" x2="12.01" y2="16" />
                 </svg>
-                <p className="text-sm text-red-600/80">{error}</p>
+                <p className="text-sm text-danger/80">{error}</p>
                 <button
                   onClick={() => load()}
                   className="btn-island-secondary group mt-5 text-sm"
@@ -374,9 +374,9 @@ export default function LibraryPage() {
           <AnimatedBlock delay={0}>
             <div className="double-bezel">
               <div className="double-bezel-inner p-14 sm:p-20 text-center">
-                <div className="w-16 h-16 rounded-full bg-blue-600/10 ring-1 ring-blue-600/20 flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 rounded-full bg-accent-muted ring-1 ring-accent/15 flex items-center justify-center mx-auto mb-6">
                   <svg
-                    className="w-7 h-7 text-blue-500"
+                    className="w-7 h-7 text-accent"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
@@ -492,7 +492,7 @@ function ViewToggle({
         aria-label={t("library.viewGrid" as string)}
         title={t("library.viewGrid" as string)}
         className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
-          ${value === "grid" ? "bg-white text-blue-600 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
+          ${value === "grid" ? "bg-white text-accent shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
       >
         <svg
           className="w-4 h-4"
@@ -514,7 +514,7 @@ function ViewToggle({
         aria-label={t("library.viewList" as string)}
         title={t("library.viewList" as string)}
         className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
-          ${value === "list" ? "bg-white text-blue-600 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
+          ${value === "list" ? "bg-white text-accent shadow-sm ring-1 ring-black/[0.06]" : "text-ink-muted hover:text-ink"}`}
       >
         <svg
           className="w-4 h-4"
@@ -582,7 +582,7 @@ function JobStatusBlock({
   if (video.status === "uploaded") {
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90 truncate">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent-muted ring-1 ring-accent/15 text-[11px] font-medium text-accent/90 truncate">
           <svg
             className="w-3 h-3 flex-shrink-0"
             viewBox="0 0 24 24"
@@ -604,7 +604,7 @@ function JobStatusBlock({
   if (video.status === "cancelled") {
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/20 text-[11px] font-medium text-amber-600/90 truncate">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-warn-muted ring-1 ring-warn/15 text-[11px] font-medium text-warn/90 truncate">
           <svg
             className="w-3 h-3 flex-shrink-0"
             viewBox="0 0 24 24"
@@ -625,7 +625,7 @@ function JobStatusBlock({
   if (video.status === "error") {
     return (
       <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 ring-1 ring-red-500/20 text-[11px] font-medium text-red-600/90 truncate">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-danger-muted ring-1 ring-danger/15 text-[11px] font-medium text-danger/90 truncate">
           <svg
             className="w-3 h-3 flex-shrink-0"
             viewBox="0 0 24 24"
@@ -648,13 +648,13 @@ function JobStatusBlock({
   return (
     <div className="mt-2.5 space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent-muted ring-1 ring-accent/15 text-[11px] font-medium text-accent/90">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
           {video.status === "queued"
             ? t("library.statusQueued" as string)
             : t("library.statusProcessing" as string)}
         </span>
-        <span className="text-[11px] font-mono text-blue-600 tabular-nums">
+        <span className="text-[11px] font-mono text-accent tabular-nums">
           {pct}%
         </span>
       </div>
@@ -671,7 +671,7 @@ function JobStatusBlock({
             e.stopPropagation();
             onCancel(video.job_id!);
           }}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 mt-2 rounded-full text-[11px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 cursor-pointer active:scale-95"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 mt-2 rounded-full text-[11px] font-medium tracking-tight text-danger ring-1 ring-danger/20 hover:bg-danger-muted transition-colors duration-300 cursor-pointer active:scale-95"
         >
           <svg
             className="w-3 h-3"
@@ -737,7 +737,7 @@ function VideoRow({
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-blue-600/20 via-blue-500/10 to-transparent flex items-center justify-center">
                 <svg
-                  className="w-7 h-7 text-blue-500/40"
+                  className="w-7 h-7 text-accent/40"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -756,7 +756,7 @@ function VideoRow({
               <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
                 <div className="w-10 h-10 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center">
                   <svg
-                    className="w-5 h-5 text-blue-600 animate-spin"
+                    className="w-5 h-5 text-accent animate-spin"
                     viewBox="0 0 24 24"
                     fill="none"
                   >
@@ -802,7 +802,7 @@ function VideoRow({
               <JobStatusBlock video={video} onCancel={onCancel} />
             ) : (
               <div className="flex items-center gap-2.5 mt-2 flex-wrap">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success-muted ring-1 ring-success/15 text-[11px] font-medium text-success/90">
                   <svg
                     className="w-3 h-3"
                     viewBox="0 0 24 24"
@@ -846,8 +846,8 @@ function VideoRow({
               className={`flex items-center justify-center rounded-full transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
-                    ? "bg-red-500 text-white w-10 h-10 shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]"
-                    : "w-10 h-10 bg-white/80 text-ink-muted hover:bg-red-500 hover:text-white shadow-sm ring-1 ring-black/[0.06]"
+                    ? "bg-danger text-white w-10 h-10 shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]"
+                    : "w-10 h-10 bg-white/80 text-ink-muted hover:bg-danger hover:text-white shadow-sm ring-1 ring-black/[0.06]"
                 }`}
             >
               {confirming ? (
@@ -879,7 +879,7 @@ function VideoRow({
                 </svg>
               )}
             </button>
-            <div className="hidden sm:flex w-9 h-9 rounded-full bg-black/[0.03] items-center justify-center text-ink-muted transition-colors duration-300 group-hover:text-blue-600">
+            <div className="hidden sm:flex w-9 h-9 rounded-full bg-black/[0.03] items-center justify-center text-ink-muted transition-colors duration-300 group-hover:text-accent">
               <svg
                 className="w-4 h-4"
                 viewBox="0 0 24 24"
@@ -944,7 +944,7 @@ function VideoCard({
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-blue-600/20 via-blue-500/10 to-transparent flex items-center justify-center">
                 <svg
-                  className="w-10 h-10 text-blue-500/40"
+                  className="w-10 h-10 text-accent/40"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -963,7 +963,7 @@ function VideoCard({
               <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
                 <div className="w-11 h-11 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center">
                   <svg
-                    className="w-5 h-5 text-blue-600 animate-spin"
+                    className="w-5 h-5 text-accent animate-spin"
                     viewBox="0 0 24 24"
                     fill="none"
                   >
@@ -1014,8 +1014,8 @@ function VideoCard({
               className={`absolute top-3 right-3 z-10 flex items-center gap-1.5 rounded-full backdrop-blur-sm transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
-                    ? "bg-red-500 text-white px-3 py-1.5 shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]"
-                    : "w-9 h-9 justify-center bg-white/90 text-ink-muted hover:bg-red-500 hover:text-white shadow-sm opacity-0 group-hover:opacity-100"
+                    ? "bg-danger text-white px-3 py-1.5 shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]"
+                    : "w-9 h-9 justify-center bg-white/90 text-ink-muted hover:bg-danger hover:text-white shadow-sm opacity-0 group-hover:opacity-100"
                 }`}
             >
               {confirming ? (
@@ -1070,7 +1070,7 @@ function VideoCard({
                 <JobStatusBlock video={video} onCancel={onCancel} />
               ) : (
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[11px] font-medium text-emerald-600/90">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success-muted ring-1 ring-success/15 text-[11px] font-medium text-success/90">
                     <svg
                       className="w-3 h-3"
                       viewBox="0 0 24 24"
@@ -1098,7 +1098,7 @@ function VideoCard({
               <div className="hidden sm:block flex-shrink-0">
                 <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/[0.04] text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
                   {t("library.latestExtraction" as string)}
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent" />
                 </span>
               </div>
             )}

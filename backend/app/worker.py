@@ -25,7 +25,7 @@ async def _tg_notify(text: str):
             await telegram_service.broadcast(text)
     except Exception:
         pass
-from app.services.media_utils import _srt_path, _duration_covers, _get_duration
+from app.services.media_utils import _srt_path, _srt_best_path, _duration_covers, _get_duration
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +335,7 @@ async def run_hardcode_job(
 
         video_path = job["video_path"]
         video_id = job.get("video_id", job_id)
-        srt_path = str(_srt_path(video_id))
+        srt_path = str(_srt_best_path(video_id))
 
         out_dir = settings.temp_dir / "hardcoded" / video_id
         out_dir.mkdir(parents=True, exist_ok=True)

@@ -446,11 +446,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
     return (
       <div className="double-bezel">
         <div className="double-bezel-inner p-6">
-          <div className="flex items-start gap-3 p-4 rounded-2xl bg-red-500/10 ring-1 ring-red-500/15">
-            <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+          <div className="flex items-start gap-3 p-4 rounded-2xl bg-danger-muted ring-1 ring-danger/15">
+            <svg className="w-5 h-5 text-danger flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
               <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            <p className="text-sm text-red-600/80">{loadError}</p>
+            <p className="text-sm text-danger/80">{loadError}</p>
           </div>
         </div>
       </div>
@@ -462,7 +462,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       <div className="double-bezel">
         <div className="double-bezel-inner p-10">
           <div className="flex flex-col items-center gap-3">
-            <svg className="w-6 h-6 text-blue-500 animate-spin" viewBox="0 0 24 24" fill="none">
+            <svg className="w-6 h-6 text-accent animate-spin" viewBox="0 0 24 24" fill="none">
               <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
               <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
@@ -478,11 +478,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       <div className="double-bezel-inner p-5 sm:p-7">
         {/* Header: extracted badge + all actions */}
         <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20">
-            <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-success-muted ring-1 ring-success/15">
+            <svg className="w-3.5 h-3.5 text-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
               <path d="M22 11.08V12a10 10 0 11-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
             </svg>
-            <span className="text-xs font-medium text-emerald-600/80">{t("transcript.subtitlesExtracted" as string, { count: entries.length })}</span>
+            <span className="text-xs font-medium text-success/80">{t("transcript.subtitlesExtracted" as string, { count: entries.length })}</span>
           </div>
 
           <div className="flex gap-2 flex-wrap">
@@ -562,8 +562,8 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               onClick={openSettings}
               className={`px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight ring-1 transition-colors cursor-pointer ${
                 hasApiKeys
-                  ? "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 hover:bg-emerald-500/20"
-                  : "bg-amber-500/10 text-amber-700 ring-amber-500/20 hover:bg-amber-500/20"
+                  ? "bg-success-muted text-success ring-success/15 hover:bg-success/20"
+                  : "bg-warn-muted text-warn ring-warn/15 hover:bg-warn/20"
               }`}
             >
               ⚙️ Cấu hình API
@@ -571,7 +571,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
 
             <button
               onClick={handleApply}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-emerald-600/10 text-emerald-700 ring-1 ring-emerald-500/20 hover:bg-emerald-600/20 transition-colors cursor-pointer"
+              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-success/10 text-success ring-1 ring-success/15 hover:bg-success/20 transition-colors cursor-pointer"
             >
               Lưu
             </button> */}
@@ -619,11 +619,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
 
         {/* Job progress banner */}
         {toolJob && (
-          <div className="mb-4 p-4 rounded-2xl bg-blue-500/[0.03] ring-1 ring-blue-500/[0.08]">
+          <div className="mb-4 p-4 rounded-2xl bg-accent/[0.03] ring-1 ring-accent/[0.08]">
             <div className="flex items-center gap-3">
               {toolJob.status === "queued" || toolJob.status === "processing" ? (
                 <>
-                  <IconSpinner className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                  <IconSpinner className="w-4 h-4 text-accent flex-shrink-0" />
                   <span className="text-[12px] font-medium text-ink-muted flex-1">
                     {toolJob.type === "translate" ? t("transcript.translating" as string) : t("transcript.synthesizingVoice" as string)}
                   </span>
@@ -634,13 +634,13 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 </>
               ) : toolJob.status === "done" ? (
                 <>
-                  <IconCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                  <span className="text-[12px] font-medium text-emerald-700 flex-1">
+                  <IconCheck className="w-4 h-4 text-success flex-shrink-0" />
+                  <span className="text-[12px] font-medium text-success flex-1">
                     {toolJob.type === "translate" ? t("transcript.translateDone" as string) : t("transcript.done" as string)}
                   </span>
                 </>
               ) : (
-                <span className="text-[12px] font-medium text-red-600/80 flex-1">{toolJob.error || t("transcript.failed" as string)}</span>
+                <span className="text-[12px] font-medium text-danger/80 flex-1">{toolJob.error || t("transcript.failed" as string)}</span>
               )}
               <button onClick={() => setToolJob(null)} className="text-[11px] text-ink-light hover:text-ink transition-colors cursor-pointer">✕</button>
             </div>
@@ -649,10 +649,10 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
 
         {/* Sau khi dịch xong → Lưu + Apply SRT */}
         {translateDone && (
-          <div className="mb-4 p-4 rounded-2xl bg-emerald-500/[0.04] ring-1 ring-emerald-500/[0.12]">
+          <div className="mb-4 p-4 rounded-2xl bg-success/[0.04] ring-1 ring-success/10">
             <div className="flex items-center gap-2 mb-3">
-              <IconCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span className="text-[11px] font-medium text-emerald-700 uppercase tracking-wider">{t("transcript.translatedReady" as string)}</span>
+              <IconCheck className="w-3.5 h-3.5 text-success" />
+              <span className="text-[11px] font-medium text-success uppercase tracking-wider">{t("transcript.translatedReady" as string)}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <button
@@ -665,7 +665,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               </button>
               <button
                 onClick={handleApplySrt}
-                className="px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/20 transition-colors cursor-pointer"
               >
                 {t("transcript.applySrt" as string)}
               </button>
@@ -682,7 +682,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               <div className="mt-3 flex items-center gap-3">
                 {muxJob.status === "queued" || muxJob.status === "processing" ? (
                   <>
-                    <IconSpinner className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                    <IconSpinner className="w-4 h-4 text-accent flex-shrink-0" />
                     <span className="text-[12px] text-ink-muted">{t("transcript.muxing" as string)}</span>
                     <span className="text-[10px] font-mono text-ink-light tabular-nums">{muxJob.progress}%</span>
                   </>
@@ -690,12 +690,12 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   <a
                     href={muxedUrl || getMuxedDownloadUrl(videoId)}
                     download
-                    className="px-4 py-2 rounded-full text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer"
+                    className="px-4 py-2 rounded-full text-[12px] font-medium bg-success text-white hover:bg-success transition-colors cursor-pointer"
                   >
                     {t("transcript.downloadMuxed" as string)}
                   </a>
                 ) : (
-                  <span className="text-[12px] font-medium text-red-600/80">{muxJob.error || t("transcript.muxFailed" as string)}</span>
+                  <span className="text-[12px] font-medium text-danger/80">{muxJob.error || t("transcript.muxFailed" as string)}</span>
                 )}
               </div>
             )}
@@ -704,14 +704,14 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
 
         {/* Timeline validation banner */}
         {timelineIssues.length > 0 && (
-          <div className="mb-4 p-4 rounded-2xl bg-amber-500/[0.05] ring-1 ring-amber-500/[0.18]">
+          <div className="mb-4 p-4 rounded-2xl bg-warn/[0.05] ring-1 ring-warn/12">
             <div className="flex items-center gap-2 mb-2">
-              <svg className="w-4 h-4 text-amber-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+              <svg className="w-4 h-4 text-warn flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
                 <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                 <line x1="12" y1="9" x2="12" y2="13" />
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
-              <span className="text-[11px] font-medium text-amber-700 uppercase tracking-wider">
+              <span className="text-[11px] font-medium text-warn uppercase tracking-wider">
                 {t("transcript.timelineIssuesFound" as string, { count: timelineIssues.length })}
               </span>
             </div>
@@ -728,7 +728,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
             <button
               onClick={handleFixTimeline}
               disabled={fixingTimeline}
-              className="mt-3 px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-amber-600/10 text-amber-700 ring-1 ring-amber-500/25 hover:bg-amber-600/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="mt-3 px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-warn/10 text-warn ring-1 ring-warn/20 hover:bg-warn/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {fixingTimeline ? t("transcript.fixing" as string) : t("transcript.fixTimeline" as string)}
             </button>
@@ -773,7 +773,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               <button
                 onClick={togglePlay}
                 aria-label={playing ? t("transcript.pause" as string) : t("transcript.play" as string)}
-                className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-sm active:scale-[0.95] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
+                className="w-9 h-9 rounded-full bg-accent text-white flex items-center justify-center hover:bg-accent shadow-sm active:scale-[0.95] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
               >
                 {playing ? (
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
@@ -810,11 +810,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   onClick={() => seekEntry(entry)}
                   className={`w-full text-left rounded-xl px-3 py-2 transition-all duration-200 cursor-pointer group
                     ${i === activeIndex
-                      ? "bg-blue-600/10 ring-1 ring-blue-500/25"
+                      ? "bg-accent-muted ring-1 ring-accent/20"
                       : "hover:bg-black/[0.03] ring-1 ring-transparent"}`}
                 >
                   <div className="flex items-baseline gap-2">
-                    <span className={`text-[10px] font-mono tabular-nums tracking-tight flex-shrink-0 ${i === activeIndex ? "text-blue-600" : "text-ink-light"}`}>
+                    <span className={`text-[10px] font-mono tabular-nums tracking-tight flex-shrink-0 ${i === activeIndex ? "text-accent" : "text-ink-light"}`}>
                       {entry.startLabel} → {entry.endLabel}
                     </span>
                   </div>
@@ -868,11 +868,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     value={settingsGeminiKey}
                     onChange={(e) => setSettingsGeminiKey(e.target.value)}
                     placeholder="AIzaSy..."
-                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/15"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     {t("transcript.settings.getAt" as string)}{" "}
-                    <a href="https://aistudio.google.com/apikey" target="_blank" className="text-blue-500 underline">
+                    <a href="https://aistudio.google.com/apikey" target="_blank" className="text-accent underline">
                       aistudio.google.com/apikey
                     </a>
                   </p>
@@ -886,7 +886,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     onChange={(e) => setSettingsTtsJson(e.target.value)}
                     placeholder='{"type": "service_account", "project_id": "..."}'
                     rows={4}
-                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-accent/15"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     {t("transcript.settings.ttsHowto" as string)}
@@ -901,11 +901,11 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     value={settingsFalKey}
                     onChange={(e) => setSettingsFalKey(e.target.value)}
                     placeholder={t("transcript.settings.falPlaceholder" as string)}
-                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/15"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     {t("transcript.settings.getAt" as string)}{" "}
-                    <a href="https://fal.ai/dashboard/keys" target="_blank" className="text-blue-500 underline">
+                    <a href="https://fal.ai/dashboard/keys" target="_blank" className="text-accent underline">
                       fal.ai/dashboard/keys
                     </a>
                   </p>
@@ -915,9 +915,9 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                 <span
                   className={`text-[11px] ${
                     settingsStatus.includes("Đã lưu")
-                      ? "text-emerald-600"
+                      ? "text-success"
                       : settingsStatus.includes("Lỗi") || settingsStatus.includes("không")
-                      ? "text-red-500"
+                      ? "text-danger"
                       : "text-ink-light"
                   }`}
                 >
@@ -935,7 +935,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   </button>
                   <button
                     onClick={saveSettings}
-                    className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                    className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-accent text-white hover:bg-accent transition-all duration-300 cursor-pointer active:scale-[0.97]"
                   >
                     {t("transcript.settings.save" as string)}
                   </button>

@@ -172,11 +172,18 @@ def crops_visually_similar(
 def resolve_video_path(video_id: str) -> str:
     """Resolve the video used for OCR.
 
-    Khi video có nguồn merge (meta.json.source_merge_id), ưu tiên dùng file
-    `merged/{merge_id}_video.mp4` — video không tiếng tải về từ Douyin — thay vì
-    bản merge video+audio trong videos/{video_id}/.
+    Ưu tiên: delogo'd video > merged video (no audio) > original video.
     """
     video_dir = settings.temp_dir / "videos" / video_id
+
+    # 1. Ưu tiên delogo'd video (đã xoá watermark)
+    delogo_path = settings.temp_dir / "hardcoded" / video_id
+    if delogo_path.exists():
+        for f in delogo_path.iterdir():
+            if f.stem.endswith("_hardcoded") and f.suffix == ".mp4" and f.stat().st_size > 0:
+                return str(f)
+
+    # 2. Merged video (no audio, từ Douyin)
     meta_file = video_dir / "meta.json"
     try:
         data = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -187,6 +194,8 @@ def resolve_video_path(video_id: str) -> str:
                 return str(raw)
     except Exception:
         pass
+
+    # 3. Original video
     for f in video_dir.iterdir():
         if f.stem.startswith("video"):
             return str(f)

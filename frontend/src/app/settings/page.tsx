@@ -109,7 +109,7 @@ function ColorField({
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-24 rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+          className="w-24 rounded-lg input-field text-[12px] font-mono"
         />
       </span>
     </label>
@@ -141,9 +141,9 @@ function SliderField({
           max={max}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="w-36 accent-blue-600"
+          className="w-36 accent-accent"
         />
-        <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold w-16 text-right">
+        <span className="text-[12px] font-mono tabular-nums text-accent font-semibold w-16 text-right">
           {value}
           {suffix}
         </span>
@@ -168,7 +168,7 @@ function ToggleField({
         type="button"
         onClick={() => onChange(!value)}
         className={`relative w-11 h-6 rounded-full transition-colors duration-300 ${
-          value ? "bg-blue-600" : "bg-black/10"
+          value ? "bg-accent" : "bg-black/10"
         }`}
       >
         <span
@@ -750,9 +750,9 @@ export default function SettingsPage() {
   };
 
   return (
-    <main className="min-h-[100dvh] max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
+    <main className="min-h-[100dvh] max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14 md:py-20">
       <AnimatedBlock delay={0}>
-        <div className="flex items-center justify-between gap-4 flex-wrap mb-10">
+        <div className="flex items-center justify-between gap-4 flex-wrap mb-12">
           <Link
             href="/"
             className="btn-island-secondary group !px-5 !py-2 text-[13px]"
@@ -775,7 +775,7 @@ export default function SettingsPage() {
           </Link>
           {health && (
             <span
-              className={`tag ${health.healthy ? "!bg-emerald-500/10 !text-emerald-700" : "!bg-amber-500/10 !text-amber-700"}`}
+              className={`tag ${health.healthy ? "!bg-success-muted !text-success" : "!bg-warn-muted !text-warn"}`}
             >
               {health.healthy
                 ? t("settings.health.ready")
@@ -785,24 +785,25 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
-      <AnimatedBlock delay={100} className="mb-10">
-        <div className="eyebrow mb-4">{t("settings.eyebrow")}</div>
-        <h1 className="text-[clamp(1.8rem,4.5vw,3rem)] font-semibold tracking-tight leading-[1.05] text-ink">
+      <AnimatedBlock delay={100} className="mb-12">
+        <div className="eyebrow mb-5">{t("settings.eyebrow")}</div>
+        <h1 className="text-[clamp(2rem,5vw,3.2rem)] font-semibold tracking-tight leading-[1.05] text-ink">
           {t("settings.title")}
         </h1>
-        <p className="mt-4 text-sm text-ink-muted max-w-lg leading-relaxed">
+        <p className="mt-5 text-sm text-ink-muted max-w-lg leading-relaxed">
           {t("settings.desc")}
         </p>
       </AnimatedBlock>
 
       {error && (
-        <div className="mb-6 rounded-xl bg-red-500/10 ring-1 ring-red-500/20 px-4 py-3 text-[12px] text-red-600">
+        <div className="mb-6 rounded-xl bg-danger-muted ring-1 ring-danger/15 px-4 py-3 text-[12px] text-danger">
           {error}
         </div>
       )}
 
-      <AnimatedBlock delay={150}>
-        <div className="double-bezel mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <AnimatedBlock delay={150} className="md:col-span-2">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
@@ -826,7 +827,7 @@ export default function SettingsPage() {
                   href="https://aistudio.google.com/api-keys"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                  className="text-accent hover:text-accent-light underline underline-offset-2"
                 >
                   {t("settings.gemini.getKey")}
                 </a>
@@ -849,7 +850,7 @@ export default function SettingsPage() {
                         setGeminiKeys(geminiKeys.filter((_, j) => j !== i));
                         setStatus("");
                       }}
-                      className="text-[11px] text-red-500 hover:text-red-600 flex-shrink-0 cursor-pointer"
+                      className="text-[11px] text-danger hover:text-danger/80 flex-shrink-0 cursor-pointer"
                     >
                       {t("btn.delete")}
                     </button>
@@ -864,7 +865,7 @@ export default function SettingsPage() {
                 value={geminiKeyInput}
                 onChange={(e) => setGeminiKeyInput(e.target.value)}
                 placeholder={t("settings.gemini.paste")}
-                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                className="w-full rounded-xl input-field"
               />
               <button
                 type="button"
@@ -886,7 +887,7 @@ export default function SettingsPage() {
       </AnimatedBlock>
 
       <AnimatedBlock delay={200}>
-        <div className="double-bezel mb-6">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
               {t("settings.tts.title")}
@@ -896,7 +897,7 @@ export default function SettingsPage() {
                 <>
                   {t("status.configured")}{" "}
                   {ttsInfo && (
-                    <span className="font-mono text-emerald-700">
+                    <span className="font-mono text-success">
                       {ttsInfo}
                     </span>
                   )}{" "}
@@ -917,7 +918,7 @@ export default function SettingsPage() {
                 href="https://console.cloud.google.com/apis/credentials"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                className="text-accent hover:text-accent-light underline underline-offset-2"
               >
                 {t("settings.tts.console")}
               </a>{" "}
@@ -928,14 +929,14 @@ export default function SettingsPage() {
               onChange={(e) => setTtsJson(e.target.value)}
               placeholder={t("settings.tts.paste")}
               rows={6}
-              className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[12px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
+              className="w-full rounded-xl textarea-field"
             />
           </div>
         </div>
       </AnimatedBlock>
 
       <AnimatedBlock delay={230}>
-        <div className="double-bezel mb-6">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
@@ -957,7 +958,7 @@ export default function SettingsPage() {
                   href="https://fal.ai/dashboard/keys"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                  className="text-accent hover:text-accent-light underline underline-offset-2"
                 >
                   {t("settings.fal.getKey")}
                 </a>
@@ -971,7 +972,7 @@ export default function SettingsPage() {
                 placeholder={
                   hasFal ? t("settings.fal.pasteNew") : t("settings.fal.paste")
                 }
-                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                className="w-full rounded-xl input-field"
               />
               <button
                 type="button"
@@ -1000,8 +1001,8 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
-      <AnimatedBlock delay={250}>
-        <div className="double-bezel mb-6">
+      <AnimatedBlock delay={250} className="md:col-span-2">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
               {t("settings.profile.title")}
@@ -1027,7 +1028,7 @@ export default function SettingsPage() {
                         </span>
                         {status && (
                           <span
-                            className={`text-[11px] font-medium ${status.exists ? "text-emerald-700" : "text-amber-700"}`}
+                            className={`text-[11px] font-medium ${status.exists ? "text-success" : "text-warn"}`}
                           >
                             {status.exists
                               ? t("settings.profile.exists")
@@ -1062,7 +1063,7 @@ export default function SettingsPage() {
       </AnimatedBlock>
 
       <AnimatedBlock delay={280}>
-        <div className="double-bezel mb-6">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
               {t("settings.youtube.title")}
@@ -1076,7 +1077,7 @@ export default function SettingsPage() {
                 href="https://console.developers.google.com"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                className="text-accent hover:text-accent-light underline underline-offset-2"
               >
                 {t("settings.youtube.console")}
               </a>{" "}
@@ -1099,7 +1100,7 @@ export default function SettingsPage() {
                 >
                   <span className="text-[12px] text-ink-muted">{label}</span>
                   <span
-                    className={`text-[11px] font-medium ${ok ? "text-emerald-700" : "text-amber-700"}`}
+                    className={`text-[11px] font-medium ${ok ? "text-success" : "text-warn"}`}
                   >
                     {ok
                       ? t("settings.youtube.ready")
@@ -1130,12 +1131,12 @@ export default function SettingsPage() {
                           {ch.name}
                         </span>
                         {ch.has_request_token && (
-                          <span className="text-[10px] font-medium text-emerald-700">
+                          <span className="text-[10px] font-medium text-success">
                             {t("settings.youtube.tokenReady")}
                           </span>
                         )}
                         {!ch.has_request_token && ch.has_client_secrets && (
-                          <span className="text-[10px] font-medium text-amber-700">
+                          <span className="text-[10px] font-medium text-warn">
                             {t("settings.youtube.tokenMissing")}
                           </span>
                         )}
@@ -1151,7 +1152,7 @@ export default function SettingsPage() {
                             </button>
                             <button
                               onClick={() => handleDeleteChannel(ch.id)}
-                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-red-500/15 text-red-600 hover:bg-red-500/5 transition-colors cursor-pointer"
+                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-danger/15 text-danger hover:bg-danger/5 transition-colors cursor-pointer"
                             >
                               {t("settings.youtube.delete")}
                             </button>
@@ -1179,7 +1180,7 @@ export default function SettingsPage() {
                             value={ytEditName}
                             onChange={(e) => setYtEditName(e.target.value)}
                             placeholder={t("settings.youtube.channelNamePh")}
-                            className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                            className="w-full rounded-xl input-field text-[12px]"
                           />
                         </div>
                         <div>
@@ -1191,7 +1192,7 @@ export default function SettingsPage() {
                             onChange={(e) => setYtEditSecrets(e.target.value)}
                             placeholder={t("settings.youtube.editSecrets")}
                             rows={5}
-                            className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
+                            className="w-full rounded-xl textarea-field text-[11px]"
                           />
                         </div>
                         <button
@@ -1209,7 +1210,7 @@ export default function SettingsPage() {
                     {!isEditing && (
                       <div className="flex items-center gap-4 mt-1">
                         <span
-                          className={`text-[11px] font-medium ${ch.has_client_secrets ? "text-emerald-700" : "text-amber-700"}`}
+                          className={`tag ${ch.has_client_secrets ? "!bg-success-muted !text-success" : "!bg-warn-muted !text-warn"}`}
                         >
                           {ch.has_client_secrets
                             ? t("settings.youtube.ready")
@@ -1224,7 +1225,7 @@ export default function SettingsPage() {
 
             {/* Add new channel */}
             {ytAdding ? (
-              <div className="rounded-xl border border-blue-500/20 bg-blue-500/[0.03] p-4 space-y-3">
+              <div className="rounded-xl border border-accent/15 bg-accent-muted p-4 space-y-3">
                 <div>
                   <label className="text-[11px] text-ink-muted mb-1 block">
                     {t("settings.youtube.channelName")}
@@ -1234,7 +1235,7 @@ export default function SettingsPage() {
                     value={ytNewName}
                     onChange={(e) => setYtNewName(e.target.value)}
                     placeholder={t("settings.youtube.channelNamePh")}
-                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                    className="w-full rounded-xl input-field text-[12px]"
                   />
                 </div>
                 <div>
@@ -1246,7 +1247,7 @@ export default function SettingsPage() {
                     onChange={(e) => setYtNewSecrets(e.target.value)}
                     placeholder={t("settings.youtube.paste")}
                     rows={6}
-                    className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[11px] font-mono text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light resize-y"
+                    className="w-full rounded-xl textarea-field text-[11px]"
                   />
                 </div>
                 <div className="flex items-center gap-2">
@@ -1284,7 +1285,7 @@ export default function SettingsPage() {
       </AnimatedBlock>
 
       <AnimatedBlock delay={280}>
-        <div className="double-bezel mb-6">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
               {t("settings.style.title")}
@@ -1305,7 +1306,7 @@ export default function SettingsPage() {
                 <select
                   value={style.font_family}
                   onChange={(e) => set({ font_family: e.target.value })}
-                  className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  className="rounded-xl input-field text-[12px] w-auto"
                 >
                   {FONT_OPTIONS.map((f) => (
                     <option key={f} value={f}>
@@ -1414,7 +1415,7 @@ export default function SettingsPage() {
       </AnimatedBlock>
 
       <AnimatedBlock delay={320}>
-        <div className="double-bezel mb-6">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
               {t("settings.wm.title")}
@@ -1428,12 +1429,12 @@ export default function SettingsPage() {
               return (
                 <div
                   key={p.id}
-                  className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-blue-500/40 bg-blue-500/[0.03]" : "ring-black/[0.06] bg-white/50"}`}
+                  className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-accent/40 bg-accent-muted" : "ring-black/[0.06] bg-white/50"}`}
                 >
                   <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-2 min-w-0">
                       {isActive && (
-                        <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-600 text-white shrink-0">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-accent text-white shrink-0">
                           {t("settings.wm.active")}
                         </span>
                       )}
@@ -1463,7 +1464,7 @@ export default function SettingsPage() {
                       <button
                         onClick={() => handleRemovePreset(p.id)}
                         disabled={presets.length <= 1}
-                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-red-500/15 text-red-600 hover:bg-red-500/5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-danger/15 text-danger hover:bg-danger/5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {t("settings.wm.delete")}
                       </button>
@@ -1481,7 +1482,7 @@ export default function SettingsPage() {
                           defaultValue={p.name}
                           id={`preset-name-${p.id}`}
                           placeholder={t("settings.wm.namePh")}
-                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                          className="w-full rounded-xl input-field text-[12px]"
                         />
                       </div>
                       <div>
@@ -1493,7 +1494,7 @@ export default function SettingsPage() {
                           defaultValue={p.text}
                           id={`preset-text-${p.id}`}
                           placeholder={t("settings.wm.textPh")}
-                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                          className="w-full rounded-xl input-field text-[12px]"
                         />
                       </div>
                     </div>
@@ -1538,7 +1539,7 @@ export default function SettingsPage() {
                       {p.has_logo && (
                         <button
                           onClick={() => handlePresetLogoDelete(p.id)}
-                          className="text-[11px] text-red-600 hover:text-red-700 text-left px-2 py-0.5 cursor-pointer"
+                          className="text-[11px] text-danger hover:text-danger/80 text-left px-2 py-0.5 cursor-pointer"
                         >
                           {t("settings.wm.deleteLogo")}
                         </button>
@@ -1579,14 +1580,14 @@ export default function SettingsPage() {
                   value={newPresetName}
                   onChange={(e) => setNewPresetName(e.target.value)}
                   placeholder={t("settings.wm.nameExample")}
-                  className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                  className="w-full rounded-xl input-field text-[12px]"
                 />
                 <input
                   type="text"
                   value={newPresetText}
                   onChange={(e) => setNewPresetText(e.target.value)}
                   placeholder={t("settings.wm.textExample")}
-                  className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                  className="w-full rounded-xl input-field text-[12px]"
                 />
               </div>
               <button
@@ -1603,8 +1604,8 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
-      <AnimatedBlock delay={340}>
-        <div className="double-bezel mb-6">
+      <AnimatedBlock delay={340} className="md:col-span-2">
+        <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
@@ -1629,7 +1630,7 @@ export default function SettingsPage() {
                     href="https://t.me/BotFather"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                    className="text-accent hover:text-accent-light underline underline-offset-2"
                   >
                     {t("settings.telegram.botFather")}
                   </a>{" "}
@@ -1641,7 +1642,7 @@ export default function SettingsPage() {
                     value={tgToken}
                     onChange={(e) => setTgToken(e.target.value)}
                     placeholder={t("settings.telegram.tokenPh")}
-                    className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                    className="w-full rounded-xl input-field"
                   />
                   <button
                     type="button"
@@ -1668,7 +1669,7 @@ export default function SettingsPage() {
                     type="button"
                     onClick={handleDeleteTelegram}
                     disabled={tgBusy}
-                    className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
+                    className="text-[11px] text-danger hover:text-danger/80 cursor-pointer"
                   >
                     {t("settings.telegram.deleteToken")}
                   </button>
@@ -1707,7 +1708,7 @@ export default function SettingsPage() {
                 )}
 
                 {tgQR && (
-                  <div className="mb-4 p-4 rounded-xl border border-blue-500/20 bg-blue-500/[0.03] flex flex-col items-center gap-3">
+                  <div className="mb-4 p-4 rounded-xl border border-accent/15 bg-accent/5 flex flex-col items-center gap-3">
                     <canvas
                       ref={tgQrCanvasRef}
                       className="rounded-lg"
@@ -1743,7 +1744,7 @@ export default function SettingsPage() {
                       href={tgQR.qr_data}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[11px] text-blue-600 hover:text-blue-700 underline underline-offset-2 break-all text-center"
+                      className="text-[11px] text-accent hover:text-accent-light underline underline-offset-2 break-all text-center"
                     >
                       {tgQR.qr_data}
                     </a>
@@ -1757,7 +1758,7 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={handleConnectDevice}
-                        className="text-[11px] text-blue-600 hover:text-blue-700 cursor-pointer"
+                        className="text-[11px] text-accent hover:text-accent-light cursor-pointer"
                       >
                         {t("settings.telegram.qrNew")}
                       </button>
@@ -1793,7 +1794,7 @@ export default function SettingsPage() {
                           <button
                             type="button"
                             onClick={() => handleDisconnectChat(ch.chat_id)}
-                            className="text-[11px] text-red-500 hover:text-red-600 flex-shrink-0 cursor-pointer"
+                            className="text-[11px] text-danger hover:text-danger/80 flex-shrink-0 cursor-pointer"
                           >
                             {t("settings.telegram.disconnect")}
                           </button>
@@ -1823,6 +1824,7 @@ export default function SettingsPage() {
           </div>
         </div>
       </AnimatedBlock>
+      </div>
 
       <AnimatedBlock delay={350}>
         <div className="flex items-center gap-3">
@@ -1833,7 +1835,7 @@ export default function SettingsPage() {
             <span className="tracking-tight">{t("settings.save")}</span>
           </button>
           {status && (
-            <span className="text-[12px] text-emerald-700 font-medium">
+            <span className="text-[12px] text-success font-medium">
               {status}
             </span>
           )}

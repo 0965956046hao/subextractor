@@ -275,7 +275,7 @@ export default function ChannelsPage() {
                 onChange={(e) => setNewUrl(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAdd()}
                 placeholder="https://www.douyin.com/user/MS4wLjAB..."
-                className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/15"
                 disabled={adding}
               />
               <button
@@ -291,7 +291,7 @@ export default function ChannelsPage() {
               </button>
             </div>
             {addError && (
-              <p className="mt-2 text-[12px] text-red-600">{addError}</p>
+              <p className="mt-2 text-[12px] text-danger">{addError}</p>
             )}
           </div>
         </div>
@@ -312,7 +312,7 @@ export default function ChannelsPage() {
                   type="date"
                   value={scanDate}
                   onChange={(e) => setScanDate(e.target.value)}
-                  className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/15"
                 />
               </div>
             </div>
@@ -338,8 +338,8 @@ export default function ChannelsPage() {
                         onClick={() => togglePin(ch.id)}
                         className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors ${
                           isPinned
-                            ? "text-amber-500 hover:text-amber-600"
-                            : "text-ink-light hover:text-amber-500 hover:bg-amber-50"
+                            ? "text-warn hover:text-warn"
+                            : "text-ink-light hover:text-warn hover:bg-amber-50"
                         }`}
                         title={isPinned ? t("channel.unpin") : t("channel.pin")}
                       >
@@ -382,7 +382,7 @@ export default function ChannelsPage() {
                       <button
                         onClick={() => handleScan(ch)}
                         disabled={scanning !== null}
-                        className="px-4 py-2 rounded-full text-[12px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 flex-shrink-0 cursor-pointer"
+                        className="px-4 py-2 rounded-full text-[12px] font-medium bg-accent text-white hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 flex-shrink-0 cursor-pointer"
                       >
                         {scanning === ch.id ? (
                           <>
@@ -396,7 +396,7 @@ export default function ChannelsPage() {
                       <button
                         onClick={() => handleDelete(ch.id)}
                         disabled={scanning === ch.id}
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-40 cursor-pointer"
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-danger hover:bg-red-50 transition-colors disabled:opacity-40 cursor-pointer"
                       >
                         <svg
                           className="w-4 h-4"
@@ -420,8 +420,8 @@ export default function ChannelsPage() {
 
       {scanError && (
         <AnimatedBlock delay={0}>
-          <div className="mb-6 rounded-xl bg-red-500/10 ring-1 ring-red-500/20 px-4 py-3">
-            <p className="text-[13px] font-medium text-red-700">{scanError}</p>
+          <div className="mb-6 rounded-xl bg-danger-muted ring-1 ring-danger/15 px-4 py-3">
+            <p className="text-[13px] font-medium text-danger">{scanError}</p>
           </div>
         </AnimatedBlock>
       )}
@@ -445,7 +445,7 @@ export default function ChannelsPage() {
                   <span className="tag">
                     {t("channel.total", { count: scanResult.total })}
                   </span>
-                  <span className="tag bg-blue-500/10 text-blue-700 ring-blue-500/20">
+                  <span className="tag bg-accent-muted text-accent ring-accent/15">
                     {t("channel.filtered", { count: scanResult.filtered })}
                   </span>
                 </div>
@@ -534,7 +534,7 @@ export default function ChannelsPage() {
                               {v.video?.play_addr?.url_list?.[0] && (
                                 <button
                                   onClick={() => setPlayingVideo(v)}
-                                  className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-emerald-600 hover:bg-emerald-50 transition-colors cursor-pointer"
+                                  className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-success hover:bg-emerald-50 transition-colors cursor-pointer"
                                   title={t("channel.colWatch")}
                                 >
                                   <svg
@@ -554,12 +554,12 @@ export default function ChannelsPage() {
                                   setCopiedId(v.aweme_id);
                                   setTimeout(() => setCopiedId(null), 1500);
                                 }}
-                                className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-accent hover:bg-blue-50 transition-colors cursor-pointer"
                                 title="Copy share link"
                               >
                                 {isCopied ? (
                                   <svg
-                                    className="w-4 h-4 text-emerald-500"
+                                    className="w-4 h-4 text-success"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -596,7 +596,7 @@ export default function ChannelsPage() {
                             <td className="py-4 text-center">
                               <Link
                                 href={`/auto?url=${encodeURIComponent(shareText)}`}
-                                className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-light hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-light hover:text-accent hover:bg-blue-50 transition-colors"
                                 title="Auto Pipeline"
                               >
                                 <svg

@@ -37,10 +37,10 @@ function fmtTime(ts: number): string {
 }
 
 const LOG_LEVEL_STYLE: Record<string, string> = {
-  info: "text-blue-600",
+  info: "text-accent",
   success: "text-emerald-600",
   warn: "text-amber-600",
-  error: "text-red-600",
+  error: "text-danger",
   text: "text-violet-700 font-medium",
 };
 
@@ -130,7 +130,7 @@ function JobProgress({
       <div className="double-bezel">
         <div className="double-bezel-inner p-6 sm:p-10 text-center">
           <svg
-            className="w-6 h-6 text-amber-500 mx-auto"
+            className="w-6 h-6 text-warn mx-auto"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -179,7 +179,7 @@ function JobProgress({
         <div className="text-center mb-8">
           {error ? (
             <svg
-              className="w-6 h-6 text-red-500 mx-auto"
+              className="w-6 h-6 text-danger mx-auto"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -192,7 +192,7 @@ function JobProgress({
             </svg>
           ) : (
             <svg
-              className="w-6 h-6 text-blue-500 animate-spin mx-auto"
+              className="w-6 h-6 text-accent animate-spin mx-auto"
               viewBox="0 0 24 24"
               fill="none"
             >
@@ -213,7 +213,7 @@ function JobProgress({
             </svg>
           )}
           <p className="text-sm text-ink mt-3 font-medium">{statusText}</p>
-          {error && <p className="text-[13px] text-red-600/80 mt-2">{error}</p>}
+          {error && <p className="text-[13px] text-danger/80 mt-2">{error}</p>}
         </div>
 
         <div className="max-w-sm mx-auto">
@@ -221,7 +221,7 @@ function JobProgress({
             <div
               className={`h-full rounded-full transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] ${
                 error
-                  ? "bg-red-500"
+                  ? "bg-danger"
                   : "bg-gradient-to-r from-blue-600 to-blue-400"
               }`}
               style={{ width: `${Math.max(error ? 100 : progress, 3)}%` }}
@@ -239,7 +239,7 @@ function JobProgress({
           <button
             onClick={handleCancel}
             disabled={cancelling}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium tracking-tight text-red-600 ring-1 ring-red-500/25 hover:bg-red-500/10 transition-colors duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium tracking-tight text-danger ring-1 ring-danger/20 hover:bg-danger-muted transition-colors duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {cancelling ? (
               <svg
@@ -283,7 +283,7 @@ function JobProgress({
         {logs.length > 0 && (
           <div className="rounded-2xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden mt-8">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.05] bg-white/40">
-              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
               <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
                 {t("video.logs")}
               </span>
@@ -387,8 +387,8 @@ export default function VideoDetailPage() {
             </h1>
             <div className="flex items-center gap-2 mt-4 flex-wrap">
               {isActive && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 ring-1 ring-blue-500/20 text-[11px] font-medium text-blue-600/90">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent-muted ring-1 ring-accent/15 text-[11px] font-medium text-accent/90">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
                   {t("video.processingBadge", { progress: meta?.progress ?? 0 })}
                 </span>
               )}
@@ -401,14 +401,14 @@ export default function VideoDetailPage() {
               {entries !== null && (
                 <Link
                   href={`/extract?video_id=${videoId}`}
-                  className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
+                  className="text-[11px] font-medium text-accent/80 hover:text-accent transition-colors cursor-pointer"
                 >
                   {t("video.retryLink")}
                 </Link>
               )}
               <button
                 onClick={() => setReloadKey((k) => k + 1)}
-                className="text-[11px] font-medium text-blue-600/80 hover:text-blue-700 transition-colors cursor-pointer"
+                className="text-[11px] font-medium text-accent/80 hover:text-accent transition-colors cursor-pointer"
               >
                 {t("video.refresh")}
               </button>
@@ -432,7 +432,7 @@ export default function VideoDetailPage() {
           <div className="double-bezel">
             <div className="double-bezel-inner p-6 sm:p-10 text-center">
               <svg
-                className="w-6 h-6 text-amber-500 mx-auto"
+                className="w-6 h-6 text-warn mx-auto"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"

@@ -42,9 +42,9 @@ function BentoStepIndicator({ current }: { current: Step }) {
                         transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
                         ${
                           state === "done"
-                            ? "bg-emerald-500/15 text-emerald-600 ring-1 ring-emerald-500/30"
+                            ? "bg-success-muted text-success ring-1 ring-success/20"
                             : state === "active"
-                              ? "bg-blue-600 text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]"
+                              ? "bg-accent text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]"
                               : "bg-black/[0.02] text-ink-muted/40 ring-1 ring-black/[0.06]"
                         }`}
                     >
@@ -71,9 +71,9 @@ function BentoStepIndicator({ current }: { current: Step }) {
                     className={`text-[11px] font-medium tracking-tight transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]
                       ${
                         state === "done"
-                          ? "text-emerald-600/70"
+                          ? "text-success/70"
                           : state === "active"
-                            ? "text-blue-600"
+                            ? "text-accent"
                             : "text-ink-light"
                       }`}
                   >
@@ -83,7 +83,7 @@ function BentoStepIndicator({ current }: { current: Step }) {
                 {i < STEPS.length - 1 && (
                   <div
                     className={`w-12 sm:w-20 h-px mx-2 sm:mx-4 mb-7 transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
-                      ${i < idx ? "bg-emerald-500/40" : "bg-black/[0.06]"}`}
+                      ${i < idx ? "bg-success/40" : "bg-black/[0.06]"}`}
                   />
                 )}
               </div>
@@ -116,7 +116,7 @@ function LangSelector({
             className={`px-4 py-1.5 rounded-full text-[13px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
               ${
                 value === l.value
-                  ? "bg-blue-600 text-white shadow-[0_6px_16px_-6px_rgba(59,130,246,0.5)]"
+                  ? "bg-accent text-white shadow-[0_6px_16px_-6px_rgba(59,130,246,0.5)]"
                   : "text-ink-muted hover:text-ink"
               }`}
           >

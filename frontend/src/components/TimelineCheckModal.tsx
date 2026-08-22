@@ -500,7 +500,7 @@ export default function TimelineCheckModal({
           {/* Header */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+              <div className="w-9 h-9 rounded-full bg-warn/15 flex items-center justify-center flex-shrink-0">
                 <IconAlert className="w-5 h-5 text-amber-600" />
               </div>
               <div className="min-w-0">
@@ -516,7 +516,7 @@ export default function TimelineCheckModal({
               <button
                 onClick={runRiskCheck}
                 disabled={checking || entries.length === 0}
-                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-warn text-white hover:bg-warn-light transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
                 {checking ? t("timeline.checking" as string) : t("timeline.checkRisk" as string)}
@@ -534,19 +534,19 @@ export default function TimelineCheckModal({
           </div>
 
           {loadError && (
-            <div className="rounded-xl bg-red-500/10 ring-1 ring-red-500/20 px-3.5 py-2.5 text-[12px] text-red-700">
+            <div className="rounded-xl bg-danger-muted ring-1 ring-danger/15 px-3.5 py-2.5 text-[12px] text-danger">
               {loadError}
             </div>
           )}
 
           {checkError && (
-            <div className="rounded-xl bg-red-500/10 ring-1 ring-red-500/20 px-3.5 py-2.5 text-[12px] text-red-700">
+            <div className="rounded-xl bg-danger-muted ring-1 ring-danger/15 px-3.5 py-2.5 text-[12px] text-danger">
               {checkError}
             </div>
           )}
 
           {risks.length > 0 && (
-            <div className="rounded-xl bg-amber-500/10 ring-1 ring-amber-500/25 px-3.5 py-2.5">
+            <div className="rounded-xl bg-warn-muted ring-1 ring-warn/20 px-3.5 py-2.5">
               <p className="text-[12px] font-semibold text-amber-800 mb-1.5">
                 {t("timeline.risksFound" as string, { count: risks.length })}
               </p>
@@ -558,18 +558,18 @@ export default function TimelineCheckModal({
                         const entry = entries.find((e) => e.index === r.index);
                         if (entry) selectEntry(entry.index, entry.start);
                       }}
-                      className="w-full text-left text-[12px] text-amber-800/90 leading-snug hover:bg-amber-500/15 rounded-md px-1.5 py-0.5 cursor-pointer transition-colors"
+                      className="w-full text-left text-[12px] text-warn/90 leading-snug hover:bg-warn/15 rounded-md px-1.5 py-0.5 cursor-pointer transition-colors"
                       title={t("timeline.jumpToLine" as string)}
                     >
-                      <span className="font-mono text-amber-700">#{r.index}</span>{" "}
+                      <span className="font-mono text-warn">#{r.index}</span>{" "}
                       <span className="text-amber-900/80">{r.text}</span>
                       {r.problems.length > 0 && (
-                        <span className="text-amber-700/80">
+                        <span className="text-warn/80">
                           {" "}
                           · {r.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
                         </span>
                       )}
-                      {r.note && <span className="text-amber-700/60"> — {r.note}</span>}
+                      {r.note && <span className="text-warn/60"> — {r.note}</span>}
                     </button>
                   </li>
                 ))}
@@ -612,7 +612,7 @@ export default function TimelineCheckModal({
                   {t("timeline.subtitleLines" as string, { count: entries.length })}
                 </p>
                 {activeRisk && (
-                  <p className="text-[10px] text-amber-700 font-medium truncate max-w-[60%]">
+                  <p className="text-[10px] text-warn font-medium truncate max-w-[60%]">
                     ⚠ {activeRisk.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
                   </p>
                 )}
@@ -643,7 +643,7 @@ export default function TimelineCheckModal({
                         }
                       }}
                       className={`group w-full text-left px-3 py-2 cursor-pointer transition-colors relative ${
-                        active ? "bg-blue-500/10" : isIssue ? "bg-red-500/10" : isRisk ? "bg-amber-500/10" : "hover:bg-black/[0.02]"
+                        active ? "bg-accent-muted" : isIssue ? "bg-danger-muted" : isRisk ? "bg-warn-muted" : "hover:bg-black/[0.02]"
                       } ${(isIssue || isRisk || active) ? "" : ""}`}
                     >
                       <button
@@ -651,7 +651,7 @@ export default function TimelineCheckModal({
                           e.stopPropagation();
                           deleteEntry(entry.index);
                         }}
-                        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-red-600/90 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity cursor-pointer shadow-sm"
+                        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-danger/90 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-danger-light transition-opacity cursor-pointer shadow-sm"
                         title={t("timeline.deleteRow" as string)}
                       >
                         ×
@@ -660,9 +660,9 @@ export default function TimelineCheckModal({
                         <span
                           className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${
                             isIssue
-                              ? "bg-red-500/15 text-red-700"
+                              ? "bg-danger/15 text-danger"
                               : isRisk
-                              ? "bg-amber-500/15 text-amber-700"
+                              ? "bg-warn/15 text-warn"
                               : "bg-black/[0.04] text-ink-light"
                           }`}
                         >
@@ -676,7 +676,7 @@ export default function TimelineCheckModal({
                             e.stopPropagation();
                             setEditingIndex(entry.index);
                           }}
-                          className="ml-auto text-[10px] font-medium text-ink-muted hover:text-blue-600 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1"
+                          className="ml-auto text-[10px] font-medium text-ink-muted hover:text-accent transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1"
                           title={t("timeline.editContent" as string)}
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
@@ -720,7 +720,7 @@ export default function TimelineCheckModal({
                             onClick={(e) => e.stopPropagation()}
                             autoFocus
                             rows={2}
-                            className="w-full rounded-lg bg-white ring-1 ring-blue-500/40 focus:ring-2 focus:ring-blue-500 px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none resize-y"
+                            className="w-full rounded-lg bg-white ring-1 ring-accent/30 focus:ring-2 focus:ring-accent px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none resize-y"
                             placeholder={t("timeline.enterSubtitle" as string)}
                           />
                           <div className="flex items-center justify-end gap-1.5 mt-1">
@@ -738,7 +738,7 @@ export default function TimelineCheckModal({
                                 e.stopPropagation();
                                 setEditingIndex(-1);
                               }}
-                              className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer"
+                              className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-accent text-white hover:bg-accent transition-colors cursor-pointer"
                             >
                               {t("timeline.save" as string)}
                             </button>
@@ -747,14 +747,14 @@ export default function TimelineCheckModal({
                       ) : (
                         <p
                           className={`text-[12px] leading-snug mt-0.5 line-clamp-2 ${
-                            isIssue ? "text-red-700" : isRisk ? "text-amber-800" : "text-ink"
+                            isIssue ? "text-danger" : isRisk ? "text-amber-800" : "text-ink"
                           }`}
                         >
                           {entry.text}
                         </p>
                       )}
                       {risk?.note && (
-                        <p className="text-[10px] text-amber-700/70 mt-0.5 truncate">{risk.note}</p>
+                        <p className="text-[10px] text-warn/70 mt-0.5 truncate">{risk.note}</p>
                       )}
                     </div>
                   );
@@ -815,10 +815,10 @@ export default function TimelineCheckModal({
                   </div>
                   {/* playhead — red marker tracking the video position */}
                   <div
-                    className="absolute top-5 bottom-0 w-[2px] bg-red-500 z-10 pointer-events-none"
+                    className="absolute top-5 bottom-0 w-[2px] bg-danger z-10 pointer-events-none"
                     style={{ left: currentTime * pps }}
                   >
-                    <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 rounded-full shadow ring-2 ring-white" />
+                    <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-danger rounded-full shadow ring-2 ring-white" />
                   </div>
                   {/* rows */}
                   {entries.map((entry, i) => {
@@ -837,12 +837,12 @@ export default function TimelineCheckModal({
                         onClick={() => selectEntry(entry.index, entry.start)}
                         className={`absolute rounded-md cursor-grab active:cursor-grabbing touch-none flex items-center justify-center px-2 ring-1 transition-colors group ${
                           isIssue
-                            ? "bg-red-500/85 ring-red-600 text-white"
+                            ? "bg-danger/85 ring-danger text-white"
                             : isRisk
-                            ? "bg-amber-500/85 ring-amber-600 text-white"
+                            ? "bg-warn/85 ring-warn text-white"
                             : active
-                            ? "bg-blue-600/85 ring-blue-700 text-white"
-                            : "bg-blue-500/70 ring-blue-600/50 text-white"
+                            ? "bg-accent/85 ring-accent text-white"
+                            : "bg-accent/70 ring-accent/40 text-white"
                         }`}
                         style={{
                           top: 5 + ROW_H / 2 + row * ROW_H,
@@ -875,7 +875,7 @@ export default function TimelineCheckModal({
                             e.stopPropagation();
                             deleteEntry(entry.index);
                           }}
-                          className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-600 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-opacity cursor-pointer shadow-md z-10"
+                          className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-danger text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-danger-light transition-opacity cursor-pointer shadow-md z-10"
                           title={t("timeline.deleteRow" as string)}
                         >
                           ×
@@ -886,9 +886,9 @@ export default function TimelineCheckModal({
                 </div>
               </div>
               <div className="mt-2 flex items-center gap-3 text-[10px] text-ink-light">
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-500/70 inline-block" /> {t("timeline.legendNormal" as string)}</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> {t("timeline.legendError" as string)}</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> {t("timeline.legendRisk" as string)}</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-accent/70 inline-block" /> {t("timeline.legendNormal" as string)}</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-danger inline-block" /> {t("timeline.legendError" as string)}</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-warn inline-block" /> {t("timeline.legendRisk" as string)}</span>
                 <span className="ml-auto text-ink-light">{t("timeline.dragHint" as string)}</span>
               </div>
             </div>
@@ -900,7 +900,7 @@ export default function TimelineCheckModal({
             <button
               onClick={resetEdits}
               disabled={saving || checking || entries.length === 0}
-              className="mr-auto px-3.5 py-2 rounded-full text-[12px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              className="mr-auto px-3.5 py-2 rounded-full text-[12px] font-medium bg-danger-muted ring-1 ring-danger/15 text-danger hover:bg-danger-light/20 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
               title={t("timeline.restoreTitle" as string)}
             >
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
@@ -919,7 +919,7 @@ export default function TimelineCheckModal({
             <button
               onClick={saveAndRecheck}
               disabled={saving || checking || entries.length === 0}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              className="px-4 py-2 rounded-full text-[12px] font-medium bg-warn text-white hover:bg-warn-light transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
               title={t("timeline.saveRecheckTitle" as string)}
             >
               {saving || checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
@@ -928,7 +928,7 @@ export default function TimelineCheckModal({
             <button
               onClick={saveAndContinue}
               disabled={saving || checking}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              className="px-4 py-2 rounded-full text-[12px] font-medium bg-success text-white hover:bg-success transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
             >
               {saving && <IconSpinner className="w-3.5 h-3.5" />}
               {saving ? t("timeline.saving" as string) : t("timeline.saveContinue" as string)}

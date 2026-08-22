@@ -14,7 +14,7 @@ function UploadIcon({ dragging }: { dragging: boolean }) {
   return (
     <svg
       className={`w-10 h-10 sm:w-12 sm:h-12 transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)] ${
-        dragging ? "text-blue-500 scale-110" : "text-ink-light"
+        dragging ? "text-accent scale-110" : "text-ink-light"
       }`}
       viewBox="0 0 24 24"
       fill="none"
@@ -84,7 +84,7 @@ export default function UploadPage({ onUploaded }: Props) {
             onDragLeave={() => setDragging(false)}
             onClick={loading ? undefined : () => inputRef.current?.click()}
             className={`relative min-h-[280px] sm:min-h-[320px] flex flex-col items-center justify-center px-8 py-12 sm:px-12 text-center transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
-              ${dragging ? "bg-blue-500/5" : ""}
+              ${dragging ? "bg-accent/5" : ""}
               ${loading ? "cursor-default" : "cursor-pointer hover:bg-black/[0.01]"}`}
           >
             <input
@@ -101,7 +101,7 @@ export default function UploadPage({ onUploaded }: Props) {
             {loading ? (
               <div className="flex flex-col items-center gap-5">
                 <svg
-                  className="w-8 h-8 text-blue-500 animate-spin"
+                  className="w-8 h-8 text-accent animate-spin"
                   viewBox="0 0 24 24"
                   fill="none"
                 >
@@ -138,7 +138,7 @@ export default function UploadPage({ onUploaded }: Props) {
                   </p>
                 </div>
                 {error && (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/10 ring-1 ring-red-500/15 text-xs text-red-600/80">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-danger-muted ring-1 ring-danger/15 text-xs text-danger/80">
                     <svg
                       className="w-3.5 h-3.5"
                       viewBox="0 0 24 24"
@@ -164,14 +164,14 @@ export default function UploadPage({ onUploaded }: Props) {
                   </p>
                   <p className="text-sm text-ink-muted mt-1.5">
                     {t("upload.or")}{" "}
-                    <span className="text-blue-600 underline underline-offset-2 decoration-blue-500/30">
+                    <span className="text-accent underline underline-offset-2 decoration-accent/30">
                       {t("upload.browseFiles")}
                     </span>{" "}
                     {t("upload.formatsHint")}
                   </p>
                 </div>
                 {error && (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/10 ring-1 ring-red-500/15 text-xs text-red-600/80">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-danger-muted ring-1 ring-danger/15 text-xs text-danger/80">
                     <svg
                       className="w-3.5 h-3.5"
                       viewBox="0 0 24 24"

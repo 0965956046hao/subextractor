@@ -139,23 +139,23 @@ const STATUS_META: Record<
 > = {
   queued: {
     labelKey: "pipeline.status.queued",
-    cls: "bg-amber-500/10 text-amber-700 ring-amber-500/20",
-    dot: "bg-amber-500",
+    cls: "bg-warn-muted text-warn ring-warn/20",
+    dot: "bg-warn",
   },
   running: {
     labelKey: "pipeline.status.running",
-    cls: "bg-blue-500/10 text-blue-700 ring-blue-500/20",
-    dot: "bg-blue-500 animate-pulse",
+    cls: "bg-accent-muted text-accent ring-accent/20",
+    dot: "bg-accent animate-pulse",
   },
   done: {
     labelKey: "pipeline.status.done",
-    cls: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20",
-    dot: "bg-emerald-500",
+    cls: "bg-success-muted text-success ring-success/20",
+    dot: "bg-success",
   },
   error: {
     labelKey: "pipeline.status.error",
-    cls: "bg-red-500/10 text-red-700 ring-red-500/20",
-    dot: "bg-red-500",
+    cls: "bg-danger-muted text-danger ring-danger/20",
+    dot: "bg-danger",
   },
 };
 
@@ -769,7 +769,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
             )}
             <button
               onClick={() => setConfirmingClear(true)}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-all duration-300 active:scale-[0.97] cursor-pointer"
+              className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger-muted ring-1 ring-danger/15 text-danger hover:bg-danger/10 transition-all duration-300 active:scale-[0.97] cursor-pointer"
             >
               {tr("pipeline.clearTemp")}
             </button>
@@ -810,20 +810,20 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
             <div className="double-bezel-inner p-5 sm:p-6">
               {healthLoading ? (
                 <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
-                  <IconSpinner className="w-4 h-4 text-blue-600" />
+                  <IconSpinner className="w-4 h-4 text-accent" />
                   <span className="text-[12px] text-ink-muted">
                     {tr("pipeline.health.checking")}
                   </span>
                 </div>
               ) : health && !health.healthy ? (
-                <div className="mb-4 rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20 px-4 py-3">
+                <div className="mb-4 rounded-xl bg-warn-muted ring-1 ring-warn/15 px-4 py-3">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <p className="text-[12px] font-medium text-amber-800">
+                    <p className="text-[12px] font-medium text-warn">
                       {tr("pipeline.health.warning")}
                     </p>
                     <button
                       onClick={checkHealth}
-                      className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors cursor-pointer"
+                      className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-warn/15 text-warn/80 ring-1 ring-warn/15 hover:bg-warn/25 transition-colors cursor-pointer"
                     >
                       {tr("pipeline.retry")}
                     </button>
@@ -832,10 +832,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     {health.checks.map((c) => (
                       <li
                         key={c.service}
-                        className="flex items-start gap-2 text-[12px] text-amber-800/80"
+                        className="flex items-start gap-2 text-[12px] text-warn/80"
                       >
                         <span
-                          className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${c.healthy ? "bg-emerald-500" : "bg-amber-500"}`}
+                          className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${c.healthy ? "bg-success" : "bg-warn"}`}
                         />
                         <span className="font-mono">{c.service}:</span>
                         <span className="flex-1">{c.message}</span>
@@ -844,9 +844,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </ul>
                 </div>
               ) : health?.healthy ? (
-                <div className="flex items-center gap-2 mb-4 rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 px-4 py-2.5">
-                  <IconCheck className="w-4 h-4 text-emerald-600" />
-                  <span className="text-[12px] text-emerald-800">
+                <div className="flex items-center gap-2 mb-4 rounded-xl bg-success-muted ring-1 ring-success/15 px-4 py-2.5">
+                  <IconCheck className="w-4 h-4 text-success" />
+                  <span className="text-[12px] text-success">
                     {tr("pipeline.health.readyPrefix")}{" "}
                     {health.dub_engines?.google ? "Google TTS" : ""}
                     {health.dub_engines?.google && health.dub_engines?.capcut
@@ -868,7 +868,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </span>
                   <button
                     onClick={checkHealth}
-                    className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-emerald-600/15 text-emerald-800 ring-1 ring-emerald-500/20 hover:bg-emerald-600/25 transition-colors cursor-pointer"
+                    className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-success/15 text-success/80 ring-1 ring-success/15 hover:bg-success/25 transition-colors cursor-pointer"
                   >
                     {tr("pipeline.retry")}
                   </button>
@@ -881,7 +881,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     onClick={() => setSourceType(t)}
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                       sourceType === t
-                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                        ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
                     } cursor-pointer`}
                   >
@@ -911,7 +911,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             : tr("pipeline.placeholder.douyin")
                           : tr("pipeline.placeholder.notConfigured")
                     }
-                    className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <button
                     onClick={handleAdd}
@@ -935,8 +935,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
                   />
                   {uploading ? (
-                    <div className="w-full rounded-xl border border-dashed border-blue-500/30 bg-blue-500/5 px-4 py-6 text-[13px] text-ink-muted flex flex-col items-center gap-2">
-                      <IconSpinner className="w-5 h-5 text-blue-600" />
+                    <div className="w-full rounded-xl border border-dashed border-accent/20 bg-accent-muted px-4 py-6 text-[13px] text-ink-muted flex flex-col items-center gap-2">
+                      <IconSpinner className="w-5 h-5 text-accent" />
                       <span>
                         {tr("pipeline.uploading", {
                           pct: uploadProgress,
@@ -944,16 +944,16 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </span>
                     </div>
                   ) : uploaded ? (
-                    <div className="w-full rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-4">
+                    <div className="w-full rounded-xl border border-success/20 bg-success-muted px-4 py-4">
                       <div className="flex items-center gap-2">
-                        <IconCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <p className="text-[13px] font-medium text-emerald-800 truncate">
+                        <IconCheck className="w-4 h-4 text-success flex-shrink-0" />
+                        <p className="text-[13px] font-medium text-success truncate">
                           {tr("pipeline.uploadSuccess", {
                             name: uploaded.name,
                           })}
                         </p>
                       </div>
-                      <p className="text-[11px] text-emerald-800/70 mt-1">
+                      <p className="text-[11px] text-success/70 mt-1">
                         {tr("pipeline.uploadHint", {
                           size: fmtBytes(uploaded.size),
                         })}
@@ -976,16 +976,16 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </div>
                 </div>
                   ) : uploadError ? (
-                    <div className="w-full rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-4">
-                      <p className="text-[13px] font-medium text-red-700">
+                    <div className="w-full rounded-xl border border-danger/20 bg-danger-muted px-4 py-4">
+                      <p className="text-[13px] font-medium text-danger">
                         {tr("pipeline.error.uploadFailed")}
                       </p>
-                      <p className="text-[11px] text-red-700/80 mt-1">
+                      <p className="text-[11px] text-danger/80 mt-1">
                         {uploadError}
                       </p>
                       <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="mt-3 px-4 py-2 rounded-full text-[11px] font-medium bg-red-600/15 text-red-700 ring-1 ring-red-500/20 hover:bg-red-600/25 transition-colors cursor-pointer"
+                        className="mt-3 px-4 py-2 rounded-full text-[11px] font-medium bg-danger/15 text-danger ring-1 ring-danger/15 hover:bg-danger/25 transition-colors cursor-pointer"
                       >
                         {tr("pipeline.retry")}
                       </button>
@@ -1014,7 +1014,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
               )}
-              <div className="mt-4 flex items-center gap-2 flex-wrap">
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   {tr("pipeline.sourceLang")}
                 </span>
@@ -1025,7 +1026,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => setSrcLang(l)}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                         srcLang === l
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       } cursor-pointer`}
                     >
@@ -1052,7 +1053,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     onClick={() => setRegionMode("auto")}
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                       regionMode === "auto"
-                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                        ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
                     }`}
                   >
@@ -1062,7 +1063,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     onClick={() => setRegionMode("manual")}
                     className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                       regionMode === "manual"
-                        ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                        ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
                     }`}
                   >
@@ -1075,7 +1076,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     : tr("pipeline.regionManualHint")}
                 </p>
               </div>
-              <div className="mt-4 border-t border-black/[0.05] pt-4">
+              </div>
+              <div className="border-t md:border-t-0 md:border-l border-black/[0.05] md:pl-6 pt-4 md:pt-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                     {tr("pipeline.dubTitle")}
@@ -1095,7 +1097,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         }}
                         className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                           voiceLang === l
-                            ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                            ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                             : "text-ink-light hover:text-ink"
                         } cursor-pointer`}
                       >
@@ -1112,7 +1114,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => switchDubEngine("google")}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                         dubEngine === "google"
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
@@ -1122,7 +1124,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => switchDubEngine("capcut")}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                         dubEngine === "capcut"
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
@@ -1140,7 +1142,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           setPreviewUrl(null);
                           setPreviewError(false);
                         }}
-                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {(dubEngine === "capcut"
                           ? capcutVoices
@@ -1154,7 +1156,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <button
                         onClick={handlePreviewVoice}
                         disabled={previewing}
-                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-blue-500/10 ring-1 ring-blue-500/20 text-blue-700 hover:bg-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-accent-muted ring-1 ring-accent/15 text-accent hover:bg-accent/15 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {previewing
                           ? tr("pipeline.creatingAudio")
@@ -1170,7 +1172,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         />
                       )}
                       {previewError && (
-                        <span className="text-[11px] text-red-600 flex items-center gap-1.5">
+                        <span className="text-[11px] text-danger flex items-center gap-1.5">
                           {tr("pipeline.voiceUnavailable")}
                         </span>
                       )}
@@ -1187,7 +1189,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     (dubEngine === "capcut"
                       ? capcutVoices.length === 0
                       : googleVoices.length === 0) && (
-                      <span className="text-[11px] text-amber-700 flex items-center gap-2">
+                      <span className="text-[11px] text-warn flex items-center gap-2">
                         {tr("pipeline.voicesFailed")}{" "}
                         {dubEngine === "google"
                           ? tr("pipeline.voicesFailedGoogle")
@@ -1195,7 +1197,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         .
                         <button
                           onClick={refreshVoices}
-                          className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-amber-600/15 text-amber-800 ring-1 ring-amber-500/20 hover:bg-amber-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-warn/15 text-warn/80 ring-1 ring-warn/15 hover:bg-warn/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           {tr("pipeline.retry")}
                         </button>
@@ -1219,7 +1221,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => setMuteOriginal(true)}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                         muteOriginal
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
@@ -1229,7 +1231,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => setMuteOriginal(false)}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                         !muteOriginal
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
@@ -1250,9 +1252,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         onChange={(e) =>
                           setOriginalGainDb(Number(e.target.value))
                         }
-                        className="w-40 accent-blue-600 disabled:opacity-40"
+                        className="w-40 accent-accent disabled:opacity-40"
                       />
-                      <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold w-10">
+                      <span className="text-[12px] font-mono tabular-nums text-accent font-semibold w-10">
                         -{originalGainDb} dB
                       </span>
                     </label>
@@ -1285,7 +1287,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       disabled={dubEngine !== "capcut"}
                       onClick={() => setMultiVoice(!multiVoice)}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                        multiVoice ? "bg-blue-600" : "bg-black/10"
+                        multiVoice ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1308,7 +1310,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => setAutoFitSubs(true)}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                         autoFitSubs
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
@@ -1318,7 +1320,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       onClick={() => setAutoFitSubs(false)}
                       className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
                         !autoFitSubs
-                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
                       }`}
                     >
@@ -1346,7 +1348,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       type="button"
                       onClick={() => setTranslateOn(!translateOn)}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        translateOn ? "bg-blue-600" : "bg-black/10"
+                        translateOn ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1368,7 +1370,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             onClick={() => setTranslateTarget(l)}
                             className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
                               translateTarget === l
-                                ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
+                                ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                                 : "text-ink-light hover:text-ink"
                             } cursor-pointer`}
                           >
@@ -1401,7 +1403,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       type="button"
                       onClick={() => setDubOn(!dubOn)}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        dubOn ? "bg-blue-600" : "bg-black/10"
+                        dubOn ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1432,7 +1434,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       type="button"
                       onClick={() => setWatermarkOn(!watermarkOn)}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        watermarkOn ? "bg-blue-600" : "bg-black/10"
+                        watermarkOn ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1451,7 +1453,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         <select
                           value={watermarkPreset || presets[0]?.id || ""}
                           onChange={(e) => setWatermarkPreset(e.target.value)}
-                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 cursor-pointer"
                         >
                           {presets.length === 0 ? (
                             <option value="">
@@ -1495,7 +1497,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         }
                       }}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        removeWmEnabled ? "bg-red-500" : "bg-black/10"
+                        removeWmEnabled ? "bg-danger" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1521,7 +1523,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           setRemoveWmRegions([]);
                           setRemoveWmEnabled(false);
                         }}
-                        className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
+                        className="text-[11px] text-danger hover:text-danger cursor-pointer"
                       >
                         {tr("pipeline.removeWatermarkClear")}
                       </button>
@@ -1543,7 +1545,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       type="button"
                       onClick={() => setCheckSubs(!checkSubs)}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        checkSubs ? "bg-blue-600" : "bg-black/10"
+                        checkSubs ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1595,7 +1597,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         if (!useFalThumbnail) setUseGptThumbnail(false);
                       }}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        useFalThumbnail ? "bg-blue-600" : "bg-black/10"
+                        useFalThumbnail ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1622,7 +1624,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         if (!useGptThumbnail) setUseFalThumbnail(false);
                       }}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        useGptThumbnail ? "bg-blue-600" : "bg-black/10"
+                        useGptThumbnail ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1648,7 +1650,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       type="button"
                       onClick={() => setAutoUploadYoutube(!autoUploadYoutube)}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        autoUploadYoutube ? "bg-blue-600" : "bg-black/10"
+                        autoUploadYoutube ? "bg-accent" : "bg-black/10"
                       }`}
                     >
                       <span
@@ -1669,7 +1671,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <select
                         value={ytChannel}
                         onChange={(e) => setYtChannel(e.target.value)}
-                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 max-w-[200px]"
+                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
                       >
                         <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
                         {ytChannels.map((ch) => (
@@ -1715,7 +1717,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               >
                 {tr("pipeline.tabActive")}
                 {activeCount > 0 && (
-                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-blue-500/15 text-[10px] text-blue-600">
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-accent-muted text-[10px] text-accent">
                     {activeCount}
                   </span>
                 )}
@@ -1730,7 +1732,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               >
                 {tr("pipeline.tabDone")}
                 {finishedCount > 0 && (
-                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-[10px] text-emerald-600">
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-success/15 text-[10px] text-success">
                     {finishedCount}
                   </span>
                 )}
@@ -1873,7 +1875,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 </button>
                 <button
                   onClick={handleClearTemp}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
                 >
                   {tr("pipeline.confirmClear")}
                 </button>
@@ -1959,7 +1961,7 @@ function PipelineRow({
             {tr(meta.labelKey)}
           </span>
           {p.status === "queued" && (
-            <span className="text-[10px] text-amber-700/80 flex items-center gap-1">
+            <span className="text-[10px] text-warn/80 flex items-center gap-1">
               <svg
                 className="w-3 h-3"
                 viewBox="0 0 24 24"
@@ -1975,7 +1977,7 @@ function PipelineRow({
             </span>
           )}
           {p.status === "running" && (
-            <span className="text-[10px] text-blue-700/80 flex items-center gap-1">
+            <span className="text-[10px] text-accent/80 flex items-center gap-1">
               <IconSpinner className="w-3 h-3" />
               {tr("pipeline.running")}
             </span>
@@ -1992,10 +1994,10 @@ function PipelineRow({
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 p.status === "error"
-                  ? "bg-red-500"
+                  ? "bg-danger"
                   : p.status === "done"
-                    ? "bg-emerald-500"
-                    : "bg-blue-500"
+                    ? "bg-success"
+                    : "bg-accent"
               }`}
               style={{
                 width: `${p.status === "done" ? 100 : Math.max(p.status === "error" ? 0 : p.progress, 2)}%`,
@@ -2010,7 +2012,7 @@ function PipelineRow({
         </div>
         {stepLabel && (
           <p
-            className={`text-[11px] mt-1 truncate ${p.status === "error" ? "text-red-600/80" : "text-blue-600/80"}`}
+            className={`text-[11px] mt-1 truncate ${p.status === "error" ? "text-danger/80" : "text-accent/80"}`}
           >
             {stepLabel}
             {p.status === "running" ? ` · ${p.progress}%` : ""}
@@ -2037,7 +2039,7 @@ function PipelineRow({
             ? tr("pipeline.cancelProcess")
             : tr("pipeline.delete")
         }
-        className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
+        className="w-7 h-7 rounded-lg bg-danger-muted text-danger flex items-center justify-center hover:bg-danger/20 transition-colors cursor-pointer flex-shrink-0"
       >
         {p.status === "running" || p.status === "queued" ? (
           <svg
@@ -2104,7 +2106,7 @@ function PipelineRow({
                         setConfirmingRemove(false);
                         onRemove();
                       }}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
                     >
                       {tr("pipeline.confirmCancel")}
                     </button>
@@ -2130,15 +2132,16 @@ function PipelineRow({
                         setConfirmingRemove(false);
                         onRemove();
                       }}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
                     >
                       {tr("pipeline.delete")}
                     </button>
                   </div>
                 </>
-              )}
+                )}
+              </div>
+              </div>
             </div>
-          </div>
         </div>
       )}
 
@@ -2329,8 +2332,8 @@ function HistoryRow({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="w-2 h-2 rounded-full flex-shrink-0 bg-emerald-500" />
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 bg-emerald-500/10 text-emerald-700 ring-emerald-500/20">
+          <span className="w-2 h-2 rounded-full flex-shrink-0 bg-success" />
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 bg-success-muted text-success ring-success/15">
             {tr("pipeline.status.done")}
           </span>
           <span className="text-[10px] font-mono text-ink-light tabular-nums">
@@ -2341,7 +2344,7 @@ function HistoryRow({
           {v.filename || v.video_id}
         </p>
         <div className="flex items-center gap-2 mt-1.5">
-          <div className="flex-1 h-1 rounded-full bg-emerald-500/80" />
+          <div className="flex-1 h-1 rounded-full bg-success/80" />
           <span className="text-[10px] font-mono text-ink-light tabular-nums">
             100%
           </span>
@@ -2359,7 +2362,7 @@ function HistoryRow({
           setConfirmingDelete(true);
         }}
         title={tr("pipeline.deleteVideo")}
-        className="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors cursor-pointer flex-shrink-0"
+        className="w-7 h-7 rounded-lg bg-danger-muted text-danger flex items-center justify-center hover:bg-danger/20 transition-colors cursor-pointer flex-shrink-0"
       >
         <svg
           className="w-3.5 h-3.5"
@@ -2409,7 +2412,7 @@ function HistoryRow({
                     setConfirmingDelete(false);
                     onDelete();
                   }}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
                 >
                   {tr("pipeline.deleteVideoConfirm")}
                 </button>
@@ -2479,7 +2482,7 @@ function DetailView({
                 {p.title || tr("pipeline.analyzing")}
               </p>
               {p.status === "queued" && (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 ring-1 ring-amber-500/25 text-amber-700 flex items-center gap-1">
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-warn-muted ring-1 ring-warn/20 text-warn flex items-center gap-1">
                   <svg
                     className="w-3 h-3"
                     viewBox="0 0 24 24"
@@ -2495,13 +2498,13 @@ function DetailView({
                 </span>
               )}
               {p.status === "running" && (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 ring-1 ring-blue-500/25 text-blue-700 flex items-center gap-1">
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-accent-muted ring-1 ring-accent/20 text-accent flex items-center gap-1">
                   <IconSpinner className="w-3 h-3" />
                   {tr("pipeline.processing")}
                 </span>
               )}
               {p.status === "error" && (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-red-500/10 ring-1 ring-red-500/25 text-red-700 flex items-center gap-1">
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-danger-muted ring-1 ring-danger/20 text-danger flex items-center gap-1">
                   <svg
                     className="w-3 h-3"
                     viewBox="0 0 24 24"
@@ -2535,7 +2538,7 @@ function DetailView({
             {(p.status === "running" || p.status === "queued") && (
               <button
                 onClick={() => setConfirmingCancel(true)}
-                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-red-500/10 ring-1 ring-red-500/20 text-red-600 hover:bg-red-500/20 transition-colors cursor-pointer"
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-danger-muted ring-1 ring-danger/15 text-danger hover:bg-danger/10 transition-colors cursor-pointer"
               >
                 {tr("pipeline.cancelProcess")}
               </button>
@@ -2553,7 +2556,7 @@ function DetailView({
           <div className="mb-5">
             {p.removeWatermarkRegions.length > 0 && (
               <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200">
-                <p className="text-[11px] font-semibold text-red-700 mb-2">
+                <p className="text-[11px] font-semibold text-danger mb-2">
                   {tr("pipeline.removeWatermark")} — {tr("pipeline.removeWatermarkActive")}
                 </p>
                 <div className="flex items-center gap-3">
@@ -2563,7 +2566,7 @@ function DetailView({
                   <button
                     type="button"
                     onClick={() => clearRemoveWmRegion(p.id)}
-                    className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
+                    className="text-[11px] text-danger hover:text-danger cursor-pointer"
                   >
                     {tr("pipeline.removeWatermarkClear")}
                   </button>
@@ -2580,12 +2583,12 @@ function DetailView({
         {p.stage === "watermark_region" && p.videoId && (
           <div className="mb-5">
             <div className="p-4 bg-red-50 rounded-lg border border-red-200">
-              <p className="text-[12px] font-semibold text-red-700 mb-3">
+              <p className="text-[12px] font-semibold text-danger mb-3">
                 {tr("pipeline.removeWatermark")} — {tr("pipeline.removeWatermarkDrawHint")}
               </p>
               <WatermarkRegionSelector
                 videoUrl={getVideoUrl(p.videoId)}
-                onRegions={(regions) => {
+                onConfirm={(regions) => {
                   if (regions.length > 0) confirmWatermarkRegions(p.id, regions);
                 }}
               />
@@ -2606,10 +2609,10 @@ function DetailView({
         {p.needChatgptLogin && (
           <div className="mb-5 p-4 bg-amber-50 rounded-lg border border-amber-200 flex items-center justify-between gap-3 flex-wrap">
             <div className="min-w-0">
-              <p className="text-[12px] font-semibold text-amber-700">
+              <p className="text-[12px] font-semibold text-warn">
                 {tr("pipeline.chatgptNeedLogin")}
               </p>
-              <p className="text-[11px] text-amber-600 mt-0.5">
+              <p className="text-[11px] text-warn mt-0.5">
                 {tr("pipeline.chatgptNeedLoginHint")}
               </p>
             </div>
@@ -2622,7 +2625,7 @@ function DetailView({
               </button>
               <button
                 onClick={() => rerunPipeline(p.id, 10)}
-                className="px-3 py-1.5 text-[11px] font-medium bg-amber-500 text-white rounded-full hover:bg-amber-600 transition-colors cursor-pointer"
+                className="px-3 py-1.5 text-[11px] font-medium bg-warn text-white rounded-full hover:bg-warn transition-colors cursor-pointer"
               >
                 {tr("pipeline.retryStep")}
               </button>
@@ -2636,7 +2639,7 @@ function DetailView({
               <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
                 {tr("pipeline.overallProgress")}
               </span>
-              <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
+              <span className="text-[12px] font-mono tabular-nums text-accent font-semibold">
                 {p.status === "done"
                   ? 100
                   : p.status === "error"
@@ -2649,10 +2652,10 @@ function DetailView({
               <div
                 className={`h-full rounded-full transition-all duration-500 ${
                   p.status === "error"
-                    ? "bg-red-500"
+                    ? "bg-danger"
                     : p.status === "done"
-                      ? "bg-emerald-500"
-                      : "bg-blue-500"
+                      ? "bg-success"
+                      : "bg-accent"
                 }`}
                 style={{
                   width: `${p.status === "done" ? 100 : p.status === "error" ? 0 : Math.max(p.progress, 2)}%`,
@@ -2685,11 +2688,11 @@ function DetailView({
                     skipped
                       ? "bg-black/[0.04] text-ink-light"
                       : isFailed
-                        ? "bg-red-500/15 text-red-600"
+                        ? "bg-danger-muted text-danger"
                         : done
-                          ? "bg-emerald-500/15 text-emerald-600"
+                          ? "bg-success/15 text-success"
                           : active
-                            ? "bg-blue-500/15 text-blue-600"
+                            ? "bg-accent-muted text-accent"
                             : "bg-black/[0.04] text-ink-light"
                   }`}
                 >
@@ -2719,7 +2722,7 @@ function DetailView({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p
-                      className={`text-[13px] font-medium ${isFailed ? "text-red-600" : done || active ? "text-ink" : "text-ink-light"}`}
+                      className={`text-[13px] font-medium ${isFailed ? "text-danger" : done || active ? "text-ink" : "text-ink-light"}`}
                     >
                       {STEP_LABEL_KEYS[i] ? tr(STEP_LABEL_KEYS[i]) : s.label}
                     </p>
@@ -2728,11 +2731,11 @@ function DetailView({
                         skipped
                           ? "text-ink-light"
                           : isFailed
-                            ? "text-red-600"
+                            ? "text-danger"
                             : done
-                              ? "text-emerald-600"
+                              ? "text-success"
                               : active
-                                ? "text-blue-600"
+                                ? "text-accent"
                                 : "text-ink-light"
                       }`}
                     >
@@ -2754,7 +2757,7 @@ function DetailView({
                     <div className="mt-1.5 h-1 rounded-full bg-black/[0.06] overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all duration-500 ${
-                          done ? "bg-emerald-500" : "bg-blue-500"
+                          done ? "bg-success" : "bg-accent"
                         }`}
                         style={{ width: `${stepPct}%` }}
                       />
@@ -2773,10 +2776,10 @@ function DetailView({
                         skipped
                           ? "text-ink-light"
                           : isFailed
-                            ? "text-red-600"
+                            ? "text-danger"
                             : active
-                              ? "text-blue-600"
-                              : "text-emerald-600"
+                              ? "text-accent"
+                              : "text-success"
                       }`}
                     >
                       {stepTime}
@@ -2790,7 +2793,7 @@ function DetailView({
                           ? tr(STEP_LABEL_KEYS[i])
                           : s.label,
                       })}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-600/10 text-blue-700 ring-1 ring-blue-500/20 hover:bg-blue-600/20 transition-colors cursor-pointer"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
                     >
                       <svg
                         className="w-3 h-3"
@@ -2840,11 +2843,11 @@ function DetailView({
                 const ts = typeof l === "string" ? null : l.ts;
                 const color =
                   level === "error"
-                    ? "text-red-600"
+                    ? "text-danger"
                     : level === "success"
-                      ? "text-emerald-600"
+                      ? "text-success"
                       : level === "warning"
-                        ? "text-amber-600"
+                        ? "text-warn"
                         : "text-ink-muted";
                 return (
                   <div key={i} className="flex items-start gap-2">
@@ -2870,7 +2873,7 @@ function DetailView({
         )}
 
         {p.error && (
-          <div className="mt-4 p-3 rounded-xl bg-red-500/8 ring-1 ring-red-500/15 text-[12px] text-red-600/80 whitespace-pre-wrap">
+          <div className="mt-4 p-3 rounded-xl bg-danger/8 ring-1 ring-danger/15 text-[12px] text-danger/80 whitespace-pre-wrap">
             {p.error}
           </div>
         )}
@@ -3039,7 +3042,7 @@ function DetailView({
                     setConfirmingCancel(false);
                     cancelPipeline(p.id);
                   }}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
                 >
                   {tr("pipeline.confirmCancelDelete")}
                 </button>
@@ -3060,9 +3063,9 @@ function DetailView({
           >
             <div className="double-bezel-inner p-5 sm:p-6">
               <div className="flex items-start gap-3 mb-3">
-                <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+                <div className="w-9 h-9 rounded-full bg-warn-muted flex items-center justify-center flex-shrink-0">
                   <svg
-                    className="w-5 h-5 text-amber-600"
+                    className="w-5 h-5 text-warn"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
@@ -3096,7 +3099,7 @@ function DetailView({
                 </button>
                 <button
                   onClick={() => openTimelineCheck(p.id)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-amber-600 text-white hover:bg-amber-500 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-warn text-white hover:bg-warn transition-colors cursor-pointer inline-flex items-center gap-1.5"
                 >
                   <svg
                     className="w-3.5 h-3.5"

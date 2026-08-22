@@ -213,7 +213,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
               {t("preview.fontSize")}
             </span>
-            <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
+            <span className="text-[12px] font-mono tabular-nums text-accent font-semibold">
               {fontSize}px
             </span>
           </div>
@@ -224,7 +224,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             step={1}
             value={fontSize}
             onChange={(e) => handleFontSize(Number(e.target.value))}
-            className="w-full accent-blue-600"
+            className="w-full accent-accent"
           />
         </label>
 
@@ -233,7 +233,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
               {t("preview.marginV")}
             </span>
-            <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
+            <span className="text-[12px] font-mono tabular-nums text-accent font-semibold">
               {marginV}px
             </span>
           </div>
@@ -244,7 +244,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             step={4}
             value={marginV}
             onChange={(e) => handleMarginV(Number(e.target.value))}
-            className="w-full accent-blue-600"
+            className="w-full accent-accent"
           />
         </label>
 
@@ -253,7 +253,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
               {t("preview.marginH")}
             </span>
-            <span className="text-[12px] font-mono tabular-nums text-blue-600 font-semibold">
+            <span className="text-[12px] font-mono tabular-nums text-accent font-semibold">
               {marginH}px
             </span>
           </div>
@@ -264,7 +264,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             step={4}
             value={marginH}
             onChange={(e) => handleMarginH(Number(e.target.value))}
-            className="w-full accent-blue-600"
+            className="w-full accent-accent"
           />
         </label>
 

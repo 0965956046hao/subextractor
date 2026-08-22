@@ -467,7 +467,7 @@ export default function VoiceCheckModal({
               <button
                 onClick={handleCheckAlignment}
                 disabled={generating || loading || checkingAlignment}
-                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-accent text-white hover:bg-accent transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
                 title={t("voice.checkAlignment" as string)}
               >
                 {checkingAlignment ? <IconSpinner className="w-3.5 h-3.5" /> : (
@@ -480,7 +480,7 @@ export default function VoiceCheckModal({
               <button
                 onClick={handleRebuildFullAudio}
                 disabled={generating || loading || rebuilding}
-                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-amber-500 text-white hover:bg-amber-400 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-warn text-white hover:bg-warn-light transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
                 title={t("voice.rebuildFullAudio" as string)}
               >
                 {rebuilding ? <IconSpinner className="w-3.5 h-3.5" /> : (
@@ -511,14 +511,14 @@ export default function VoiceCheckModal({
           </div>
 
           {error && (
-            <div className="rounded-xl bg-red-500/10 ring-1 ring-red-500/20 px-3.5 py-2.5 text-[12px] text-red-700">
+            <div className="rounded-xl bg-danger-muted ring-1 ring-danger/15 px-3.5 py-2.5 text-[12px] text-danger">
               {error}
             </div>
           )}
 
           {/* Alignment issues panel */}
           {showAlignment && (
-            <div className="rounded-xl bg-blue-500/5 ring-1 ring-blue-500/15 p-3.5 max-h-48 overflow-y-auto flex-shrink-0">
+            <div className="rounded-xl bg-accent/5 ring-1 ring-accent/10 p-3.5 max-h-48 overflow-y-auto flex-shrink-0">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-[12px] font-semibold text-blue-800">
                   {alignmentIssues.length > 0
@@ -527,13 +527,13 @@ export default function VoiceCheckModal({
                 </p>
                 <button
                   onClick={() => setShowAlignment(false)}
-                  className="text-[10px] text-blue-600 hover:text-blue-500 cursor-pointer"
+                  className="text-[10px] text-accent hover:text-accent cursor-pointer"
                 >
                   {t("voice.close" as string)}
                 </button>
               </div>
               {alignmentIssues.length > 0 && (
-                <div className="divide-y divide-blue-500/10">
+                <div className="divide-y divide-accent/10">
                   {alignmentIssues.map((issue) => {
                     const isSpeeding = speedingIndex === issue.index;
                     const suggestedSpeed = Math.min(issue.audio_duration / issue.srt_duration, 3.0);
@@ -547,7 +547,7 @@ export default function VoiceCheckModal({
                         {/* Row 1: index + text + times + overshoot */}
                         <div className="flex items-center gap-2">
                           <span
-                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 flex-shrink-0 cursor-pointer hover:bg-blue-500/25"
+                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-muted text-accent flex-shrink-0 cursor-pointer hover:bg-accent/20"
                             onClick={() => {
                               if (videoRef.current) videoRef.current.currentTime = issue.start;
                             }}
@@ -555,10 +555,10 @@ export default function VoiceCheckModal({
                             #{issue.index}
                           </span>
                           <span className="text-[11px] text-ink flex-1 line-clamp-1">{issue.text}</span>
-                          <span className="text-[10px] text-blue-600 font-mono flex-shrink-0">
+                          <span className="text-[10px] text-accent font-mono flex-shrink-0">
                             {issue.srt_duration.toFixed(1)}s → {issue.audio_duration.toFixed(1)}s
                           </span>
-                          <span className="text-[10px] font-medium text-red-600 bg-red-500/10 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                          <span className="text-[10px] font-medium text-danger bg-danger-muted px-1.5 py-0.5 rounded-full flex-shrink-0">
                             +{issue.overshoot.toFixed(1)}s
                           </span>
                         </div>
@@ -579,15 +579,15 @@ export default function VoiceCheckModal({
                               setSpeedValues((prev) => ({ ...prev, [issue.index]: v }));
                             }}
                             disabled={isSpeeding}
-                            className="flex-1 h-1.5 accent-blue-600 cursor-pointer disabled:opacity-50"
+                            className="flex-1 h-1.5 accent-accent cursor-pointer disabled:opacity-50"
                           />
-                          <span className="text-[10px] font-mono text-blue-700 bg-blue-500/10 px-1.5 py-0.5 rounded flex-shrink-0 min-w-[55px] text-center">
+                          <span className="text-[10px] font-mono text-accent bg-accent-muted px-1.5 py-0.5 rounded flex-shrink-0 min-w-[55px] text-center">
                             {targetSpeed.toFixed(2)}x → {newDur}s
                           </span>
                           <button
                             onClick={() => handleSetSpeed(issue.index, targetSpeed)}
                             disabled={isSpeeding || targetSpeed <= 1.0}
-                            className="text-[10px] font-medium px-2 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-40 flex-shrink-0 inline-flex items-center gap-1"
+                            className="text-[10px] font-medium px-2 py-1 rounded-md bg-accent text-white hover:bg-accent transition-colors cursor-pointer disabled:opacity-40 flex-shrink-0 inline-flex items-center gap-1"
                           >
                             {isSpeeding ? <IconSpinner className="w-3 h-3" /> : (
                               <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -603,8 +603,8 @@ export default function VoiceCheckModal({
                             disabled={isSpeeding}
                             className={`w-7 h-7 rounded-md flex items-center justify-center cursor-pointer transition-colors disabled:opacity-40 flex-shrink-0 ${
                               previewSpeedIndex === issue.index
-                                ? "bg-blue-600 text-white"
-                                : "bg-blue-600/10 text-blue-600 hover:bg-blue-600/20"
+                                ? "bg-accent text-white"
+                                : "bg-accent/10 text-accent hover:bg-accent/20"
                             }`}
                             title={t("voice.preview" as string)}
                           >
@@ -735,7 +735,7 @@ export default function VoiceCheckModal({
                   <button
                     onClick={handleBulkSwitch}
                     disabled={!bulkFrom || !bulkTo || bulkFrom === bulkTo || bulkApplying}
-                    className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-amber-500 text-white hover:bg-amber-400 transition-colors cursor-pointer disabled:opacity-40 flex-shrink-0 inline-flex items-center gap-1"
+                    className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-warn text-white hover:bg-warn-light transition-colors cursor-pointer disabled:opacity-40 flex-shrink-0 inline-flex items-center gap-1"
                   >
                     {bulkApplying ? <IconSpinner className="w-3 h-3" /> : (
                       <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -810,7 +810,7 @@ export default function VoiceCheckModal({
                             className={`ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 cursor-pointer transition-colors ${
                               expandedIndex === line.index
                                 ? "bg-violet-500/20 text-violet-700 ring-1 ring-violet-500/30"
-                                : "bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25"
+                                : "bg-success/15 text-success hover:bg-success/20"
                             }`}
                           >
                             {isSwitching ? (
@@ -827,8 +827,8 @@ export default function VoiceCheckModal({
                           <span
                             className={`ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
                               hasVoice
-                                ? "bg-emerald-500/15 text-emerald-700"
-                                : "bg-red-500/10 text-red-600"
+                                ? "bg-success/15 text-success"
+                                : "bg-danger-muted text-danger"
                             }`}
                           >
                             <IconSpeaker className="w-3 h-3" />
@@ -883,7 +883,7 @@ export default function VoiceCheckModal({
                               handleRewrite(line.index, "shorter");
                             }}
                             disabled={rewritingIndex === line.index}
-                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-emerald-600 hover:bg-emerald-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5 disabled:opacity-40"
+                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-success hover:bg-success/10 cursor-pointer transition-all flex-shrink-0 mt-0.5 disabled:opacity-40"
                             title={t("voice.genShorter" as string)}
                           >
                             {rewritingIndex === line.index ? (
@@ -901,7 +901,7 @@ export default function VoiceCheckModal({
                               handleRegenAudio(line.index);
                             }}
                             disabled={regenAudioIndex === line.index}
-                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-blue-600 hover:bg-blue-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5 disabled:opacity-40"
+                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-accent hover:bg-accent-muted cursor-pointer transition-all flex-shrink-0 mt-0.5 disabled:opacity-40"
                             title={t("voice.regenAudio" as string)}
                           >
                             {regenAudioIndex === line.index ? (
@@ -1019,7 +1019,7 @@ export default function VoiceCheckModal({
             <button
               onClick={() => onResolve("continue")}
               disabled={generating}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              className="px-4 py-2 rounded-full text-[12px] font-medium bg-success text-white hover:bg-success-light transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
             >
               {generating && <IconSpinner className="w-3.5 h-3.5" />}
               {t("voice.continue" as string)}
