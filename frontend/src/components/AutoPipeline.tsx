@@ -734,7 +734,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
 
   return (
     <>
-      <main className="min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
+      <main className="min-h-[100dvh] max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-16">
         <AnimatedBlock delay={0}>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <Link
@@ -1014,8 +1014,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
               )}
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   {tr("pipeline.sourceLang")}
                 </span>
@@ -1076,8 +1075,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     : tr("pipeline.regionManualHint")}
                 </p>
               </div>
-              </div>
-              <div className="border-t md:border-t-0 md:border-l border-black/[0.05] md:pl-6 pt-4 md:pt-0">
+              <div className="mt-4 border-t border-black/[0.05] pt-4">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                     {tr("pipeline.dubTitle")}
@@ -2140,7 +2138,6 @@ function PipelineRow({
                 </>
                 )}
               </div>
-              </div>
             </div>
         </div>
       )}
@@ -2665,7 +2662,9 @@ function DetailView({
           </div>
         )}
 
-        <div className="space-y-2">
+        <div className="relative">
+          <div className="absolute left-[11px] top-6 bottom-6 w-[2px] bg-black/[0.06]" />
+          <div className="space-y-1">
           {STEPS.map((s, i) => {
             const done = i < activeStep || p.status === "done";
             const isFailed =
@@ -2682,7 +2681,7 @@ function DetailView({
             else if (start != null) stepTime = fmtElapsed(now - start);
 
             return (
-              <div key={s.label} className="flex items-center gap-3">
+              <div key={s.label} className="flex items-center gap-3 relative">
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
                     skipped
@@ -2814,6 +2813,7 @@ function DetailView({
               </div>
             );
           })}
+          </div>
         </div>
 
         {p.logs.length > 0 && (

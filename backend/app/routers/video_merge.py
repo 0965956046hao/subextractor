@@ -92,7 +92,7 @@ def import_video(body: ImportRequest):
 
     try:
         if body.merge_id:
-            src = settings.temp_dir / "merged" / f"{body.merge_id}.mp4"
+            src = settings.temp_dir / "merged" / f"{body.merge_id}_video.mp4"
             if not src.exists():
                 raise HTTPException(404, "Merged file not found")
             shutil.copyfile(src, video_path)

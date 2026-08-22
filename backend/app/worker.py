@@ -483,7 +483,7 @@ async def run_align_job(
         )
 
         now_str = datetime.now().strftime("%H:%M:%S")
-        await _tg_notify(f"✅ <b>Căn chỉnh phụ đề xong!</b>\n🎬 {video_id}\n🕐 {now_str}")
+        await _tg_notify(f"✅ <b>Căn chỉnh phụ đề xong!</b>\n🎬 {job.get('video_id', job_id)}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("align job %s: cancelled", job_id)
@@ -541,7 +541,7 @@ async def run_translate_job(
         await job_log_async(job, ws_clients, "Dịch hoàn tất! File SRT tiếng Việt đã sẵn sàng.", "success")
 
         now_str = datetime.now().strftime("%H:%M:%S")
-        await _tg_notify(f"✅ <b>Dịch phụ đề xong!</b>\n🎬 {video_id}\n🕐 {now_str}")
+        await _tg_notify(f"✅ <b>Dịch phụ đề xong!</b>\n🎬 {job['video_id']}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("translate job %s: cancelled", job_id)
@@ -599,7 +599,7 @@ async def run_tts_job(
         await job_log_async(job, ws_clients, "TTS hoàn tất! Video lồng tiếng đã sẵn sàng.", "success")
 
         now_str = datetime.now().strftime("%H:%M:%S")
-        await _tg_notify(f"✅ <b>TTS hoàn tất!</b>\n🎬 {video_id}\n🕐 {now_str}")
+        await _tg_notify(f"✅ <b>TTS hoàn tất!</b>\n🎬 {job.get('video_id', job_id)}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("tts job %s: cancelled", job_id)
@@ -657,7 +657,7 @@ async def run_dub_job(
         await job_log_async(job, ws_clients, "Lồng tiếng Việt hoàn tất!", "success")
 
         now_str = datetime.now().strftime("%H:%M:%S")
-        await _tg_notify(f"✅ <b>Lồng tiếng hoàn tất!</b>\n🎬 {video_id}\n🕐 {now_str}")
+        await _tg_notify(f"✅ <b>Lồng tiếng hoàn tất!</b>\n🎬 {job.get('video_id', job_id)}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("dub job %s: cancelled", job_id)
@@ -823,7 +823,7 @@ async def run_export_job(
         now_str = datetime.now().strftime("%H:%M:%S")
         await _tg_notify(
             f"✅ <b>Video đã xuất xong!</b>\n"
-            f"🎬 {video_id}\n"
+            f"🎬 {job.get('video_id', job_id)}\n"
             f"🕐 {now_str}"
         )
 

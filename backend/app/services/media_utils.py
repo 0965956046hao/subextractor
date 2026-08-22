@@ -86,7 +86,7 @@ def _video_path(video_id: str) -> Path:
         data = json.loads(meta.read_text(encoding="utf-8"))
         merge_id = data.get("source_merge_id")
         if merge_id:
-            merged = settings.temp_dir / "merged" / f"{merge_id}.mp4"
+            merged = settings.temp_dir / "merged" / f"{merge_id}_video.mp4"
             if merged.exists():
                 link = video_dir / "video.mp4"
                 if not link.exists():

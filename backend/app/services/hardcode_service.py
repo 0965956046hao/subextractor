@@ -903,7 +903,7 @@ def _burn_parallel(
                         )
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
-            for _p in getattr(ex, "_processes", {}).values():
+            for _p in (getattr(ex, "_processes", None) or {}).values():
                 try:
                     if _p.is_alive():
                         _p.terminate()

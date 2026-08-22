@@ -1399,6 +1399,7 @@ async function runPrep(id: string, startStep = 0) {
   liveRunners.add(id);
   try {
     if (abortedPipelines.has(id)) return;
+    appendLog(id, `Bắt đầu pipeline (từ bước ${startStep})…`);
     // 0. Resolve link
     if (startStep <= 0) {
       const cleaned = extractUrl(rawUrl);
@@ -1416,7 +1417,10 @@ async function runPrep(id: string, startStep = 0) {
           body: JSON.stringify({ url: cleaned }),
         });
         const yd = await yr.json();
-        if (!yr.ok) throw new Error(yd.detail || "Không thể tải video YouTube");
+        if (!yr.ok) {
+          appendLog(id, `YouTube import HTTP ${yr.status}: ${yd.detail || "lỗi"}`);
+          throw new Error(yd.detail || "Không thể tải video YouTube");
+        }
         videoId = yd.video_id;
         sourceLang = cur.srcLang || detectSourceLang(cleaned);
         ocrLang = detectOcrLang(sourceLang);
@@ -1445,7 +1449,10 @@ async function runPrep(id: string, startStep = 0) {
           body: JSON.stringify({ url: cleaned }),
         });
         const rd = await r.json();
-        if (!r.ok) throw new Error(rd.detail || "Không thể phân tích link");
+        if (!r.ok) {
+          appendLog(id, `Resolve HTTP ${r.status}: ${rd.detail || "lỗi"}`);
+          throw new Error(rd.detail || "Không thể phân tích link");
+        }
         videoUrl = rd.video_url ?? null;
         audioUrl = rd.audio_url ?? null;
         sourceLang = detectSourceLang(cleaned);
@@ -1507,6 +1514,7 @@ async function runPrep(id: string, startStep = 0) {
             id,
             "Phát hiện 2 file riêng (video + audio) → tải 2 file rồi gộp...",
           );
+          appendLog(id, "Gửi yêu cầu merge video + audio…");
           const mr = await fetch("/api/video-merge", {
             method: "POST",
             headers: JSON_HEADERS,
@@ -1518,7 +1526,10 @@ async function runPrep(id: string, startStep = 0) {
             }),
           });
           const md = await mr.json();
-          if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
+          if (!mr.ok) {
+            appendLog(id, `Merge HTTP ${mr.status}: ${md.detail || "lỗi"}`);
+            throw new Error(md.detail || "Merge thất bại");
+          }
           const ms = await pollMerge(md.job_id, tick(1));
           if (ms.status !== "done")
             throw new Error(ms.error || "Merge thất bại");
@@ -1532,6 +1543,7 @@ async function runPrep(id: string, startStep = 0) {
 
         appendLog(id, "Đăng ký video vào hệ thống...");
         const impName = `${originalName || "video"}.mp4`;
+        appendLog(id, `Gửi import-video (filename: ${impName})…`);
         const impBody = mergeId
           ? {
               merge_id: mergeId,
@@ -1551,7 +1563,10 @@ async function runPrep(id: string, startStep = 0) {
           body: JSON.stringify(impBody),
         });
         const idata = await ir.json();
-        if (!ir.ok) throw new Error(idata.detail || "Import thất bại");
+        if (!ir.ok) {
+          appendLog(id, `Import HTTP ${ir.status}: ${idata.detail || "lỗi"}`);
+          throw new Error(idata.detail || "Import thất bại");
+        }
         videoId = idata.video_id;
         patch(id, { videoId });
         appendLog(id, `Video ID: ${videoId}`);
@@ -1809,8 +1824,10 @@ async function runPipeline(id: string, startStep = 4) {
         region = DEFAULT_REGION;
         patch(id, { region });
         markStepSkipped(id, 2);
+        appendLog(id, "Không có vùng quét — dùng mặc định.");
       }
       // Resume: nếu SRT đã tồn tại thì bỏ qua OCR, dùng thẳng phụ đề hiện có.
+      appendLog(id, "Kiểm tra SRT đã có chưa…");
       let srtExists = false;
       try {
         const srtCheck = await fetch(`/api/srt/${videoId}`);
@@ -1840,7 +1857,10 @@ async function runPipeline(id: string, startStep = 4) {
           }),
         });
         const pd = await pr.json();
-        if (!pr.ok) throw new Error(pd.detail || "Không thể bắt đầu OCR");
+        if (!pr.ok) {
+          appendLog(id, `OCR HTTP ${pr.status}: ${pd.detail || "lỗi"}`);
+          throw new Error(pd.detail || "Không thể bắt đầu OCR");
+        }
         const ps = await pollJob(pd.job_id, tick(4));
         if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
         appendLog(id, "OCR xong, đã có phụ đề.");
@@ -1862,6 +1882,7 @@ async function runPipeline(id: string, startStep = 4) {
         patch(id, { stage: "context" });
         markStepStart(id, 5);
         // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
+        appendLog(id, "Kiểm tra ngữ cảnh đã có chưa…");
         let ctxExists = false;
         try {
           const ctxCheck = await fetch(`/api/context/${videoId}`);
