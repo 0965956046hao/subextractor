@@ -820,6 +820,7 @@ export interface JobTick {
 }
 
 async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
+  let fails = 0;
   while (true) {
     await sleep(1500);
     try {
@@ -831,29 +832,46 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
         };
       }
       if (!r.ok) continue;
+      fails = 0;
       const d = await r.json();
       onTick({ progress: d.progress ?? 0, logs: d.logs });
       if (d.status === "done") return d;
       if (d.status === "error") return { status: "error", error: d.error };
       if (d.status === "cancelled") return { status: "error", error: "Đã hủy" };
     } catch {
-      // ignore transient
+      // Backend không phản hồi (đã tắt / treo) → sau 10 lần thất bại liên tiếp
+      // dừng polling và báo lỗi rõ ràng thay vì treo vô hạn.
+      fails += 1;
+      if (fails >= 10) {
+        return {
+          status: "error",
+          error: "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+        };
+      }
     }
   }
 }
 
 async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
+  let fails = 0;
   while (true) {
     await sleep(800);
     try {
       const r = await fetch(`/api/video-merge/${jobId}`);
       if (!r.ok) continue;
+      fails = 0;
       const d = await r.json();
       onTick({ progress: d.progress ?? 0, logs: d.logs });
       if (d.status === "done") return d;
       if (d.status === "error") return { status: "error", error: d.error };
     } catch {
-      // ignore transient
+      fails += 1;
+      if (fails >= 10) {
+        return {
+          status: "error",
+          error: "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+        };
+      }
     }
   }
 }

@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from pathlib import Path
 
 from app.config import settings
@@ -23,6 +23,10 @@ from app.services.job_utils import JobCancelled, notify_ws_sync
 from app.routers.config_router import get_subtitle_style
 
 logger = logging.getLogger(__name__)
+
+# Max time we wait for AT LEAST one segment worker to finish. A hung worker must
+# not wedge the whole server, so we abort the pool if nothing completes in time.
+HARDCODE_STEP_TIMEOUT = 30 * 60
 
 
 def apply_style_override(style: dict, override: dict | None) -> dict:
@@ -853,7 +857,13 @@ def _burn_parallel(
         reporter = threading.Thread(target=_reporter, daemon=True)
         reporter.start()
 
-        with ProcessPoolExecutor(max_workers=min(workers, n)) as ex:
+        # NOTE: do NOT use `with ProcessPoolExecutor(...) as ex` — its __exit__ runs
+        # shutdown(wait=True), which blocks forever on a hung worker and wedges the
+        # whole server. Manage teardown manually with a bounded wait and force-kill
+        # any lingering child processes (they can hold the server's listening socket
+        # fd, which previously made the backend appear "listening" but dead).
+        ex = ProcessPoolExecutor(max_workers=min(workers, n))
+        try:
             futures = {}
             for i, (s, e) in enumerate(chunks):
                 seg_out = str(seg_dir / f"seg_{i:03d}.mp4")
@@ -867,19 +877,38 @@ def _burn_parallel(
                 )
                 futures[fut] = (s, e, i)
 
-            for fut in as_completed(futures):
-                fut.result()  # propagate worker errors
-                s, e, i = futures[fut]
-                done_frames += (e - s)
+            remaining = set(futures)
+            completed_count = 0
+            while remaining:
+                done, remaining = wait(
+                    remaining, timeout=HARDCODE_STEP_TIMEOUT, return_when=FIRST_COMPLETED
+                )
+                if not done:
+                    raise RuntimeError(
+                        "Encode phụ đề bị treo: không có worker nào hoàn thành trong "
+                        f"{HARDCODE_STEP_TIMEOUT}s. Đã hủy tiến trình để không làm treo server."
+                    )
+                for fut in done:
+                    fut.result()  # propagate worker errors
+                    s, e, i = futures[fut]
+                    done_frames += (e - s)
+                    try:
+                        prog_files[i].write_text(str(e - s))  # finalize its count
+                    except Exception:
+                        pass
+                    completed_count += 1
+                    if chunk_log_fn:
+                        chunk_log_fn(
+                            f"Đã encode xong đoạn {completed_count}/{n} của video — đang tiếp tục..."
+                        )
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+            for _p in getattr(ex, "_processes", {}).values():
                 try:
-                    prog_files[i].write_text(str(e - s))  # finalize its count
+                    if _p.is_alive():
+                        _p.terminate()
                 except Exception:
                     pass
-                completed = [1 for f in futures if f.done()]
-                if chunk_log_fn:
-                    chunk_log_fn(
-                        f"Đã encode xong đoạn {len(completed)}/{n} của video — đang tiếp tục..."
-                    )
 
         stop_evt.set()
         reporter.join(timeout=3)
