@@ -580,6 +580,77 @@ def get_youtube_channel_secrets(channel_id: str) -> tuple[Path, Path]:
     return _yt_channel_secrets_path(channel_id), _yt_channel_token_path(channel_id)
 
 
+# ── Telegram notifications ──
+
+class TelegramTokenRequest(BaseModel):
+    bot_token: str
+
+
+@router.get("/api/telegram/config")
+async def get_telegram_config():
+    """Get Telegram connection status."""
+    from app.services.telegram_service import telegram_service
+    return telegram_service.get_config()
+
+
+@router.post("/api/telegram/config")
+async def save_telegram_token(body: TelegramTokenRequest):
+    """Save bot token and start polling. Returns bot name on success."""
+    from app.services.telegram_service import telegram_service
+    token = body.bot_token.strip()
+    if not token:
+        raise HTTPException(400, "Bot token is required")
+    bot_name = await telegram_service.start(token)
+    if not bot_name:
+        raise HTTPException(400, "Invalid bot token. Check @BotFather.")
+    return {"status": "ok", "bot_name": bot_name}
+
+
+@router.delete("/api/telegram/config")
+async def delete_telegram_config():
+    """Remove bot token and stop polling."""
+    from app.services.telegram_service import telegram_service
+    await telegram_service.stop()
+    telegram_service._token = ""
+    telegram_service._bot_name = ""
+    telegram_service._chat_ids = []
+    telegram_service._save_to_config()
+    return {"status": "ok"}
+
+
+@router.post("/api/telegram/connect")
+async def create_telegram_qr():
+    """Create a registration QR code for device linking."""
+    from app.services.telegram_service import telegram_service
+    if not telegram_service._token:
+        raise HTTPException(400, "Bot token not configured")
+    return telegram_service.create_registration_token()
+
+
+@router.post("/api/telegram/disconnect/{chat_id}")
+async def disconnect_telegram_chat(chat_id: int):
+    """Disconnect a specific chat_id."""
+    from app.services.telegram_service import telegram_service
+    removed = telegram_service.disconnect_chat(chat_id)
+    if not removed:
+        raise HTTPException(404, "Chat not found")
+    return {"status": "ok", "removed": True}
+
+
+@router.post("/api/telegram/test")
+async def send_telegram_test():
+    """Send a test message to all connected chats."""
+    from app.services.telegram_service import telegram_service
+    if not telegram_service.has_connected_chats():
+        raise HTTPException(400, "No devices connected")
+    await telegram_service.broadcast(
+        "🔔 <b>Test thông báo</b>\n\n"
+        "Kết nối Telegram đang hoạt động bình thường!\n"
+        "Bạn sẽ nhận thông báo khi video xử lý xong."
+    )
+    return {"status": "ok", "sent": len(telegram_service._chat_ids)}
+
+
 # Legacy single-logo endpoints — operate on the active preset (backward compat).
 @router.post("/api/config/logo")
 async def upload_logo(file: UploadFile = File(...)):

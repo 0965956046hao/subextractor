@@ -20,7 +20,11 @@ interface AwemeVideo {
   share_url?: string;
   share_link_desc?: string;
   author?: { nickname?: string };
-  video?: { cover?: { url_list?: string[] }; duration?: number };
+  video?: {
+    cover?: { url_list?: string[] };
+    duration?: number;
+    play_addr?: { url_list?: string[] };
+  };
   statistics?: {
     play_count?: number;
     digg_count?: number;
@@ -107,6 +111,7 @@ export default function ChannelsPage() {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [playingVideo, setPlayingVideo] = useState<AwemeVideo | null>(null);
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -468,6 +473,9 @@ export default function ChannelsPage() {
                           {t("channel.colLikes")}
                         </th>
                         <th className="pb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-muted w-12">
+                          {t("channel.colWatch")}
+                        </th>
+                        <th className="pb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-muted w-12">
                           {t("channel.colShare")}
                         </th>
                         <th className="pb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-muted w-12">
@@ -521,6 +529,23 @@ export default function ChannelsPage() {
                             </td>
                             <td className="py-4 text-[13px] text-ink-muted text-right font-mono tabular-nums">
                               {fmtNumber(v.statistics?.digg_count)}
+                            </td>
+                            <td className="py-4 text-center">
+                              {v.video?.play_addr?.url_list?.[0] && (
+                                <button
+                                  onClick={() => setPlayingVideo(v)}
+                                  className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-emerald-600 hover:bg-emerald-50 transition-colors cursor-pointer"
+                                  title={t("channel.colWatch")}
+                                >
+                                  <svg
+                                    className="w-4 h-4"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                  >
+                                    <path d="M8 5v14l11-7z" />
+                                  </svg>
+                                </button>
+                              )}
                             </td>
                             <td className="py-4 text-center">
                               <button
@@ -597,6 +622,47 @@ export default function ChannelsPage() {
             </div>
           </div>
         </AnimatedBlock>
+      )}
+
+      {/* Video Player Modal */}
+      {playingVideo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setPlayingVideo(null)}
+        >
+          <div
+            className="relative w-full max-w-3xl mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="rounded-2xl overflow-hidden bg-black shadow-2xl">
+              <video
+                src={`/api/channels/proxy-video?url=${encodeURIComponent(playingVideo.video?.play_addr?.url_list?.[0] || "")}`}
+                controls
+                autoPlay
+                className="w-full max-h-[80vh] object-contain"
+              />
+            </div>
+            <div className="mt-3 px-1">
+              <p className="text-[13px] text-white line-clamp-2">
+                {playingVideo.desc || t("channel.noTitle")}
+              </p>
+              <p className="text-[11px] text-white/60 mt-1">
+                {playingVideo.author?.nickname || "\u2014"}
+                {playingVideo.video?.duration
+                  ? ` \u00B7 ${fmtDuration(playingVideo.video.duration)}`
+                  : ""}
+              </p>
+            </div>
+            <button
+              onClick={() => setPlayingVideo(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white/90 shadow-lg flex items-center justify-center text-gray-600 hover:text-gray-900 cursor-pointer"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
       )}
     </main>
   );

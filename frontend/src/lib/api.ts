@@ -847,3 +847,58 @@ export async function activateYoutubeChannel(
   const res = await api.post(`/config/youtube-channels/${id}/activate`);
   return res.data;
 }
+
+// ── Telegram notifications ──
+
+export interface TelegramConfig {
+  has_bot_token: boolean;
+  bot_name: string;
+  connected_chats: Array<{
+    chat_id: number;
+    name: string;
+    connected_at: string;
+  }>;
+}
+
+export interface TelegramQR {
+  registration_token: string;
+  qr_data: string;
+  expires_in: number;
+}
+
+export async function getTelegramConfig(): Promise<TelegramConfig> {
+  const res = await api.get<TelegramConfig>("/telegram/config");
+  return res.data;
+}
+
+export async function saveTelegramToken(
+  bot_token: string,
+): Promise<{ status: string; bot_name: string }> {
+  const res = await api.post("/telegram/config", { bot_token });
+  return res.data;
+}
+
+export async function deleteTelegramConfig(): Promise<{ status: string }> {
+  const res = await api.delete("/telegram/config");
+  return res.data;
+}
+
+export async function getTelegramQR(): Promise<TelegramQR> {
+  const res = await api.post<TelegramQR>("/telegram/connect");
+  return res.data;
+}
+
+export async function disconnectTelegramChat(
+  chat_id: number,
+): Promise<{ status: string; removed: boolean }> {
+  const res = await api.post(`/telegram/disconnect/${chat_id}`);
+  return res.data;
+}
+
+export async function sendTelegramTest(): Promise<{
+  status: string;
+  sent: number;
+}> {
+  const res = await api.post("/telegram/test");
+  return res.data;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
 import {
@@ -25,9 +25,21 @@ import {
   deleteYoutubeChannel,
   getYoutubeChannelDetail,
   activateYoutubeChannel,
+  getTelegramConfig,
+  saveTelegramToken,
+  deleteTelegramConfig,
+  getTelegramQR,
+  disconnectTelegramChat,
+  sendTelegramTest,
 } from "@/lib/api";
 import type { SubtitleStyle, WatermarkPreset, ProfilesCheck } from "@/lib/api";
-import type { PipelineHealth, YoutubeConfig, YouTubeChannelInfo } from "@/lib/api";
+import type {
+  PipelineHealth,
+  YoutubeConfig,
+  YouTubeChannelInfo,
+  TelegramConfig,
+  TelegramQR,
+} from "@/lib/api";
 import { useI18n, type Dict } from "@/lib/i18n";
 
 const FONT_OPTIONS = [
@@ -266,16 +278,23 @@ export default function SettingsPage() {
   const [ytAdding, setYtAdding] = useState(false);
   const [ytNewName, setYtNewName] = useState("");
   const [ytNewSecrets, setYtNewSecrets] = useState("");
+  const [tgConfig, setTgConfig] = useState<TelegramConfig | null>(null);
+  const [tgToken, setTgToken] = useState("");
+  const [tgQR, setTgQR] = useState<TelegramQR | null>(null);
+  const [tgBusy, setTgBusy] = useState(false);
+  const [tgCountdown, setTgCountdown] = useState(0);
+  const tgQrCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const [cfg, h, pc, yt, ytCh] = await Promise.all([
+        const [cfg, h, pc, yt, ytCh, tg] = await Promise.all([
           getAppConfig(),
           getPipelineHealth(),
           getProfilesConfig().catch(() => null),
           getYoutubeConfig().catch(() => null),
           listYoutubeChannels().catch(() => ({ channels: [] })),
+          getTelegramConfig().catch(() => null),
         ]);
         setHasGemini(cfg.has_gemini_key);
         setHasTts(cfg.has_tts_credentials);
@@ -299,6 +318,7 @@ export default function SettingsPage() {
         setActivePreset(cfg.active_watermark_preset || "");
         setYoutube(yt);
         setYtChannels(ytCh.channels || []);
+        setTgConfig(tg);
         setHealth(h);
       } catch {
         setError(t("error.backend"));
@@ -501,6 +521,150 @@ export default function SettingsPage() {
       setError(e instanceof Error ? e.message : t("settings.youtube.errSave"));
     }
   };
+
+  // ── Telegram handlers ──
+
+  const handleSaveTelegramToken = async () => {
+    setError("");
+    if (!tgToken.trim()) return;
+    setTgBusy(true);
+    try {
+      const res = await saveTelegramToken(tgToken.trim());
+      setTgConfig(await getTelegramConfig());
+      setTgToken("");
+      setStatus(t("settings.telegram.saved"));
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : t("settings.telegram.invalidToken"),
+      );
+    } finally {
+      setTgBusy(false);
+    }
+  };
+
+  const handleDeleteTelegram = async () => {
+    setError("");
+    setTgBusy(true);
+    try {
+      await deleteTelegramConfig();
+      setTgConfig(await getTelegramConfig());
+      setTgQR(null);
+      setTgCountdown(0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("error.saveConfig"));
+    } finally {
+      setTgBusy(false);
+    }
+  };
+
+  const handleConnectDevice = async () => {
+    setError("");
+    setTgBusy(true);
+    try {
+      const qr = await getTelegramQR();
+      setTgQR(qr);
+      setTgCountdown(qr.expires_in);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("error.saveConfig"));
+    } finally {
+      setTgBusy(false);
+    }
+  };
+
+  const handleDisconnectChat = async (chatId: number) => {
+    setError("");
+    try {
+      await disconnectTelegramChat(chatId);
+      setTgConfig(await getTelegramConfig());
+      setStatus(t("settings.telegram.disconnectSuccess"));
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("error.saveConfig"));
+    }
+  };
+
+  const handleTestMessage = async () => {
+    setError("");
+    setTgBusy(true);
+    try {
+      const res = await sendTelegramTest();
+      setStatus(t("settings.telegram.testSent"));
+      setTimeout(() => setStatus(""), 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("error.saveConfig"));
+    } finally {
+      setTgBusy(false);
+    }
+  };
+
+  // Poll for Telegram connection when QR is showing
+  useEffect(() => {
+    if (!tgQR) return;
+    const prevCount = tgConfig?.connected_chats?.length ?? 0;
+    console.log("[TG] Poll started, prevCount:", prevCount);
+    const interval = setInterval(async () => {
+      try {
+        const cfg = await getTelegramConfig();
+        const now = cfg.connected_chats?.length ?? 0;
+        console.log("[TG] poll:", now, ">", prevCount);
+        if (now > prevCount) {
+          setTgConfig(cfg);
+          setTgQR(null);
+          setTgCountdown(0);
+          setStatus(t("settings.telegram.connectSuccess"));
+          setTimeout(() => setStatus(""), 3000);
+          clearInterval(interval);
+        }
+      } catch (e) {
+        console.error("[TG] poll err:", e);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tgQR?.registration_token]);
+
+  // Countdown timer for QR expiry
+  useEffect(() => {
+    if (tgCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setTgCountdown((prev) => {
+        if (prev <= 1) {
+          setTgQR(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [tgCountdown]);
+
+  const formatCountdown = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  // Generate QR code on canvas when tgQR changes
+  useEffect(() => {
+    if (!tgQR?.qr_data || !tgQrCanvasRef.current) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const QRCode = (await import("qrcode")).default;
+        const canvas = tgQrCanvasRef.current;
+        if (!canvas || cancelled) return;
+        await QRCode.toCanvas(canvas, tgQR.qr_data, {
+          width: 220,
+          margin: 2,
+          color: { dark: "#000000", light: "#ffffff" },
+        });
+      } catch (e) {
+        console.error("QR generation failed:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tgQR?.qr_data]);
 
   const handleAddPreset = async () => {
     setError("");
@@ -1435,6 +1599,227 @@ export default function SettingsPage() {
                 </span>
               </button>
             </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={340}>
+        <div className="double-bezel mb-6">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                {t("settings.telegram.title")}
+              </p>
+              <span className="tag">
+                {tgConfig?.connected_chats?.length
+                  ? t("settings.telegram.connected")
+                  : t("settings.telegram.notConnected")}
+              </span>
+            </div>
+            <p className="text-[11px] text-ink-light mb-4">
+              {t("settings.telegram.desc")}
+            </p>
+
+            {/* No bot token yet */}
+            {!tgConfig?.has_bot_token && (
+              <>
+                <p className="text-[11px] text-ink-light mb-4">
+                  {t("settings.telegram.howto")}{" "}
+                  <a
+                    href="https://t.me/BotFather"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                  >
+                    {t("settings.telegram.botFather")}
+                  </a>{" "}
+                  {t("settings.telegram.steps")}
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={tgToken}
+                    onChange={(e) => setTgToken(e.target.value)}
+                    placeholder={t("settings.telegram.tokenPh")}
+                    className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-2.5 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-blue-500/20 placeholder:text-ink-light"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveTelegramToken}
+                    disabled={tgBusy || !tgToken.trim()}
+                    className="btn-island-secondary whitespace-nowrap cursor-pointer disabled:opacity-50"
+                  >
+                    {tgBusy ? t("btn.saving") : t("settings.telegram.save")}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Bot token configured */}
+            {tgConfig?.has_bot_token && (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-[12px] text-ink">
+                    {t("settings.telegram.botName", {
+                      name: tgConfig.bot_name,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDeleteTelegram}
+                    disabled={tgBusy}
+                    className="text-[11px] text-red-500 hover:text-red-600 cursor-pointer"
+                  >
+                    {t("settings.telegram.deleteToken")}
+                  </button>
+                </div>
+
+                {/* QR Code area */}
+                {!tgQR && (
+                  <div className="flex items-center gap-2 mb-4">
+                    <button
+                      type="button"
+                      onClick={handleConnectDevice}
+                      disabled={tgBusy}
+                      className="btn-island-primary group text-[12px] !px-5 !py-2 disabled:opacity-50"
+                    >
+                      <span className="tracking-tight">
+                        {tgBusy
+                          ? t("btn.saving")
+                          : t("settings.telegram.connectDevice")}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setTgBusy(true);
+                        try {
+                          setTgConfig(await getTelegramConfig());
+                        } finally {
+                          setTgBusy(false);
+                        }
+                      }}
+                      className="btn-island-secondary text-[12px] !px-3 !py-2 cursor-pointer"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                )}
+
+                {tgQR && (
+                  <div className="mb-4 p-4 rounded-xl border border-blue-500/20 bg-blue-500/[0.03] flex flex-col items-center gap-3">
+                    <canvas
+                      ref={tgQrCanvasRef}
+                      className="rounded-lg"
+                    />
+                    <p className="text-[12px] text-ink font-medium">
+                      {t("settings.telegram.scanQR")}
+                    </p>
+
+                    {/* Manual fallback: copy /start command */}
+                    <div className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3">
+                      <p className="text-[11px] text-ink-muted mb-2">
+                        {t("settings.telegram.manualFallback")}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 text-[12px] font-mono text-ink bg-black/[0.03] rounded-lg px-3 py-2 truncate select-all">
+                          /start {tgQR.registration_token}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`/start ${tgQR.registration_token}`);
+                            setStatus(t("settings.telegram.copied"));
+                            setTimeout(() => setStatus(""), 2000);
+                          }}
+                          className="btn-island-secondary !px-3 !py-1.5 text-[11px] whitespace-nowrap cursor-pointer"
+                        >
+                          {t("btn.copy")}
+                        </button>
+                      </div>
+                    </div>
+
+                    <a
+                      href={tgQR.qr_data}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-blue-600 hover:text-blue-700 underline underline-offset-2 break-all text-center"
+                    >
+                      {tgQR.qr_data}
+                    </a>
+                    {tgCountdown > 0 ? (
+                      <p className="text-[11px] text-ink-light">
+                        {t("settings.telegram.expiresIn", {
+                          time: formatCountdown(tgCountdown),
+                        })}
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleConnectDevice}
+                        className="text-[11px] text-blue-600 hover:text-blue-700 cursor-pointer"
+                      >
+                        {t("settings.telegram.qrNew")}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Connected devices list */}
+                <div className="mt-4">
+                  <p className="text-[11px] text-ink-muted mb-2">
+                    {t("settings.telegram.connectedDevices")} (
+                    {tgConfig.connected_chats.length})
+                  </p>
+                  {tgConfig.connected_chats.length === 0 ? (
+                    <p className="text-[11px] text-ink-light">
+                      {t("settings.telegram.noDevices")}
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {tgConfig.connected_chats.map((ch) => (
+                        <div
+                          key={ch.chat_id}
+                          className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-2.5"
+                        >
+                          <div className="min-w-0">
+                            <span className="text-[12px] text-ink">
+                              {ch.name}
+                            </span>
+                            <span className="text-[10px] text-ink-light ml-2">
+                              {new Date(ch.connected_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDisconnectChat(ch.chat_id)}
+                            className="text-[11px] text-red-500 hover:text-red-600 flex-shrink-0 cursor-pointer"
+                          >
+                            {t("settings.telegram.disconnect")}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Test message button */}
+                {tgConfig.connected_chats.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-black/[0.06]">
+                    <button
+                      type="button"
+                      onClick={handleTestMessage}
+                      disabled={tgBusy}
+                      className="btn-island-secondary text-[12px] !px-4 !py-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <span className="tracking-tight">
+                        {tgBusy ? t("btn.saving") : t("settings.telegram.testMsg")}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </AnimatedBlock>

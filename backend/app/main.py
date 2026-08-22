@@ -56,12 +56,18 @@ async def lifespan(app: FastAPI):
     worker = asyncio.create_task(
         worker_loop(app.state.jobs, app.state.ws_clients, ocr_engines, app.state.job_queue)
     )
+
+    # Start Telegram polling if bot token is configured
+    from app.services.telegram_service import telegram_service
+    await telegram_service.load_from_config()
+
     logger.info("")
     logger.info("Server ready  >>>  http://localhost:8000")
     logger.info("")
 
     yield
 
+    await telegram_service.stop()
     worker.cancel()
     try:
         await worker

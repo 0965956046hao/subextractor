@@ -256,6 +256,18 @@ async def run_job(
         })
         logger.info("job %s: done  |  %.1fKB  |  %.1fs total", job_id, size_kb, time.time() - t_start)
 
+        # Telegram notification
+        try:
+            from app.services.telegram_service import telegram_service
+            if telegram_service.has_connected_chats():
+                await telegram_service.broadcast(
+                    f"✅ <b>OCR hoàn tất!</b>\n"
+                    f"🎬 {video_id}\n"
+                    f"📄 {line_count} dòng phụ đề"
+                )
+        except Exception:
+            pass
+
         # Fire-and-forget: auto-generate context (runs after "done" notification)
         from app.services.context_service import generate_video_context
         from app.routers.config_router import _read_config
@@ -391,6 +403,18 @@ async def run_hardcode_job(
         await notify_ws(ws_clients, job_id, {
             "type": "done", "video_id": video_id, "filename": final_path.name,
         })
+
+        # Telegram notification
+        try:
+            from app.services.telegram_service import telegram_service
+            if telegram_service.has_connected_chats():
+                await telegram_service.broadcast(
+                    f"✅ <b>Video đã xử lý xong!</b>\n"
+                    f"🎬 {final_path.name}\n"
+                    f"📦 {size_mb:.1f} MB"
+                )
+        except Exception:
+            pass
 
     except JobCancelled:
         logger.info("hardcode job %s: cancelled", job_id)
@@ -773,6 +797,17 @@ async def run_export_job(
         job["status"] = "done"
         job["progress"] = 100
         await job_log_async(job, ws_clients, "Xuất video hoàn tất!", "success")
+
+        # Telegram notification
+        try:
+            from app.services.telegram_service import telegram_service
+            if telegram_service.has_connected_chats():
+                await telegram_service.broadcast(
+                    f"✅ <b>Video đã xuất xong!</b>\n"
+                    f"🎬 {video_id}"
+                )
+        except Exception:
+            pass
 
     except JobCancelled:
         job["status"] = "cancelled"

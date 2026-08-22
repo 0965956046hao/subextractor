@@ -264,13 +264,15 @@ Output format: JSON object with SRT index → speaker info, e.g.:
   }}
 }}"""
 
+            from google.genai import types as genai_types
+            contents = [
+                genai_types.Part.from_text(text=diarization_prompt),
+                genai_types.Part.from_uri(file_uri=audio_uri, mime_type=audio_mime),
+            ]
             response = gemini_call_rotating(
                 genai_generate_content_factory,
                 model=settings.gemini_model,
-                contents=[
-                    {"type": "text", "text": diarization_prompt},
-                    {"type": "audio", "uri": audio_uri, "mime_type": audio_mime},
-                ],
+                contents=contents,
                 config={
                     "system_instruction": "You are an expert audio analyst. Identify speakers and their characteristics from the audio.",
                     "temperature": 0.2,
@@ -609,7 +611,7 @@ def retranslate_untranslated(
     return entries_to_srt(out)
 
 
-def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, log_fn=None) -> str:
+def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None) -> str:
     """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
