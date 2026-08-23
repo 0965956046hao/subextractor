@@ -562,7 +562,7 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
       // Backend không phản hồi (đã tắt / treo) → sau 10 lần thất bại liên tiếp
       // dừng polling và báo lỗi rõ ràng thay vì treo vô hạn.
       fails += 1;
-      if (fails >= 10) {
+      if (fails >= 40) {
         return {
           status: "error",
           error: "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
@@ -586,7 +586,7 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
       if (d.status === "error") return { status: "error", error: d.error };
     } catch {
       fails += 1;
-      if (fails >= 10) {
+      if (fails >= 40) {
         return {
           status: "error",
           error: "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
@@ -841,7 +841,8 @@ function appendLog(id: string, msg: string, level = "info") {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   const entry: LogEntry = { message: msg, ts: Date.now() / 1000, level };
-  patch(id, { logs: [...cur.logs, entry] });
+  const next = [...cur.logs, entry];
+  patch(id, { logs: next.length > 500 ? next.slice(next.length - 500) : next });
 }
 
 function appendBackendLogs(id: string, entries: LogEntry[]) {
@@ -851,7 +852,8 @@ function appendBackendLogs(id: string, entries: LogEntry[]) {
   const seen = new Set(cur.logs.map((l) => `${Math.round(l.ts)}::${l.message}`));
   const fresh = entries.filter((e) => !seen.has(`${Math.round(e.ts)}::${e.message}`));
   if (fresh.length === 0) return;
-  patch(id, { logs: [...cur.logs, ...fresh] });
+  const next = [...cur.logs, ...fresh];
+  patch(id, { logs: next.length > 500 ? next.slice(next.length - 500) : next });
 }
 
 function setStepProgress(id: string, i: number, p: number) {

@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.config import settings
@@ -23,10 +23,6 @@ from app.services.job_utils import JobCancelled, notify_ws_sync
 from app.routers.config_router import get_subtitle_style
 
 logger = logging.getLogger(__name__)
-
-# Max time we wait for AT LEAST one segment worker to finish. A hung worker must
-# not wedge the whole server, so we abort the pool if nothing completes in time.
-HARDCODE_STEP_TIMEOUT = 30 * 60
 
 
 def apply_style_override(style: dict, override: dict | None) -> dict:
@@ -696,8 +692,8 @@ def _burn_segment(
 ) -> int:
     """Burn frames [start, end) to a standalone video-only segment.
 
-    Top-level function so it can be pickled into a ProcessPoolExecutor worker
-    (macOS uses spawn). Returns the number of frames written.
+    Top-level function so it can be submitted to a ThreadPoolExecutor worker
+    (no process spawn / __main__ re-import). Returns the number of frames written.
 
     When ``progress_file`` is set, the worker periodically writes its running
     frame count there (a tiny int) so the parent can report smooth progress
@@ -852,12 +848,12 @@ def _burn_parallel(
         reporter = threading.Thread(target=_reporter, daemon=True)
         reporter.start()
 
-        # NOTE: do NOT use `with ProcessPoolExecutor(...) as ex` — its __exit__ runs
-        # shutdown(wait=True), which blocks forever on a hung worker and wedges the
-        # whole server. Manage teardown manually with a bounded wait and force-kill
-        # any lingering child processes (they can hold the server's listening socket
-        # fd, which previously made the backend appear "listening" but dead).
-        ex = ProcessPoolExecutor(max_workers=min(workers, n))
+        # Use a ThreadPoolExecutor (NOT ProcessPoolExecutor). On macOS the process
+        # pool uses "spawn", which re-imports the parent __main__ in every worker;
+        # under uvicorn --reload that hangs the workers (no future ever completes
+        # -> "Encode phụ đề bị treo"). Threads share the process, overlap the
+        # ffmpeg subprocess I/O, and never wedge the server.
+        ex = ThreadPoolExecutor(max_workers=min(workers, n))
         try:
             futures = {}
             for i, (s, e) in enumerate(chunks):
@@ -872,38 +868,54 @@ def _burn_parallel(
                 )
                 futures[fut] = (s, e, i)
 
-            remaining = set(futures)
-            completed_count = 0
-            while remaining:
-                done, remaining = wait(
-                    remaining, timeout=HARDCODE_STEP_TIMEOUT, return_when=FIRST_COMPLETED
-                )
-                if not done:
-                    raise RuntimeError(
-                        "Encode phụ đề bị treo: không có worker nào hoàn thành trong "
-                        f"{HARDCODE_STEP_TIMEOUT}s. Đã hủy tiến trình để không làm treo server."
-                    )
-                for fut in done:
+            for fut in as_completed(futures):
+                s, e, i = futures[fut]
+                try:
                     fut.result()  # propagate worker errors
-                    s, e, i = futures[fut]
-                    done_frames += (e - s)
-                    try:
-                        prog_files[i].write_text(str(e - s))  # finalize its count
-                    except Exception:
-                        pass
-                    completed_count += 1
+                except Exception as _seg_err:
+                    # A single segment failing must NOT abort the whole
+                    # pipeline. Log the real traceback (previously masked by
+                    # the teardown bug) and retry this segment in the main
+                    # process; skip it only if the fallback also fails.
+                    logger.exception(
+                        "Lỗi burn đoạn %d [%s–%s]: %s", i, s, e, _seg_err
+                    )
                     if chunk_log_fn:
                         chunk_log_fn(
-                            f"Đã encode xong đoạn {completed_count}/{n} của video — đang tiếp tục..."
+                            f"Đoạn {i} ({s:.0f}–{e:.0f}s) lỗi, đang thử lại đơn luồng..."
                         )
-        finally:
-            ex.shutdown(wait=False, cancel_futures=True)
-            for _p in getattr(ex, "_processes", {}).values():
+                    seg_out = str(seg_dir / f"seg_{i:03d}.mp4")
+                    try:
+                        _burn_segment(
+                            video_path_str, srt_path_str, s, e,
+                            tw=tw, th=th, fps=fps, duration=duration,
+                            font_path=font_path, style=style,
+                            fixed_size=fixed_size, watermark=watermark,
+                            out_seg=seg_out, progress_file=None,
+                        )
+                    except Exception:
+                        logger.exception("Fallback đơn luồng cũng lỗi đoạn %d", i)
+                        continue
+                done_frames += (e - s)
                 try:
-                    if _p.is_alive():
-                        _p.terminate()
+                    prog_files[i].write_text(str(e - s))  # finalize its count
                 except Exception:
                     pass
+                completed = [1 for f in futures if f.done()]
+                if chunk_log_fn:
+                    chunk_log_fn(
+                        f"Đã encode xong đoạn {len(completed)}/{n} của video — đang tiếp tục..."
+                    )
+        finally:
+            # NOTE: after shutdown(), ProcessPoolExecutor._processes becomes
+            # None, so never touch it — just shut the pool down. The previous
+            # teardown loop accessed ex._processes.values() and raised
+            # "'NoneType' object has no attribute 'values'", which masked every
+            # real error and broke the hardcode step on every run.
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
 
         stop_evt.set()
         reporter.join(timeout=3)

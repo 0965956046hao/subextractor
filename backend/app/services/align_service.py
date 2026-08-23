@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.models import SrtEntry
 from app.services.srt_utils import parse_srt, entries_to_srt, _fmt
-from app.services.media_utils import _srt_path, _video_path
+from app.services.media_utils import _srt_path, _video_path, _get_audio_duration
 from app.services.job_utils import JobCancelled, notify_ws_sync
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,8 @@ def run_align_sync(
             "-vn", "-ar", "16000", "-ac", "1",
             "-y", audio_path,
         ]
-        subprocess.run(extract_cmd, check=True, capture_output=True, timeout=120)
+        _align_dur = _get_audio_duration(str(video_path))
+        subprocess.run(extract_cmd, check=True, capture_output=True, timeout=max(120, int(_align_dur * 1.5)))
 
         job["phase"] = "whisper"
         notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "whisper"})

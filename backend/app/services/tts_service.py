@@ -268,7 +268,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
                 audio_files[idx - 1] = path
                 synth_ok += 1
                 done += 1
-                if log_fn:
+                if log_fn and (idx % 50 == 0 or idx == total):
                     log_fn(f"  ✓ Dòng {idx}/{total}: thành công", level="success")
                 if progress_callback:
                     progress_callback(done, total)
@@ -397,7 +397,7 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
                     log_fn(f"  ⏭ Dòng {idx}/{total}: giống dòng trước ≥80% — khoảng lặng (không gọi API)", level="warning")
             else:
                 synth_ok += 1
-                if log_fn:
+                if log_fn and (idx % 50 == 0 or idx == total):
                     log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
             continue
         # Try the service-named file (segment_0001.mp3) if present
@@ -406,7 +406,7 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
             seg.rename(target)
             audio_files.append(target)
             synth_ok += 1
-            if log_fn:
+            if log_fn and (idx % 50 == 0 or idx == total):
                 log_fn(f"  ✓ Dòng {idx}/{total}: thành công", level="success")
             continue
         logger.warning("CapCut TTS failed for entry %d: %s", idx, entry.text[:50])

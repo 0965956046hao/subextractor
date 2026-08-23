@@ -181,7 +181,11 @@ export default function ResultPage({ videoId, region, lang = "ch", ocrType = "ap
     const key = `${ts ?? 0}-${message}`;
     if (seenRef.current.has(key)) return;
     seenRef.current.add(key);
-    setLogs((prev) => [...prev, { message, level, ts: ts ?? Date.now() / 1000 }]);
+    if (seenRef.current.size > 2000) seenRef.current.clear();
+    setLogs((prev) => {
+      const next = [...prev, { message, level, ts: ts ?? Date.now() / 1000 }];
+      return next.length > 500 ? next.slice(next.length - 500) : next;
+    });
   }, []);
 
   const connectWs = useCallback((id: string) => {
