@@ -240,6 +240,22 @@ const dictionaries = {
     "settings.wm.errLogoDel": "Error deleting logo.",
     "settings.wm.newDefault": "New watermark set",
 
+    "settings.env.title": "9. Environment tools",
+    "settings.env.desc":
+      "Check and install bundled tools (FFmpeg, Demucs, YouTube Uploader) if not already present.",
+    "settings.env.check": "Check",
+    "settings.env.install": "Install",
+    "settings.env.installing": "Installing...",
+    "settings.env.close": "Close",
+    "settings.env.refreshStatus": "Refresh status",
+    "settings.env.toolsInstalled": "All tools installed",
+    "settings.env.toolsMissing": "Some tools are missing",
+    "settings.env.toolOk": "{name}: installed",
+    "settings.env.toolMissing": "{name}: not installed",
+    "settings.env.extracting": "Extracting {name}...",
+    "settings.env.done": "{name} installed successfully",
+    "settings.env.error": "{name} installation failed",
+
     "settings.save": "Save configuration",
 
     // Subtitle style labels
@@ -1059,6 +1075,22 @@ const dictionaries = {
     "settings.wm.errLogo": "Lỗi tải logo.",
     "settings.wm.errLogoDel": "Lỗi xoá logo.",
     "settings.wm.newDefault": "Bộ watermark mới",
+
+    "settings.env.title": "9. Công cụ môi trường",
+    "settings.env.desc":
+      "Kiểm tra và cài đặt các công cụ đi kèm (FFmpeg, Demucs, YouTube Uploader) nếu chưa có.",
+    "settings.env.check": "Kiểm tra",
+    "settings.env.install": "Cài đặt",
+    "settings.env.installing": "Đang cài đặt...",
+    "settings.env.close": "Đóng",
+    "settings.env.refreshStatus": "Làm mới trạng thái",
+    "settings.env.toolsInstalled": "Tất cả công cụ đã sẵn sàng",
+    "settings.env.toolsMissing": "Một số công cụ chưa được cài đặt",
+    "settings.env.toolOk": "{name}: đã cài",
+    "settings.env.toolMissing": "{name}: chưa cài",
+    "settings.env.extracting": "Đang giải nén {name}...",
+    "settings.env.done": "{name} đã cài xong",
+    "settings.env.error": "{name} cài đặt thất bại",
 
     "settings.save": "Lưu cấu hình",
 

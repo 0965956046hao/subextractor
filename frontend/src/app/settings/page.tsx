@@ -284,6 +284,10 @@ export default function SettingsPage() {
   const [tgBusy, setTgBusy] = useState(false);
   const [tgCountdown, setTgCountdown] = useState(0);
   const tgQrCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [toolsStatus, setToolsStatus] = useState<Array<{name: string, display: string, installed: boolean}>>([]);
+  const [toolsInstalling, setToolsInstalling] = useState(false);
+  const [toolsLogs, setToolsLogs] = useState<Array<{tool: string, status: string, message: string}>>([]);
+  const [showToolsModal, setShowToolsModal] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -326,6 +330,8 @@ export default function SettingsPage() {
         setLoading(false);
       }
     })();
+    // Check tools status on load
+    checkTools();
   }, []);
 
   const set = (patch: Partial<SubtitleStyle>) =>
@@ -597,6 +603,40 @@ export default function SettingsPage() {
       setTgBusy(false);
     }
   };
+
+  // Environment tools check/install
+  const isTauriEnv = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  const checkTools = async () => {
+    if (!isTauriEnv) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<Array<{name: string, display: string, installed: boolean}>>("check_tools");
+      setToolsStatus(result);
+    } catch (e) {
+      console.error("[tools] check error:", e);
+    }
+  };
+
+  const handleInstallTools = async () => {
+    if (!isTauriEnv) return;
+    setToolsInstalling(true);
+    setToolsLogs([]);
+    setShowToolsModal(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const logs = await invoke<Array<{tool: string, status: string, message: string}>>("install_tools");
+      setToolsLogs(logs);
+      await checkTools();
+    } catch (e) {
+      console.error("[tools] install error:", e);
+      setToolsLogs(prev => [...prev, {tool: "error", status: "error", message: String(e)}]);
+    } finally {
+      setToolsInstalling(false);
+    }
+  };
+
+  const allToolsInstalled = toolsStatus.length > 0 && toolsStatus.every(t => t.installed);
 
   // Poll for Telegram connection when QR is showing
   useEffect(() => {
@@ -1824,6 +1864,128 @@ export default function SettingsPage() {
           </div>
         </div>
       </AnimatedBlock>
+
+      {/* Environment tools section */}
+      <AnimatedBlock delay={320}>
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                {t("settings.env.title")}
+              </p>
+              <span className="tag">
+                {toolsStatus.length === 0
+                  ? "—"
+                  : allToolsInstalled
+                    ? t("settings.env.toolsInstalled")
+                    : t("settings.env.toolsMissing")}
+              </span>
+            </div>
+            <p className="text-[11px] text-ink-light mb-4">
+              {t("settings.env.desc")}
+            </p>
+
+            {toolsStatus.length > 0 && (
+              <div className="mb-3 space-y-1.5">
+                {toolsStatus.map((tool) => (
+                  <div
+                    key={tool.name}
+                    className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2"
+                  >
+                    <span className="text-[12px] text-ink">
+                      {tool.display}
+                    </span>
+                    <span className={`text-[11px] ${tool.installed ? "text-success" : "text-ink-light"}`}>
+                      {tool.installed ? "✓" : "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={checkTools}
+                disabled={toolsInstalling}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span className="tracking-tight">{t("settings.env.refreshStatus")}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleInstallTools}
+                disabled={toolsInstalling || allToolsInstalled}
+                className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span className="tracking-tight">
+                  {toolsInstalling ? t("settings.env.installing") : t("settings.env.install")}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      {/* Tools install modal */}
+      {showToolsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="double-bezel w-full max-w-md mx-4">
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                  {t("settings.env.install")}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowToolsModal(false)}
+                  className="text-ink-light hover:text-ink text-lg cursor-pointer"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto space-y-1.5 mb-4">
+                {toolsLogs.length === 0 && !toolsInstalling && (
+                  <p className="text-[11px] text-ink-light">Chưa có log...</p>
+                )}
+                {toolsLogs.map((log, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2"
+                  >
+                    <span className={`text-[11px] ${
+                      log.status === "done" ? "text-success" :
+                      log.status === "error" ? "text-danger" :
+                      log.status === "exists" ? "text-success" :
+                      "text-ink"
+                    }`}>
+                      {log.status === "done" || log.status === "exists" ? "✓ " :
+                       log.status === "error" ? "✗ " :
+                       log.status === "extracting" ? "⏳ " : "🔍 "}
+                      {log.message}
+                    </span>
+                  </div>
+                ))}
+                {toolsInstalling && toolsLogs.length === 0 && (
+                  <div className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2">
+                    <span className="text-[11px] text-ink animate-pulse">Đang kiểm tra...</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowToolsModal(false)}
+                  className="btn-island-secondary text-[11px] !px-4 !py-1.5 cursor-pointer"
+                >
+                  <span className="tracking-tight">{t("settings.env.close")}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       </div>
 
       <AnimatedBlock delay={350}>

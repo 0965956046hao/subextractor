@@ -6,8 +6,8 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "dist"
+    "beforeBuildCommand": "cd frontend && npm run build",
+    "frontendDist": "../frontend/.next-prod/.next/static"
   },
   "app": {
     "windows": [
@@ -28,14 +28,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": "app",
     "category": "Productivity",
     "resources": {
       "resources/node/bin/node": "node/bin/node",
       "../frontend/.next-prod": "frontend/.next/standalone",
       "../backend/dist/backend": "backend",
       "../capcut-tts-api/dist/capcut-tts-api": "capcut-tts-api",
-      "../youtubeuploader/client_secrets.json": "youtubeuploader.client_secrets.json"
+      "../youtubeuploader/client_secrets.json": "youtubeuploader.client_secrets.json",
+      "../tools-dist/ffmpeg.tar.gz": "tools-archive/ffmpeg.tar.gz",
+      "../tools-dist/demucs.tar.gz": "tools-archive/demucs.tar.gz",
+      "../tools-dist/youtubeuploader.tar.gz": "tools-archive/youtubeuploader.tar.gz"
     },
     "icon": [
       "icons/32x32.png",
