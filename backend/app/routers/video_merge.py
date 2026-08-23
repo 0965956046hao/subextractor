@@ -155,6 +155,24 @@ _READ_TIMEOUT = 60
 _MAX_RETRIES = 3
 
 
+def _probe_audio_codec(path: Path) -> str:
+    """Return the audio codec name (e.g. 'aac', 'mp3', 'opus') via ffprobe."""
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        return (proc.stdout or "").strip().lower()
+    except Exception:
+        return ""
+
+
 def _probe_range(url: str, ctx) -> tuple[int, bool]:
     """Probe the CDN: does it honor Range? Returns (total_bytes, supports_range)."""
     req = urllib.request.Request(
@@ -465,6 +483,13 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
 
         _set("Đang merge video + audio...", 90, "Đang merge video + audio (FFmpeg)...")
 
+        audio_codec = _probe_audio_codec(audio_path)
+        use_audio_copy = audio_codec == "aac"
+        if use_audio_copy:
+            logger.info("Audio already AAC → copy (no re-encode)")
+        else:
+            logger.info("Audio codec is %s → re-encode to AAC", audio_codec or "unknown")
+
         cmd = [
             "ffmpeg",
             "-y",
@@ -473,8 +498,12 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", "192k",
+        ]
+        if use_audio_copy:
+            cmd += ["-c:a", "copy"]
+        else:
+            cmd += ["-c:a", "aac", "-b:a", "192k"]
+        cmd += [
             "-shortest",
             "-movflags", "+faststart",
             str(out_path),

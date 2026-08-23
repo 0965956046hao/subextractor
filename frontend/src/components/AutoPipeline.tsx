@@ -2422,6 +2422,72 @@ function HistoryRow({
   );
 }
 
+function ThumbnailReviewActions({
+  onAccept,
+  onSkip,
+  onRegenerate,
+}: {
+  onAccept: () => void;
+  onSkip: () => void;
+  onRegenerate: (extra: string) => void;
+}) {
+  const [showRegen, setShowRegen] = useState(false);
+  const [extra, setExtra] = useState("");
+
+  return (
+    <>
+      <button
+        onClick={onAccept}
+        className="px-4 py-2 text-[12px] font-medium bg-accent text-white rounded-full hover:opacity-90 transition-colors cursor-pointer"
+      >
+        Chấp nhận
+      </button>
+      <button
+        onClick={() => setShowRegen(!showRegen)}
+        className="px-4 py-2 text-[12px] font-medium bg-amber-500 text-white rounded-full hover:opacity-90 transition-colors cursor-pointer"
+      >
+        Tạo lại
+      </button>
+      <button
+        onClick={onSkip}
+        className="px-4 py-2 text-[12px] font-medium bg-stone-200 text-ink rounded-full hover:bg-stone-300 transition-colors cursor-pointer"
+      >
+        Bỏ qua
+      </button>
+      {showRegen && (
+        <div className="flex gap-2 mt-1">
+          <input
+            type="text"
+            value={extra}
+            onChange={(e) => setExtra(e.target.value)}
+            placeholder="Thêm yêu cầu (ví dụ: thêm chữ, đổi màu...)"
+            className="flex-1 px-3 py-1.5 text-[11px] border border-stone-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-accent"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && extra.trim()) {
+                onRegenerate(extra.trim());
+                setExtra("");
+                setShowRegen(false);
+              }
+            }}
+          />
+          <button
+            onClick={() => {
+              if (extra.trim()) {
+                onRegenerate(extra.trim());
+                setExtra("");
+                setShowRegen(false);
+              }
+            }}
+            className="px-3 py-1.5 text-[11px] font-medium bg-amber-500 text-white rounded-lg hover:opacity-90 transition-colors cursor-pointer"
+          >
+            Gửi
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 function DetailView({
   pipeline: p,
   now,
@@ -2446,6 +2512,7 @@ function DetailView({
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const confirmWatermarkRegions = usePipelineStore((s) => s.confirmWatermarkRegions);
+  const confirmThumbnailReview = usePipelineStore((s) => s.confirmThumbnailReview);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
@@ -2603,6 +2670,30 @@ function DetailView({
           </div>
         )}
 
+        {p.thumbnailReview?.waiting && p.thumbnailReview.imageUrl && (
+          <div className="mb-5 p-4 bg-white rounded-xl border border-stone-200 shadow-sm">
+            <p className="text-[12px] font-semibold text-ink mb-3">
+              Duyệt thumbnail ChatGPT
+            </p>
+            <div className="flex gap-4 items-start flex-wrap">
+              <img
+                src={p.thumbnailReview.imageUrl}
+                alt="Thumbnail preview"
+                className="w-48 h-auto rounded-lg border border-stone-200 object-cover"
+              />
+              <div className="flex flex-col gap-2 min-w-[180px]">
+                <ThumbnailReviewActions
+                  onAccept={() => confirmThumbnailReview(p.id, "accept")}
+                  onSkip={() => confirmThumbnailReview(p.id, "skip")}
+                  onRegenerate={(extra) =>
+                    confirmThumbnailReview(p.id, "accept", extra)
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {p.needChatgptLogin && (
           <div className="mb-5 p-4 bg-amber-50 rounded-lg border border-amber-200 flex items-center justify-between gap-3 flex-wrap">
             <div className="min-w-0">
@@ -2619,6 +2710,15 @@ function DetailView({
                 className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
               >
                 <span className="tracking-tight">{tr("pipeline.chatgptOpenProfile")}</span>
+              </button>
+              <button
+                onClick={() => {
+                  updatePipeline(p.id, { needChatgptLogin: false, status: "running", stage: "done" });
+                  rerunPipeline(p.id, 11);
+                }}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                {tr("pipeline.skipStep")}
               </button>
               <button
                 onClick={() => rerunPipeline(p.id, 10)}

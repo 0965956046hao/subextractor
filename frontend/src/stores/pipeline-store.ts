@@ -69,6 +69,7 @@ export type Stage =
   | "muxing"
   | "meta"
   | "thumbnail"
+  | "thumbnail_review"
   | "youtube"
   | "done"
   | "error";
@@ -86,6 +87,7 @@ export const STEP_STAGE: Record<string, number> = {
   muxing: 8,
   meta: 9,
   thumbnail: 10,
+  thumbnail_review: 10,
   youtube: 11,
 };
 
@@ -158,6 +160,11 @@ export interface Pipeline {
   voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
   needChatgptLogin: boolean;
+  thumbnailReview: {
+    waiting: boolean;
+    imageUrl: string | null;
+    extraInstructions: string;
+  } | null;
 }
 
 export interface TimelineCheck {
@@ -253,6 +260,7 @@ interface PipelineState {
   openVoiceCheck: (id: string) => void;
   closeVoiceCheck: (id: string) => void;
   confirmWatermarkRegions: (id: string, regions: Region[]) => void;
+  confirmThumbnailReview: (id: string, action: "accept" | "skip", extraInstructions?: string) => void;
   restorePaused: () => void;
 }
 
@@ -334,6 +342,7 @@ function newPipeline(
     voiceCheck: null,
     resumeStep: null,
     needChatgptLogin: false,
+    thumbnailReview: null,
     useFalThumbnail,
     useGptThumbnail,
     autoUploadYoutube,
@@ -633,6 +642,35 @@ export const usePipelineStore = create<PipelineState>()(
         }));
         confirmWatermarkRegionAction(id, regions);
       },
+      confirmThumbnailReview: (id, action, extraInstructions) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        if (action === "skip") {
+          set((st) => ({
+            pipelines: st.pipelines.map((p) =>
+              p.id === id
+                ? { ...p, updatedThumbnailUrl: null, thumbnailReview: null, stage: "thumbnail" }
+                : p,
+            ),
+          }));
+        } else {
+          set((st) => ({
+            pipelines: st.pipelines.map((p) =>
+              p.id === id
+                ? { ...p, thumbnailReview: null, stage: "thumbnail" }
+                : p,
+            ),
+          }));
+        }
+        const w = thumbnailReviewWaiters.get(id);
+        if (w) {
+          thumbnailReviewWaiters.delete(id);
+          w.resolve({ action, extra: extraInstructions });
+        }
+        if (!liveRunners.has(id)) {
+          runPipeline(id, s.resumeStep ?? 10);
+        }
+      },
       cancelPipeline: async (id) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
@@ -643,6 +681,7 @@ export const usePipelineStore = create<PipelineState>()(
         rejectSubtitleStyle(id);
         rejectWatermarkRegion(id);
         rejectTimelineCheck(id);
+        rejectThumbnailReview(id);
         if (videoId) {
           try {
             await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -1071,6 +1110,10 @@ const watermarkRegionWaiters = new Map<
   string,
   { resolve: (r: Region[]) => void; reject: () => void }
 >();
+const thumbnailReviewWaiters = new Map<
+  string,
+  { resolve: (result: { action: "accept" | "skip"; extra?: string }) => void; reject: () => void }
+>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -1118,6 +1161,20 @@ function rejectWatermarkRegion(id: string) {
   const w = watermarkRegionWaiters.get(id);
   if (w) {
     watermarkRegionWaiters.delete(id);
+    w.reject();
+  }
+}
+
+function waitForThumbnailReview(id: string): Promise<{ action: "accept" | "skip"; extra?: string }> {
+  return new Promise<{ action: "accept" | "skip"; extra?: string }>((resolve, reject) => {
+    thumbnailReviewWaiters.set(id, { resolve, reject });
+  });
+}
+
+function rejectThumbnailReview(id: string) {
+  const w = thumbnailReviewWaiters.get(id);
+  if (w) {
+    thumbnailReviewWaiters.delete(id);
     w.reject();
   }
 }
@@ -1180,16 +1237,6 @@ function pollBackendTimelineDecision(
 function enqueue(id: string, startStep = 0) {
   queue.push({ id, startStep });
   processQueue();
-}
-
-// After a video finishes, tell the backend to delete intermediate temp data,
-// keeping only the final deliverables (hardcoded video, SRT, dubbed audio,
-// meta.json, project state) so the result stays reviewable.
-function cleanupTempForVideo(videoId: string | null) {
-  if (!videoId) return;
-  fetch(`/api/video/${videoId}/cleanup`, { method: "POST" }).catch(() => {
-    // best-effort; failure is non-fatal
-  });
 }
 
 async function processQueue() {
@@ -2294,6 +2341,11 @@ async function runPipeline(id: string, startStep = 4) {
 
     // 10. Cập nhật thumbnail (fal.ai image-to-image)
     if (startStep <= 10) {
+      // Skip if thumbnail already exists (from previous run or already generated)
+      if (cur.updatedThumbnailUrl) {
+        appendLog(id, `Thumbnail đã có sẵn: ${cur.updatedThumbnailUrl}`);
+        markStepSkipped(id, 10);
+      } else {
       patch(id, { stage: "thumbnail" });
       markStepStart(id, 10);
 
@@ -2307,24 +2359,23 @@ async function runPipeline(id: string, startStep = 4) {
 
       if (cur.useGptThumbnail) {
         appendLog(id, "Cập nhật thumbnail (ChatGPT)...");
+        let thumbUrl: string | null = null;
+        let loginNeeded = false;
         try {
+          const body: Record<string, unknown> = { video_id: videoId };
+          if (cur.thumbnailReview?.extraInstructions) {
+            body.extra_instructions = cur.thumbnailReview.extraInstructions;
+          }
           const r = await fetch("/api/chatgpt-thumbnail", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ video_id: videoId }),
+            body: JSON.stringify(body),
           });
           const d = await r.json();
           if (d.status === "done" && d.thumbnail_url) {
-            patch(id, { updatedThumbnailUrl: d.thumbnail_url, needChatgptLogin: false });
-            appendLog(id, `Thumbnail mới (ChatGPT): ${d.thumbnail_url}`);
+            thumbUrl = d.thumbnail_url;
           } else if (d.status === "need_login") {
-            patch(id, { needChatgptLogin: true, status: "error", stage: "thumbnail" });
-            appendLog(
-              id,
-              `Cần đăng nhập ChatGPT: ${d.detail || "Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại."}`,
-            );
-            markStepEnd(id, 10);
-            return;
+            loginNeeded = true;
           } else {
             appendLog(
               id,
@@ -2336,6 +2387,48 @@ async function runPipeline(id: string, startStep = 4) {
             id,
             `Bỏ qua cập nhật thumbnail ChatGPT (lỗi): ${(e as Error)?.message || e}`,
           );
+        }
+
+        if (loginNeeded) {
+          patch(id, { needChatgptLogin: true, status: "error", stage: "thumbnail" });
+          appendLog(
+            id,
+            `Cần đăng nhập ChatGPT: Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại.`,
+          );
+          markStepEnd(id, 10);
+          return;
+        }
+
+        if (thumbUrl) {
+          patch(id, { updatedThumbnailUrl: thumbUrl, needChatgptLogin: false });
+          appendLog(id, `Thumbnail mới (ChatGPT): ${thumbUrl}`);
+
+          // Pause for user review
+          patch(id, {
+            stage: "thumbnail_review",
+            thumbnailReview: { waiting: true, imageUrl: thumbUrl, extraInstructions: "" },
+            resumeStep: 10,
+          });
+          appendLog(id, "Duyệt thumbnail: Chấp nhận hoặc Tạo lại...");
+          const reviewResult = await waitForThumbnailReview(id);
+
+          if (reviewResult.action === "skip") {
+            patch(id, { updatedThumbnailUrl: null });
+            appendLog(id, "Bỏ qua thumbnail ChatGPT.");
+          } else if (reviewResult.extra) {
+            // Regenerate with extra instructions — loop back
+            patch(id, {
+              stage: "thumbnail",
+              thumbnailReview: { waiting: false, imageUrl: null, extraInstructions: reviewResult.extra },
+            });
+            appendLog(id, `Tạo lại thumbnail với hướng dẫn: ${reviewResult.extra}`);
+            // Re-run step 10 from the top (will use the extra_instructions in the body)
+            markStepEnd(id, 10);
+            // Use setTimeout to avoid deep recursion; enqueue will pick up from step 10
+            enqueue(id, 10);
+            return;
+          }
+          // "accept" → keep updatedThumbnailUrl, continue
         }
         markStepEnd(id, 10);
       } else if (!cur.useFalThumbnail) {
@@ -2388,6 +2481,7 @@ async function runPipeline(id: string, startStep = 4) {
         }
         markStepEnd(id, 10);
       }
+      }
     }
 
     // 11. Upload YouTube (chỉ khi bật auto upload)
@@ -2435,7 +2529,6 @@ async function runPipeline(id: string, startStep = 4) {
     });
     appendLog(id, "Hoàn tất!");
     reportPipeline(id, true);
-    cleanupTempForVideo(videoId);
   } catch (e) {
     const stage = usePipelineStore
       .getState()
@@ -2476,6 +2569,7 @@ async function runRestorePaused() {
 
       // Interactive waits: nothing to do — the confirm/resolve handlers resume.
       if (p.stage === "region" || p.stage === "subtitle_preview") continue;
+      if (p.stage === "thumbnail_review") continue;
       if (p.timelineCheck?.waiting) continue;
 
       const stepIdx = STEP_STAGE[p.stage];

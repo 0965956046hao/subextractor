@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
   const videoId = body?.video_id?.trim();
   if (!videoId)
     return NextResponse.json({ detail: "video_id required" }, { status: 400 });
+  const extraInstructions = (body?.extra_instructions || "").trim();
 
   // 1. Same prompt as the fal.ai flow (context + title) + source thumbnail URL.
   let prompt: string;
@@ -84,10 +85,11 @@ export async function POST(req: NextRequest) {
     }
 
     await attachImage(page, inputPath);
-    await submitPrompt(
-      page,
-      `${prompt}\n\nDùng công cụ tạo/sửa ảnh của bạn để chỉnh sửa ảnh đính kèm phía trên, giữ nguyên nhân vật, bố cục và phong cách.`,
-    );
+    let fullPrompt = `${prompt}\n\nDùng công cụ tạo/sửa ảnh của bạn để chỉnh sửa ảnh đính kèm phía trên, giữ nguyên nhân vật, bố cục và phong cách.`;
+    if (extraInstructions) {
+      fullPrompt += `\n\nYêu cầu thêm: ${extraInstructions}`;
+    }
+    await submitPrompt(page, fullPrompt);
 
     const imageBuf = await extractGeneratedImage(page);
     if (!imageBuf) {

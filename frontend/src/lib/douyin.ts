@@ -205,5 +205,9 @@ export async function disconnectBrowser(handle: BrowserHandle): Promise<void> {
 
 /** Close the browser we launched, or just disconnect if it is the user's. */
 export async function closeBrowser(handle: BrowserHandle): Promise<void> {
-  await handle.browser.disconnect();
+  if (handle.persistent) {
+    await handle.browser.disconnect();
+  } else {
+    await handle.browser.close().catch(() => {});
+  }
 }

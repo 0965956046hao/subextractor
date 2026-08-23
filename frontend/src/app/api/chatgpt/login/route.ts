@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveProfileDir } from "@/lib/subtitle-profile";
 import {
   openChatGptBrowser,
   closeBrowser,
@@ -10,6 +11,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST() {
+  // Use the same profile dir as Douyin so both share one Chrome profile.
+  const profileDir = resolveProfileDir("douyin");
+
   let handle: BrowserHandle;
   try {
     handle = await openChatGptBrowser();

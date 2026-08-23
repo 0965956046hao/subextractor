@@ -75,6 +75,10 @@ def _delogo_video_path(video_id: str) -> Path:
 def _video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():
+        # Priority: delogo'd video (watermark removed) > original video
+        delogo = video_dir / "delogo.mp4"
+        if delogo.exists():
+            return delogo
         for f in video_dir.iterdir():
             if f.stem.startswith("video"):
                 return f
