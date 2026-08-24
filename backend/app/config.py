@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     text_score: float = 0.5
     job_timeout: int = 0  # giây; 0 = không giới hạn thời gian xử lý job
 
+    # Parallel OCR: chia timeline video thành N đoạn và OCR đồng thời N đoạn.
+    # 1 = tắt (xử lý tuần tự như cũ). N > 1 = chạy N luồng OCR song song.
+    # Mỗi đoạn dùng 1 engine riêng (RapidOCR load N model vào RAM).
+    ocr_parallel_parts: int = 4
+    # Chồng lấn giữa 2 đoạn liền kề (giây) để sub nằm ngay biên không bị cắt đôi;
+    # phần trùng được gộp lại khi merge kết quả.
+    ocr_parallel_overlap: float = 2.0
+
     # Gemini translation
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"

@@ -554,9 +554,11 @@ export interface AlignmentIssue {
 
 export async function checkTtsAlignment(
   videoId: string,
+  lang = "vi",
 ): Promise<{ issues: AlignmentIssue[]; total: number; checked: number }> {
   const res = await api.get<{ issues: AlignmentIssue[]; total: number; checked: number }>(
     `/tts/${videoId}/check-alignment`,
+    { params: { lang } },
   );
   return res.data;
 }

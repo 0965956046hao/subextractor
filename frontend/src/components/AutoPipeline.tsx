@@ -2371,6 +2371,7 @@ function DetailView({
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const confirmWatermarkRegions = usePipelineStore((s) => s.confirmWatermarkRegions);
   const confirmThumbnailReview = usePipelineStore((s) => s.confirmThumbnailReview);
+  const resolveThumbnailFallback = usePipelineStore((s) => s.resolveThumbnailFallback);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
@@ -2542,6 +2543,33 @@ function DetailView({
                   }
                 />
               </div>
+            </div>
+          </div>
+        )}
+
+        {p.thumbnailFallback?.waiting && (
+          <div className="mb-5 p-4 bg-white rounded-xl border border-stone-200 shadow-sm flex items-center justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-ink">
+                ChatGPT không tạo được ảnh thumbnail
+              </p>
+              <p className="text-[11px] text-ink-muted mt-0.5">
+                Đổi sang fal.ai để tạo thumbnail, hoặc bỏ qua bước này.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => resolveThumbnailFallback(p.id, "fal")}
+                className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                Đổi qua FAL
+              </button>
+              <button
+                onClick={() => resolveThumbnailFallback(p.id, "skip")}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                Bỏ qua
+              </button>
             </div>
           </div>
         )}

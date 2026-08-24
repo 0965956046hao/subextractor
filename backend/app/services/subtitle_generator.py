@@ -152,18 +152,22 @@ def postprocess_entries(
     return merged
 
 
-def generate_srt(
+def generate_srt_entries(
     frames: Iterable[tuple[object, float]],
     ocr_engine,
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
-) -> str:
-    """Build SRT from a stream of (crop, timestamp) frames.
+) -> list[tuple[float, float, str]]:
+    """Build subtitle entries from a stream of (crop, timestamp) frames.
 
     A subtitle boundary is placed at the midpoint between the last frame that
     still showed the old text and the first frame that shows the new text,
     so timestamps stay accurate even at high sampling rates.
+
+    Returns the final, post-processed list of ``(start, end, text)`` entries
+    (NOT formatted SRT). Callers that only need the text use
+    :func:`generate_srt`; parallel workers use this to merge segment results.
     """
     entries: list[tuple[float, float, str]] = []
     prev_text = ""
@@ -252,12 +256,65 @@ def generate_srt(
 
     final = postprocess_entries(merged)
     logger.info("  => %d subtitle entries generated", len(final))
+    return final
 
+
+def format_srt(entries: Iterable[tuple[float, float, str]]) -> str:
+    """Serialize ``(start, end, text)`` entries into SRT text."""
     srt_lines: list[str] = []
-    for idx, (start, end, text) in enumerate(final, 1):
+    for idx, (start, end, text) in enumerate(entries, 1):
         srt_lines.append(str(idx))
         srt_lines.append(f"{sec_to_srt(start)} --> {sec_to_srt(end)}")
         srt_lines.append(text)
         srt_lines.append("")
-
     return "\n".join(srt_lines)
+
+
+def merge_parallel_entries(
+    segment_entries: Iterable[list[tuple[float, float, str]]],
+) -> list[tuple[float, float, str]]:
+    """Merge subtitle entries produced by overlapping parallel segments.
+
+    Adjacent segments overlap by a few seconds, so a subtitle straddling a
+    boundary is captured (nearly identically) by both neighbours. Flatten,
+    sort by start time, and collapse overlapping entries with similar text.
+    """
+    flat = [e for seg in segment_entries for e in seg if seg]
+    flat.sort(key=lambda e: (e[0], e[1]))
+
+    merged: list[list[float, float, str]] = []
+    for start, end, text in flat:
+        if (
+            merged
+            and start <= merged[-1][1]
+            and _mergeable(merged[-1][2], text)
+        ):
+            prev_start, prev_end, prev_text = merged[-1]
+            merged[-1] = [
+                prev_start,
+                max(prev_end, end),
+                prev_text if len(prev_text) >= len(text) else text,
+            ]
+        else:
+            merged.append([start, end, text])
+    return [(s, e, t) for s, e, t in merged]
+
+
+def generate_srt(
+    frames: Iterable[tuple[object, float]],
+    ocr_engine,
+    progress_callback=None,
+    text_callback=None,
+    total_frames: int | None = None,
+) -> str:
+    """Build SRT text from a stream of (crop, timestamp) frames.
+
+    Thin wrapper over :func:`generate_srt_entries` that formats the result.
+    """
+    entries = generate_srt_entries(
+        frames, ocr_engine,
+        progress_callback=progress_callback,
+        text_callback=text_callback,
+        total_frames=total_frames,
+    )
+    return format_srt(entries)

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     max_segments_per_job: int = 500
 
     # Số luồng xử lý segment song song trong một job (mỗi luồng = 1 lệnh gọi CapCut API).
-    tts_workers: int = 3
+    tts_workers: int = 4
 
     device_json: Optional[Path] = None
 

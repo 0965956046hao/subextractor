@@ -200,6 +200,9 @@ OpenCV `VideoCapture` → in-memory frames → crop → OCR on numpy arrays. Onl
 ### Single-threaded worker
 One `ThreadPoolExecutor(max_workers=1)` in `worker.py`. Jobs queue via `asyncio.Queue`, processed sequentially. OCR runs in executor to avoid blocking event loop. `_notify_sync` bridges sync code → async WebSocket.
 
+### Parallel OCR (intra-job)
+`config.py` có `ocr_parallel_parts` (mặc định 4, env `STE_ocr_parallel_parts`; 1 = tắt) và `ocr_parallel_overlap` (mặc định 2.0s). `main.py` tạo 1 **pool** engine mỗi loại (`ocr_engines["rapid"]`/`["apple"]` là `list[engine]` kích thước `ocr_parallel_parts`). `process_job_sync` chia timeline thành N đoạn chồng lấn `overlap` giây, mỗi đoạn OCR trên 1 engine riêng trong `ThreadPoolExecutor`, rồi `merge_parallel_entries()` gộp kết quả (flatten → sort theo start → collapse các entry trùng/similar). Progress là counter chung có lock. Video quá ngắn (≤ 2×overlap) tự rơi về tuần tự.
+
 ### Subtitle pipeline
 1. Stream frames via generator → `ocr_region_cached()` per frame
 2. Detect boundaries when `rapidfuzz` similarity < 0.85

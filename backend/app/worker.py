@@ -2,14 +2,20 @@ import uuid
 import time
 import asyncio
 import logging
+import threading
 import functools
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.config import settings
 from app.services.video_processor import stream_frames_generator, crop_region, resolve_video_path
 from app.services.ocr_engine import BaseOCREngine
-from app.services.subtitle_generator import generate_srt, sec_to_srt
+from app.services.subtitle_generator import (
+    generate_srt_entries,
+    merge_parallel_entries,
+    format_srt,
+    sec_to_srt,
+)
 from app.services.hardcode_service import run_hardcode_sync
 from app.services.align_service import run_align_sync
 from app.services.job_utils import JobCancelled, notify_ws_sync
@@ -111,11 +117,39 @@ async def job_log_async(
     await notify_ws(ws_clients, job["job_id"], {"type": "log", **entry})
 
 
+def _ocr_segment_entries(
+    video_path: str,
+    region: dict,
+    target_fps: int,
+    engine: BaseOCREngine,
+    lang: str,
+    start_time: float,
+    end_time: float,
+    progress_cb,
+) -> list[tuple[float, float, str]]:
+    """OCR a single time segment and return its (start, end, text) entries."""
+    crops = (
+        (crop_region(frame, region), ts)
+        for frame, ts in stream_frames_generator(
+            video_path, target_fps, start_time=start_time, end_time=end_time
+        )
+    )
+    # Mỗi segment dùng đúng 1 engine riêng (dHash cache + language độc lập),
+    # nên không cần khoá chung. Vẫn giữ lock cho an toàn nếu engine bị chia sẻ.
+    with engine.lock():
+        engine.set_lang(lang)
+        return generate_srt_entries(
+            crops, engine,
+            progress_callback=progress_cb,
+            total_frames=None,
+        )
+
+
 def process_job_sync(
     video_path: str,
     region: dict,
     target_fps: int,
-    ocr_engine: BaseOCREngine,
+    engine_pool: list,
     ws_clients: dict,
     job_id: str,
     loop: asyncio.AbstractEventLoop,
@@ -150,24 +184,31 @@ def process_job_sync(
     else:
         total_crops = total_frames
 
+    duration = total_frames / video_fps if video_fps > 0 else 0.0
+    eff_start = start_time if (start_time and start_time > 0) else 0.0
+    eff_end = end_time if (end_time and end_time > 0) else duration
+
     if start_time and start_time > 0:
         job_log(job, ws_clients, loop, f"Bắt đầu OCR từ giây {start_time:.1f}…")
     job_log(job, ws_clients, loop, "Đang đọc từng khung hình của video…")
 
-    crops = (
-        (crop_region(frame, region), ts)
-        for frame, ts in stream_frames_generator(video_path, target_fps, start_time=start_time, end_time=end_time)
-    )
-
     job["progress"] = 0
-    last_pct_log = 0
 
-    def progress_cb(idx: int, total: int):
-        nonlocal last_pct_log
-        if job.get("cancelled"):
-            raise JobCancelled()
-        if total and idx % max(1, total // 100) == 0:
-            pct = min(100, int((idx + 1) / total * 100))
+    parts = max(1, len(engine_pool))
+    overlap = settings.ocr_parallel_overlap if parts > 1 else 0.0
+
+    # ── Sequential (parts == 1) ────────────────────────────────────────────
+    if parts <= 1 or (eff_end - eff_start) <= overlap * 2 + 1e-6:
+        last_pct_log = 0
+
+        def progress_cb(idx: int, total: int):
+            nonlocal last_pct_log
+            if job.get("cancelled"):
+                raise JobCancelled()
+            if total_crops:
+                pct = min(100, int((idx + 1) / total_crops * 100))
+            else:
+                pct = 100
             job["progress"] = pct
             if pct >= last_pct_log + 10:
                 last_pct_log = pct
@@ -180,26 +221,97 @@ def process_job_sync(
                 "type": "progress", "progress": pct, "phase": "ocr",
             })
 
-    job_log(job, ws_clients, loop, "Bắt đầu nhận dạng chữ viết trong video…")
-    logger.info("job %s: running OCR...", job_id)
+        job_log(job, ws_clients, loop, "Bắt đầu nhận dạng chữ viết trong video…")
+        logger.info("job %s: running OCR (sequential)...", job_id)
 
-    def text_cb(start: float, end: float, text: str):
+        entries = _ocr_segment_entries(
+            video_path, region, target_fps, engine_pool[0], lang,
+            eff_start, eff_end, progress_cb,
+        )
+
+        job["progress"] = 100
+        _notify_sync(loop, ws_clients, job_id, {
+            "type": "progress", "progress": 100, "phase": "ocr",
+        })
+    # ── Parallel (parts > 1) ───────────────────────────────────────────────
+    else:
+        job_log(
+            job, ws_clients, loop,
+            f"Chia video thành {parts} đoạn và nhận dạng song song…",
+        )
+        logger.info("job %s: running OCR on %d parallel segments", job_id, parts)
+
+        seg_len = (eff_end - eff_start) / parts
+        bounds = []
+        for i in range(parts):
+            s = eff_start + i * seg_len
+            e = eff_start + (i + 1) * seg_len
+            if i < parts - 1:
+                e += overlap
+            if i > 0:
+                s -= overlap
+            bounds.append((max(eff_start, s), min(eff_end, e)))
+
+        progress_lock = threading.Lock()
+        state = {"done": 0, "last_pct": 0, "last_log": 0}
+
+        def make_progress_cb():
+            def cb(idx: int, total: int):
+                if job.get("cancelled"):
+                    raise JobCancelled()
+                with progress_lock:
+                    state["done"] += 1
+                    pct = (
+                        min(100, int(state["done"] / total_crops * 100))
+                        if total_crops else 100
+                    )
+                    state["last_pct"] = pct
+                    if pct >= state["last_log"] + 10:
+                        state["last_log"] = pct
+                        do_log = True
+                    else:
+                        do_log = False
+                job["progress"] = pct
+                if do_log:
+                    job_log(
+                        job, ws_clients, loop,
+                        f"Đã nhận dạng được khoảng {pct}% của video…",
+                        "info",
+                    )
+                _notify_sync(loop, ws_clients, job_id, {
+                    "type": "progress", "progress": pct, "phase": "ocr",
+                })
+            return cb
+
+        with ThreadPoolExecutor(max_workers=parts) as ex:
+            futures = [
+                ex.submit(
+                    _ocr_segment_entries,
+                    video_path, region, target_fps, engine_pool[i], lang,
+                    s, e, make_progress_cb(),
+                )
+                for i, (s, e) in enumerate(bounds)
+            ]
+            segment_results = []
+            for fut in as_completed(futures):
+                segment_results.append(fut.result())  # propagate exceptions
+
+        entries = merge_parallel_entries(segment_results)
+
+        job["progress"] = 100
+        _notify_sync(loop, ws_clients, job_id, {
+            "type": "progress", "progress": 100, "phase": "ocr",
+        })
+
+    # Log extracted content (ordered, deduped) then format.
+    for start, end, text in entries:
         job_log(
             job, ws_clients, loop,
             f"[{sec_to_srt(start)} → {sec_to_srt(end)}] {text}",
             "text",
         )
 
-    # Giữ lock suốt set_lang + vòng OCR: engine chia sẻ dHash cache + language
-    # nên 2 job song song (job_workers > 1) sẽ làm hỏng nhau nếu không tuần tự.
-    with ocr_engine.lock():
-        ocr_engine.set_lang(lang)
-        srt_content = generate_srt(
-            crops, ocr_engine,
-            progress_callback=progress_cb,
-            text_callback=text_cb,
-            total_frames=total_crops,
-        )
+    srt_content = format_srt(entries)
     t2 = time.time()
     logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)
     return srt_content
@@ -208,7 +320,7 @@ def process_job_sync(
 async def run_job(
     jobs: dict,
     ws_clients: dict,
-    ocr_engines: dict[str, "BaseOCREngine"],
+    ocr_engines: dict[str, list],
     job_id: str,
 ):
     job = jobs.get(job_id)
@@ -232,13 +344,13 @@ async def run_job(
         ocr_type = job.get("ocr_type") or "apple"
 
         ocr_engine = ocr_engines.get(ocr_type)
-        if ocr_engine is None:
+        if not ocr_engine:
             raise RuntimeError(
                 f"OCR engine '{ocr_type}' không khả dụng trên máy chủ này"
             )
         await job_log_async(
             job, ws_clients,
-            f"Đang xử lý bằng {ocr_engine.name} (ngôn ngữ: {lang})",
+            f"Đang xử lý bằng {ocr_engine[0].name} (ngôn ngữ: {lang})",
             "info",
         )
 
@@ -963,7 +1075,7 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
 async def worker_loop(
     jobs: dict,
     ws_clients: dict,
-    ocr_engines: dict[str, "BaseOCREngine"],
+    ocr_engines: dict[str, list],
     queue: asyncio.Queue,
 ):
     logger.info("Worker loop started")

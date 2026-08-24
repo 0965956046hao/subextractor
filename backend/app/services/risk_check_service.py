@@ -17,7 +17,7 @@ import logging
 import time
 
 from app.config import settings
-from app.services.media_utils import _srt_path
+from app.services.media_utils import _srt_path, _srt_best_path
 from app.services.srt_utils import entries_to_srt, parse_srt
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.retry_utils import (
@@ -117,7 +117,7 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
 
     Returns a list of risky lines: {index, text, problems, note}.
     """
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise ValueError("SRT not found")
 

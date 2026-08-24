@@ -165,6 +165,9 @@ export interface Pipeline {
     imageUrl: string | null;
     extraInstructions: string;
   } | null;
+  thumbnailFallback: {
+    waiting: boolean;
+  } | null;
 }
 
 export interface TimelineCheck {
@@ -261,6 +264,7 @@ interface PipelineState {
   closeVoiceCheck: (id: string) => void;
   confirmWatermarkRegions: (id: string, regions: Region[]) => void;
   confirmThumbnailReview: (id: string, action: "accept" | "skip", extraInstructions?: string) => void;
+  resolveThumbnailFallback: (id: string, choice: "fal" | "skip") => void;
   restorePaused: () => void;
 }
 
@@ -343,6 +347,7 @@ function newPipeline(
     resumeStep: null,
     needChatgptLogin: false,
     thumbnailReview: null,
+    thumbnailFallback: null,
     useFalThumbnail,
     useGptThumbnail,
     autoUploadYoutube,
@@ -671,6 +676,25 @@ export const usePipelineStore = create<PipelineState>()(
           runPipeline(id, s.resumeStep ?? 10);
         }
       },
+      resolveThumbnailFallback: (id, choice) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        set((st) => ({
+          pipelines: st.pipelines.map((p) =>
+            p.id === id
+              ? { ...p, thumbnailFallback: null, stage: "thumbnail" }
+              : p,
+          ),
+        }));
+        const w = thumbnailFallbackWaiters.get(id);
+        if (w) {
+          thumbnailFallbackWaiters.delete(id);
+          w.resolve(choice);
+        }
+        if (!liveRunners.has(id)) {
+          runPipeline(id, s.resumeStep ?? 10);
+        }
+      },
       cancelPipeline: async (id) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
@@ -682,6 +706,7 @@ export const usePipelineStore = create<PipelineState>()(
         rejectWatermarkRegion(id);
         rejectTimelineCheck(id);
         rejectThumbnailReview(id);
+        rejectThumbnailFallback(id);
         if (videoId) {
           try {
             await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -1120,6 +1145,10 @@ const thumbnailReviewWaiters = new Map<
   string,
   { resolve: (result: { action: "accept" | "skip"; extra?: string }) => void; reject: () => void }
 >();
+const thumbnailFallbackWaiters = new Map<
+  string,
+  { resolve: (choice: "fal" | "skip") => void; reject: () => void }
+>();
 
 function waitForRegion(id: string): Promise<Region> {
   return new Promise<Region>((resolve, reject) => {
@@ -1181,6 +1210,20 @@ function rejectThumbnailReview(id: string) {
   const w = thumbnailReviewWaiters.get(id);
   if (w) {
     thumbnailReviewWaiters.delete(id);
+    w.reject();
+  }
+}
+
+function waitForThumbnailFallback(id: string): Promise<"fal" | "skip"> {
+  return new Promise<"fal" | "skip">((resolve, reject) => {
+    thumbnailFallbackWaiters.set(id, { resolve, reject });
+  });
+}
+
+function rejectThumbnailFallback(id: string) {
+  const w = thumbnailFallbackWaiters.get(id);
+  if (w) {
+    thumbnailFallbackWaiters.delete(id);
     w.reject();
   }
 }
@@ -2465,10 +2508,57 @@ async function runPipeline(id: string, startStep = 4) {
         // ignore
       }
 
+      // FAL flow, tách riêng để dùng lại khi ChatGPT không trả ảnh.
+      const runFalThumbnail = async () => {
+        appendLog(id, "Cập nhật thumbnail (fal.ai)...");
+        try {
+          await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
+
+          const deadline = Date.now() + 180_000;
+          let thumbUrl: string | null = null;
+          let errorMsg: string | null = null;
+          let done = false;
+
+          while (!done && Date.now() < deadline) {
+            try {
+              const st = await fetch(`/api/thumbnail/${videoId}/status`).then(
+                (r) => r.json(),
+              );
+              if (st.status === "done" && st.thumbnail_url) {
+                thumbUrl = st.thumbnail_url;
+                done = true;
+              } else if (st.status === "error") {
+                errorMsg = st.error || "lỗi";
+                done = true;
+              }
+            } catch {
+              // ignore transient poll errors
+            }
+            if (!done) await new Promise((r) => setTimeout(r, 2000));
+          }
+
+          if (thumbUrl) {
+            patch(id, { updatedThumbnailUrl: thumbUrl });
+            appendLog(id, `Thumbnail mới: ${thumbUrl}`);
+          } else if (errorMsg) {
+            appendLog(id, `Không cập nhật được thumbnail: ${errorMsg}`);
+          } else {
+            appendLog(id, "Hết thời gian chờ thumbnail (180s).");
+          }
+        } catch (e) {
+          appendLog(
+            id,
+            `Bỏ qua cập nhật thumbnail (lỗi): ${(e as Error)?.message || e}`,
+          );
+        }
+        markStepEnd(id, 10);
+      };
+
       if (cur.useGptThumbnail) {
         appendLog(id, "Cập nhật thumbnail (ChatGPT)...");
         let thumbUrl: string | null = null;
         let loginNeeded = false;
+        let gptNoImage = false;
         try {
           const body: Record<string, unknown> = { video_id: videoId };
           if (cur.thumbnailReview?.extraInstructions) {
@@ -2485,12 +2575,14 @@ async function runPipeline(id: string, startStep = 4) {
           } else if (d.status === "need_login") {
             loginNeeded = true;
           } else {
+            gptNoImage = true;
             appendLog(
               id,
-              `Không cập nhật được thumbnail bằng ChatGPT: ${d.detail || "lỗi"}`,
+              `ChatGPT không trả về ảnh: ${d.detail || "lỗi"}`,
             );
           }
         } catch (e) {
+          gptNoImage = true;
           appendLog(
             id,
             `Bỏ qua cập nhật thumbnail ChatGPT (lỗi): ${(e as Error)?.message || e}`,
@@ -2505,6 +2597,26 @@ async function runPipeline(id: string, startStep = 4) {
           );
           markStepEnd(id, 10);
           abortAfterThumbnail = true;
+          return;
+        }
+
+        if (gptNoImage) {
+          // ChatGPT không trả ảnh → cho user chọn: đổi qua fal.ai hoặc bỏ qua.
+          patch(id, { thumbnailFallback: { waiting: true }, resumeStep: 10 });
+          appendLog(id, "ChatGPT không tạo được ảnh — chọn đổi qua fal.ai hoặc bỏ qua.");
+          const choice = await waitForThumbnailFallback(id);
+          if (choice === "skip") {
+            appendLog(id, "Bỏ qua cập nhật thumbnail.");
+            markStepSkipped(id, 10);
+            return;
+          }
+          // "fal" → chạy FAL (nếu có key, ngược lại bỏ qua).
+          if (hasFalKey) {
+            await runFalThumbnail();
+          } else {
+            appendLog(id, "Không có FAL key — bỏ qua cập nhật thumbnail.");
+            markStepSkipped(id, 10);
+          }
           return;
         }
 
@@ -2548,48 +2660,7 @@ async function runPipeline(id: string, startStep = 4) {
         appendLog(id, "Bỏ qua cập nhật thumbnail (chưa có FAL key).");
         markStepSkipped(id, 10);
       } else {
-        appendLog(id, "Cập nhật thumbnail (fal.ai)...");
-        try {
-          await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
-
-          const deadline = Date.now() + 180_000;
-          let thumbUrl: string | null = null;
-          let errorMsg: string | null = null;
-          let done = false;
-
-          while (!done && Date.now() < deadline) {
-            try {
-              const st = await fetch(`/api/thumbnail/${videoId}/status`).then(
-                (r) => r.json(),
-              );
-              if (st.status === "done" && st.thumbnail_url) {
-                thumbUrl = st.thumbnail_url;
-                done = true;
-              } else if (st.status === "error") {
-                errorMsg = st.error || "lỗi";
-                done = true;
-              }
-            } catch {
-              // ignore transient poll errors
-            }
-            if (!done) await new Promise((r) => setTimeout(r, 2000));
-          }
-
-          if (thumbUrl) {
-            patch(id, { updatedThumbnailUrl: thumbUrl });
-            appendLog(id, `Thumbnail mới: ${thumbUrl}`);
-          } else if (errorMsg) {
-            appendLog(id, `Không cập nhật được thumbnail: ${errorMsg}`);
-          } else {
-            appendLog(id, "Hết thời gian chờ thumbnail (180s).");
-          }
-        } catch (e) {
-          appendLog(
-            id,
-            `Bỏ qua cập nhật thumbnail (lỗi): ${(e as Error)?.message || e}`,
-          );
-        }
-        markStepEnd(id, 10);
+        await runFalThumbnail();
       }
     };
 

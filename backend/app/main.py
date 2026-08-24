@@ -35,13 +35,15 @@ async def lifespan(app: FastAPI):
     logger.info("  ocr_lang: %s", settings.ocr_lang)
     logger.info("")
     logger.info("Initializing OCR engines...")
-    ocr_engine = OCREngine()
+    pool_size = max(1, settings.ocr_parallel_parts)
+    rapid_engines = [OCREngine() for _ in range(pool_size)]
+    ocr_engine = rapid_engines[0]
     app.state.ocr_engine = ocr_engine
-    ocr_engines: dict = {"rapid": ocr_engine}
+    ocr_engines: dict = {"rapid": rapid_engines}
     try:
-        apple_engine = AppleOCREngine()
-        ocr_engines["apple"] = apple_engine
-        app.state.apple_ocr_engine = apple_engine
+        apple_engines = [AppleOCREngine() for _ in range(pool_size)]
+        ocr_engines["apple"] = apple_engines
+        app.state.apple_ocr_engine = apple_engines[0]
     except Exception as e:
         logger.warning("Apple Vision OCR disabled: %s", e)
     app.state.ocr_engines = ocr_engines

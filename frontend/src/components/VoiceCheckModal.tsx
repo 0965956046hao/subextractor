@@ -186,7 +186,7 @@ export default function VoiceCheckModal({
     setCheckingAlignment(true);
     setError("");
     try {
-      const res = await checkTtsAlignment(videoId);
+      const res = await checkTtsAlignment(videoId, targetLang);
       setAlignmentIssues(res.issues);
       setShowAlignment(true);
     } catch (e) {
@@ -194,7 +194,7 @@ export default function VoiceCheckModal({
     } finally {
       setCheckingAlignment(false);
     }
-  }, [videoId, t]);
+  }, [videoId, targetLang, t]);
 
   // Close bulk dropdowns on outside click
   useEffect(() => {

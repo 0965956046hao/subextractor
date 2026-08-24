@@ -399,7 +399,8 @@ async def rewrite_srt_line(video_id: str, request: Request):
 
 @router.post("/api/srt/{video_id}/risk-check")
 async def start_risk_check(video_id: str, request: Request):
-    _srt_path(video_id)
+    if not _srt_best_path(video_id).exists():
+        raise HTTPException(404, "SRT not found")
 
     body = {}
     try:
@@ -1699,7 +1700,7 @@ async def bulk_switch_voice(request: Request, video_id: str):
 # ── GET /api/tts/{video_id}/check-alignment ──
 
 @router.get("/api/tts/{video_id}/check-alignment")
-async def check_tts_alignment(video_id: str):
+async def check_tts_alignment(video_id: str, lang: str = "vi"):
     """Check TTS audio duration vs SRT duration for each line.
 
     Returns list of lines where audio is longer than the SRT time range.
@@ -1718,7 +1719,7 @@ async def check_tts_alignment(video_id: str):
         return {"issues": [], "total": 0}
 
     voice_map = load_voice_map(video_id)
-    display_map = _load_capcut_voice_display_map("vi")
+    display_map = _load_capcut_voice_display_map(lang)
 
     issues = []
     tts_dir = settings.temp_dir / "tts" / video_id
