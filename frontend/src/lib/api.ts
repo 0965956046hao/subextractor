@@ -161,10 +161,19 @@ export async function startProcess(
   lang: OcrLang = "ch",
   ocrType: OcrType = "apple",
   signal?: AbortSignal,
+  startTime?: number | null,
+  endTime?: number | null,
 ): Promise<JobStatus> {
   const res = await api.post<JobStatus>(
     "/process",
-    { video_id: videoId, region, lang, ocr_type: ocrType },
+    {
+      video_id: videoId,
+      region,
+      lang,
+      ocr_type: ocrType,
+      ...(startTime != null && startTime > 0 ? { start_time: startTime } : {}),
+      ...(endTime != null && endTime > 0 ? { end_time: endTime } : {}),
+    },
     { signal },
   );
   return res.data;

@@ -7,7 +7,7 @@ import { useI18n } from "@/lib/i18n";
 
 interface Props {
   videoId: string;
-  onConfirmed: (region: Region) => void;
+  onConfirmed: (region: Region, startTime?: number) => void;
 }
 
 const HANDLE_RADIUS = 6;
@@ -51,6 +51,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
   const [rect, setRect] = useState<Region | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [startTime, setStartTime] = useState<number | null>(null);
 
   // ── Canvas rendering ──
   const redraw = useCallback(() => {
@@ -231,8 +232,8 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
   // ── Keyboard ──
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === " " || e.key === "Space") { e.preventDefault(); togglePlay(); }
-    else if (e.key === "Enter" && regionUsable(rectRef.current)) onConfirmed(rectRef.current);
-  }, [onConfirmed]);
+    else if (e.key === "Enter" && regionUsable(rectRef.current)) onConfirmed(rectRef.current, startTime ?? undefined);
+  }, [onConfirmed, startTime]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -290,6 +291,57 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
         }
       />
 
+      {/* Start time selector */}
+      <div className="glass-panel rounded-2xl p-4 sm:p-5">
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-muted">
+            {t("region.startTime" as string)}
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                // Set start time to current video position
+                const v = videoRef.current;
+                if (v) setStartTime(v.currentTime);
+              }}
+              className="px-3 py-1.5 text-[11px] font-medium bg-black/[0.04] text-ink-muted rounded-lg
+                         hover:bg-black/[0.08] transition-colors cursor-pointer"
+            >
+              {t("region.useCurrentTime" as string)}
+            </button>
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={startTime ?? ""}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                setStartTime(isNaN(v) || v <= 0 ? null : v);
+              }}
+              placeholder="0"
+              className="w-20 px-2 py-1.5 text-[12px] font-mono text-ink bg-black/[0.03] border border-black/[0.08]
+                         rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/50"
+            />
+            <span className="text-[11px] text-ink-light">{t("region.seconds" as string)}</span>
+            {startTime != null && startTime > 0 && (
+              <button
+                type="button"
+                onClick={() => setStartTime(null)}
+                className="text-[11px] text-danger hover:text-danger/80 cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {startTime != null && startTime > 0 && (
+            <span className="text-[11px] text-ink-light">
+              {t("region.ocrStartFrom" as string, { time: startTime.toFixed(1) })}
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Confirm bar */}
       {regionUsable(r) && (
         <div className="glass-panel rounded-2xl p-4 sm:p-5" style={{ animation: "fade-in 0.9s cubic-bezier(0.32,0.72,0,1) forwards" }}>
@@ -297,7 +349,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
             <span className="text-xs sm:text-sm text-ink-muted font-mono tracking-tight">
               x: {r.x1.toFixed(3)} y: {r.y1.toFixed(3)} &rarr; x: {r.x2.toFixed(3)} y: {r.y2.toFixed(3)}
             </span>
-            <button onClick={() => onConfirmed(r)} className="btn-island-primary group text-sm">
+            <button onClick={() => onConfirmed(r, startTime ?? undefined)} className="btn-island-primary group text-sm">
               {t("region.extract" as string)}
               <span className="btn-island-icon">
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">

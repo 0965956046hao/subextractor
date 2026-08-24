@@ -367,6 +367,16 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
     if not meta_path.exists():
         raise HTTPException(404, f"Meta JSON not found: {meta_path}")
 
+    # Validate title non-empty trước khi upload (tránh lỗi 400 invalidTitle).
+    try:
+        _meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not str(_meta.get("title", "")).strip():
+            raise HTTPException(400, "Meta title is empty — run the meta step again.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     job_id = uuid.uuid4().hex[:12]
     job = {
         "job_id": job_id,

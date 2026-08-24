@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 import numpy as np
@@ -24,11 +25,21 @@ class BaseOCREngine:
     name: str = "base"
 
     def __init__(self):
+        self._lock = threading.Lock()
         self._prev_crop: np.ndarray | None = None
         self._prev_text: str = ""
         self._total_calls = 0
         self._cache_hits = 0
         self._hit_streak = 0
+
+    def lock(self):
+        """Lock tuần tự hoá các lần OCR trên engine này.
+
+        Engine chia sẻ dHash cache + state ngôn ngữ nên KHÔNG thread-safe.
+        Worker giữ lock này suốt `set_lang` + vòng lặp OCR để 2 job song song
+        (job_workers > 1) không làm hỏng cache/language của nhau.
+        """
+        return self._lock
 
     def set_lang(self, lang: str) -> None:
         self.reset_cache()

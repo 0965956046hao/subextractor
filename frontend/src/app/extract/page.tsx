@@ -171,6 +171,7 @@ export default function ExtractPage() {
   const [region, setRegion] = useState<Region | null>(null);
   const [lang, setLang] = useState<OcrLang>("ch");
   const [ocrType, setOcrType] = useState<OcrType>("apple");
+  const [startTime, setStartTime] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     const v = new URLSearchParams(window.location.search).get("video_id");
@@ -247,8 +248,9 @@ export default function ExtractPage() {
 
               <RegionSelector
                 videoId={videoId}
-                onConfirmed={(r) => {
+                onConfirmed={(r, st) => {
                   setRegion(r);
+                  setStartTime(st);
                   setStep("result");
                 }}
               />
@@ -260,9 +262,11 @@ export default function ExtractPage() {
               region={region}
               lang={lang}
               ocrType={ocrType}
+              startTime={startTime}
               onReset={() => {
                 setVideoId("");
                 setRegion(null);
+                setStartTime(undefined);
                 setStep("upload");
               }}
               onDone={() => router.push(`/video/${videoId}`)}

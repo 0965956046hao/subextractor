@@ -47,7 +47,7 @@ impl SidecarManager {
                 .current_dir(resolve(base, "backend"));
             c
         };
-        let tools = crate::tools::tools_dir(base, data_dir);
+        let tools = tools_dir(base, data_dir);
         let demucs = tools.join("demucs");
         let path = std::env::var("PATH").unwrap_or_default();
         // Add system paths as fallback for ffmpeg/demucs if not bundled
@@ -189,4 +189,14 @@ fn resolve(base: &Path, rel: &str) -> PathBuf {
     } else {
         repo_root().join(rel)
     }
+}
+
+fn tools_dir(base: &Path, data_dir: &Path) -> PathBuf {
+    if cfg!(debug_assertions) {
+        let dev = base.join("src-tauri/resources/tools");
+        if dev.join("ffmpeg").is_file() {
+            return dev;
+        }
+    }
+    data_dir.join("tools")
 }

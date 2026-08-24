@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.services.ocr_engine import OCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
-from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download
+from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools
 from app.worker import worker_loop
 
 logging.basicConfig(
@@ -53,9 +53,20 @@ async def lifespan(app: FastAPI):
     # it into rows so any other tab mirrors the exact same stage/%/steps.
     app.state.pipeline_states: dict = {}
 
-    worker = asyncio.create_task(
-        worker_loop(app.state.jobs, app.state.ws_clients, ocr_engines, app.state.job_queue)
-    )
+    # Spawn `job_workers` worker loops. A single loop consumes the queue
+    # sequentially, so multiple loops are what actually allow parallel jobs
+    # (the executor alone would not help). Default = 1 (unchanged behavior).
+    workers = [
+        asyncio.create_task(
+            worker_loop(
+                app.state.jobs,
+                app.state.ws_clients,
+                ocr_engines,
+                app.state.job_queue,
+            )
+        )
+        for _ in range(max(1, settings.job_workers))
+    ]
 
     # Start Telegram polling if bot token is configured
     from app.services.telegram_service import telegram_service
@@ -68,11 +79,13 @@ async def lifespan(app: FastAPI):
     yield
 
     await telegram_service.stop()
-    worker.cancel()
-    try:
-        await worker
-    except asyncio.CancelledError:
-        pass
+    for w in workers:
+        w.cancel()
+    for w in workers:
+        try:
+            await w
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutdown complete")
 
 
@@ -105,6 +118,7 @@ app.include_router(thumbnail.router)
 app.include_router(capcut.router)
 app.include_router(google_tts.router)
 app.include_router(video_download.router)
+app.include_router(env_tools.router)
 
 
 @app.get("/api/health")

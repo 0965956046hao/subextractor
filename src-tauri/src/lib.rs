@@ -1,5 +1,4 @@
 mod sidecars;
-mod tools;
 
 use sidecars::SidecarManager;
 use tauri::Manager;
@@ -8,10 +7,6 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .manage(SidecarManager::new())
-        .invoke_handler(tauri::generate_handler![
-            tools::check_tools,
-            tools::install_tools,
-        ])
         .setup(|app| {
             let manager = app.state::<SidecarManager>();
             let base = if cfg!(debug_assertions) {

@@ -60,6 +60,10 @@ def separate_instrumental(video_path: Path, out_dir: Path) -> Path:
     no_vocals = sep_root / "htdemucs" / "audio" / "no_vocals.wav"
     if not no_vocals.exists():
         raise RuntimeError("Demucs không tạo được file instrumental (no_vocals.wav)")
+    # audio.wav chỉ là input của Demucs — sau khi tách xong không còn cần nữa.
+    # (vocals.wav cũng là sản phẩm phụ không dùng, được xóa ở cuối build_full_audio
+    # sau khi generate_voice_map đã dùng nó cho diarization nếu cần.)
+    wav_path.unlink(missing_ok=True)
     return no_vocals
 
 
@@ -507,6 +511,13 @@ def build_full_audio(
         if log_fn:
             log_fn("Đã trộn xong audio lồng tiếng.")
     cb(100)
+
+    # vocals.wav là sản phẩm phụ của Demucs (--two-stems=vocals), app không bao
+    # giờ dùng — xóa để tránh tích lũy ~50MB/phút. generate_voice_map đã chạy
+    # xong (nếu multi_voice) ở bước trên, nên xóa ở đây là an toàn.
+    vocals_wav = out_dir / "separated" / "htdemucs" / "audio" / "vocals.wav"
+    if vocals_wav.exists():
+        vocals_wav.unlink(missing_ok=True)
     return full_audio
 
 
@@ -521,7 +532,12 @@ def dub_audio_only(
     log_fn=None,
 ) -> Path:
     """Separate vocals → synthesize Vietnamese TTS → mix into dubbed audio (no video merge)."""
-    full_audio = build_full_audio(
+    # Không tạo dubbed_video.mp4 nữa: bước hardcode đọc trực tiếp video gốc +
+    # full_audio.m4a và tự encode một lần duy nhất. Block mux cũ vừa lãng phí
+    # (~300MB + 1 lần encode) vừa không có endpoint nào serve file này.
+    stale = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
+    stale.unlink(missing_ok=True)
+    return build_full_audio(
         video_id,
         voice_name,
         tts_engine,
@@ -531,39 +547,6 @@ def dub_audio_only(
         progress_callback=progress_callback,
         log_fn=log_fn,
     )
-
-    out_path = settings.temp_dir / "tts" / video_id / "dubbed_video.mp4"
-    if (
-        out_path.exists() and out_path.stat().st_size > 0
-        and out_path.stat().st_mtime >= full_audio.stat().st_mtime
-    ):
-        if log_fn:
-            log_fn("Đã có video lồng tiếng từ lần chạy trước — tái sử dụng (bỏ qua mux).")
-        return out_path
-    if log_fn:
-        log_fn("Mux audio lồng tiếng vào video (FFmpeg)...")
-    vw, vh = _get_video_resolution(str(video_path))
-    tw, th = target_dims_min1080(vw, vh)
-    if (tw, th) != (vw, vh) and log_fn:
-        log_fn(f"Nâng độ phân giải video: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
-    subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", str(video_path),
-            "-i", str(full_audio),
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-vf", f"scale={tw}:{th}:flags=lanczos",
-            "-c:v", "libx264", "-crf", "18", "-preset", "medium",
-            "-c:a", "copy",
-            "-shortest",
-            str(out_path),
-        ],
-        check=True, capture_output=True, timeout=7200,
-    )
-    if log_fn:
-        log_fn("Đã tạo video lồng tiếng xong.")
-    return out_path
 
 
 def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):

@@ -6,7 +6,6 @@ import {
   isMp4Url,
   loadCookies,
   saveCookies,
-  SOURCE_SELECTORS,
   USER_AGENT,
   classifyTrack,
   type BrowserHandle,
@@ -43,8 +42,16 @@ export async function POST(req: NextRequest) {
   }
 
   const captured: string[] = [];
-  let srcs: string[] = [];
   let title = "";
+  // Gộp luôn việc lấy thumbnail + big_thumbs trong cùng session Chrome này
+  // (trước đây phải mở Chrome lần 2 ở /api/video-download/thumbnail).
+  let thumbnail: string | null = null;
+  let bigThumbs: string[] = [];
+  let postCover: string[] = [];
+  let resolveDetail: (() => void) | null = null;
+  const detailReady = new Promise<void>((resolve) => {
+    resolveDetail = resolve;
+  });
 
   try {
     const page = await handle.browser.newPage();
@@ -55,6 +62,46 @@ export async function POST(req: NextRequest) {
       const u = request.url();
       if (isVideoUrl(u) || isMp4Url(u)) {
         captured.push(u);
+      }
+    });
+
+    // Nghe response /aweme/v1/web/aweme/detail/ ngay trên trang video để trích
+    // thumbnail (cover_original_scale.url_list, ưu tiên URL lk3s) + big_thumbs.
+    page.on("response", async (resp) => {
+      const u = resp.url();
+      if (!u.includes("/aweme/v1/web/aweme/detail/")) return;
+      try {
+        const data = await resp.json();
+        const aweme = data?.aweme_detail ?? null;
+        if (!aweme) return;
+        const covers = Array.isArray(
+          aweme.video?.cover_original_scale?.url_list,
+        )
+          ? (aweme.video.cover_original_scale.url_list as string[])
+          : [];
+        if (covers.length) postCover = covers;
+        const thumbs = Array.isArray(aweme.video?.big_thumbs)
+          ? (aweme.video.big_thumbs as Array<{ img_urls?: string[] }>)
+          : [];
+        const thumbUrls = thumbs
+          .flatMap((t) => (Array.isArray(t?.img_urls) ? t.img_urls : []))
+          .filter((v): v is string => {
+            if (typeof v !== "string") return false;
+            try {
+              const parsed = new URL(v);
+              return (
+                parsed.protocol === "http:" || parsed.protocol === "https:"
+              );
+            } catch {
+              return false;
+            }
+          });
+        if (thumbUrls.length) bigThumbs = thumbUrls;
+        if (covers.length || thumbUrls.length) {
+          resolveDetail?.();
+        }
+      } catch {
+        // không parse được body — bỏ qua
       }
     });
 
@@ -69,26 +116,12 @@ export async function POST(req: NextRequest) {
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    // Fallback: nếu chưa bắt được từ network, quét DOM lần cuối
-    // (tránh bỏ sót khi URL chỉ xuất hiện trong attribute src của <video>).
-    if (captured.length === 0) {
-      srcs = await page.evaluate((selectors: string[]) => {
-        const selector = selectors.join(", ");
-        const isMp4 = (v: string) =>
-          /^https?:\/\//.test(v) &&
-          /\.mp4(\?|$)|video_mp4|mime_type=video_mp4/i.test(v);
-
-        const collect = (): string[] => {
-          const out: string[] = [];
-          document.querySelectorAll<HTMLElement>(selector).forEach((el) => {
-            const s = el.getAttribute("src");
-            if (s && isMp4(s)) out.push(s);
-          });
-          return Array.from(new Set(out));
-        };
-
-        return collect();
-      }, SOURCE_SELECTORS);
+    // Sau khi bắt được media URL, chờ thêm tối đa 15s cho response aweme/detail
+    // (thumbnail + big_thumbs) nếu chưa tới — tránh phải mở Chrome lần 2.
+    await Promise.race([detailReady, new Promise((r) => setTimeout(r, 15000))]);
+    if (postCover.length) {
+      thumbnail =
+        postCover.find((c) => c.includes("lk3s")) ?? postCover[0];
     }
 
     await saveCookies(page);
@@ -105,7 +138,7 @@ export async function POST(req: NextRequest) {
 
   await closeBrowser(handle).catch(() => {});
 
-  const all = Array.from(new Set([...srcs, ...captured]));
+  const all = Array.from(new Set(captured));
 
   if (all.length === 0) {
     return NextResponse.json(
@@ -119,9 +152,10 @@ export async function POST(req: NextRequest) {
     all.find((u) => classifyTrack(u) === "video") ?? all[0] ?? null;
 
   return NextResponse.json({
-    urls: all,
     video_url: videoUrl,
     audio_url: audioUrl,
     title,
+    thumbnail,
+    bigThumbs,
   });
 }

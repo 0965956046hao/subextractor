@@ -89,6 +89,8 @@ def stream_frames(
 def stream_frames_generator(
     video_path: str,
     fps: int | None = None,
+    start_time: float | None = None,
+    end_time: float | None = None,
 ):
     target_fps = fps if fps is not None and fps > 0 else None
     cap = cv2.VideoCapture(video_path)
@@ -99,9 +101,13 @@ def stream_frames_generator(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     step = 1 if target_fps is None else max(1, int(round(video_fps / target_fps)))
 
+    # Calculate start/end frame numbers
+    start_frame = int(start_time * video_fps) if start_time and start_time > 0 else 0
+    end_frame = int(end_time * video_fps) if end_time and end_time > 0 else total_frames
+
     logger.info(
-        "  video: %.2f fps, %d total frames, step=%d (%s)",
-        video_fps, total_frames, step,
+        "  video: %.2f fps, %d total frames, step=%d, start_frame=%d, end_frame=%d (%s)",
+        video_fps, total_frames, step, start_frame, end_frame,
         "every frame" if step == 1 else f"~{target_fps} fps",
     )
 
@@ -113,7 +119,7 @@ def stream_frames_generator(
             ret, frame = cap.read()
             if not ret:
                 break
-            if idx % step == 0:
+            if idx >= start_frame and idx < end_frame and idx % step == 0:
                 timestamp = idx / video_fps
                 yield frame, timestamp
                 extracted += 1
@@ -123,8 +129,9 @@ def stream_frames_generator(
         pbar.close()
         cap.release()
         logger.info(
-            "  extracted %d frames (%s)",
-            extracted, "every frame" if step == 1 else f"~{target_fps} fps",
+            "  extracted %d frames from %d-%d (%s)",
+            extracted, start_frame, end_frame,
+            "every frame" if step == 1 else f"~{target_fps} fps",
         )
 
 
@@ -138,10 +145,8 @@ def crop_region(frame: np.ndarray, region: dict) -> np.ndarray:
     y1, y2 = sorted([y1, y2])
     x1 = max(0, x1)
     y1 = max(0, y1)
-    x2 = min(w, x2)
-    y2 = min(h, y2)
-    if x2 - x1 < 2 or y2 - y1 < 2:
-        return frame[max(0, h // 4):h // 2, :]
+    x2 = min(w, max(x1 + 2, x2))
+    y2 = min(h, max(y1 + 2, y2))
     return frame[y1:y2, x1:x2]
 
 
@@ -176,12 +181,10 @@ def resolve_video_path(video_id: str) -> str:
     """
     video_dir = settings.temp_dir / "videos" / video_id
 
-    # 1. Ưu tiên delogo'd video (đã xoá watermark)
-    delogo_path = settings.temp_dir / "hardcoded" / video_id
-    if delogo_path.exists():
-        for f in delogo_path.iterdir():
-            if f.stem.endswith("_hardcoded") and f.suffix == ".mp4" and f.stat().st_size > 0:
-                return str(f)
+    # 1. Ưu tiên delogo'd video (đã xoá watermark) — ở videos/{id}/delogo.mp4.
+    delogo_file = video_dir / "delogo.mp4"
+    if delogo_file.exists() and delogo_file.stat().st_size > 0:
+        return str(delogo_file)
 
     # 2. Merged video (no audio, từ Douyin)
     meta_file = video_dir / "meta.json"

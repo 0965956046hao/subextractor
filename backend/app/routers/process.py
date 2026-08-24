@@ -39,6 +39,8 @@ async def start_processing(
         fps=req.fps,
         lang=req.lang,
         ocr_type=req.ocr_type,
+        start_time=req.start_time,
+        end_time=req.end_time,
     )
     await job_queue.put(job["job_id"])
     return JobStatus(

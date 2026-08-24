@@ -1,33 +1,33 @@
-"""Burn (hardcode) black-box subtitles into the video.
+"""Burn (hardcode) subtitles into the video using pure FFmpeg filters.
 
-Supports two engines:
-1. ffmpeg `subtitles` filter (needs libass) — fast, uses the generated ASS.
-2. OpenCV + Pillow frame-by-frame burn — fallback when libass is missing.
+Filter chain:
+  [0:v] scale → subtitles (libass) → overlay (logo) → drawtext (scrolling text) → [out]
+
+The main burn path (run_hardcode_sync) is pure FFmpeg. The subtitle-preview
+helpers (_render_subtitle / _overlay_subtitle / auto_fit_style) use Pillow +
+OpenCV to render a single frame for the interactive "tự chỉnh vị trí" preview.
 """
 
 import logging
 import os
 import shlex
-import shutil
 import subprocess
 import threading
 import time
-from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from pathlib import Path
 
 from app.config import settings
 from app.services.srt_utils import parse_srt
-from app.services.media_utils import _get_duration, _get_video_resolution, target_dims_min1080
+from app.services.media_utils import _get_duration, _get_video_resolution, _merge_audio_path, target_dims_min1080
 from app.services.job_utils import JobCancelled, notify_ws_sync
 from app.routers.config_router import get_subtitle_style
 
 logger = logging.getLogger(__name__)
 
-# Max time we wait for AT LEAST one segment worker to finish. A hung worker must
-# not wedge the whole server, so we abort the pool if nothing completes in time.
-HARDCODE_STEP_TIMEOUT = 30 * 60
 
+# ---------------------------------------------------------------------------
+# Style helpers
+# ---------------------------------------------------------------------------
 
 def apply_style_override(style: dict, override: dict | None) -> dict:
     """Coerce + merge a partial style override onto a base style dict."""
@@ -47,95 +47,6 @@ def apply_style_override(style: dict, override: dict | None) -> dict:
         except (TypeError, ValueError):
             pass
     return out
-
-
-def _ass_time(sec: float) -> str:
-    h = int(sec // 3600)
-    m = int((sec % 3600) // 60)
-    s = int(sec % 60)
-    cs = int(round((sec - int(sec)) * 100))
-    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
-
-
-def _hex_to_ass_color(hex_color: str) -> str:
-    """#RRGGBB → ASS &HAABBGGRR (alpha 00 = opaque)."""
-    h = hex_color.strip().lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
-        h = "FFFFFF"
-    try:
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except ValueError:
-        r, g, b = 255, 255, 255
-    return f"&H00{b:02X}{g:02X}{r:02X}"
-
-
-def _hex_to_rgba(hex_color: str, opacity: int = 255) -> tuple:
-    h = hex_color.strip().lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
-        h = "FFFFFF"
-    try:
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except ValueError:
-        r, g, b = 255, 255, 255
-    return (r, g, b, max(0, min(255, opacity)))
-
-
-def srt_to_ass_blackbox(
-    srt_content: str,
-    vw: int = 1920,
-    vh: int = 1080,
-    style: dict | None = None,
-) -> str:
-    """Convert SRT → ASS using the configured subtitle style."""
-    s = style or get_subtitle_style()
-    font = s.get("font_family", "Arial")
-    size = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
-    primary = _hex_to_ass_color(s.get("text_color", "#FFFFFF"))
-    outline_col = _hex_to_ass_color(s.get("outline_color", "#000000"))
-    bold = 1 if s.get("bold") else 0
-    italic = 1 if s.get("italic") else 0
-    outline_w = max(0, int(s.get("outline_width", 0)))
-    box_on = bool(s.get("box_enabled", True))
-    back_col = _hex_to_ass_color(s.get("box_color", "#000000"))
-    # ASS BorderStyle: 1=outline+shadow, 3=opaque box
-    border_style = 3 if box_on else 1
-    # libass quirk: with BorderStyle=3 but Outline=0 AND Shadow=0, the opaque
-    # box is not drawn at all (zero border extent). Force a 1px border so the
-    # black background box actually renders.
-    if box_on and outline_w < 1:
-        outline_w = 1
-    back_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
-    # margin_h is a 1920px reference (positive = right); shift the horizontal
-    # margins so the black box moves with the user's drag offset.
-    margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
-    margin_l = max(0, 50 + margin_h)
-    margin_r = max(0, 50 - margin_h)
-
-    header = f"""[Script Info]
-Title: Subtitle Black Box
-ScriptType: v4.00+
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-PlayResX: {vw}
-PlayResY: {vh}
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,{margin_l},{margin_r},{max(0, int(int(s.get('margin_v', 40)) * vh / 1080))},1
-"""
-    # When using BorderStyle=3, apply box border colour as the outline colour so the
-    # box edge is visible even if text outline is off.
-    lines = [header.rstrip("\n")]
-    for e in _resolve_overlaps(parse_srt(srt_content)):
-        text = e.text.replace("{", "\\{").replace("}", "\\}")
-        lines.append(
-            f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},SubStyle,,0,0,0,,{text}"
-        )
-    return "\n".join(lines) + "\n"
 
 
 def auto_fit_style(
@@ -190,18 +101,113 @@ def auto_fit_style(
             break
         font_px -= 2
 
-    # _render_subtitle scales font_size + margin_v by vh/1080, so store 1080p refs.
+    # _render_subtitle / srt_to_ass_blackbox scale font_size & margin_v by
+    # th/1080, nên cả hai đều lưu ở chuẩn 1080p reference.
     s["font_size"] = max(18, int(font_px * 1080 / vh))
-    s["margin_v"] = max(0, int((1 - y2) * 1080))
+    s["margin_v"] = max(0, int(((1 - y2) * vh - 40) * 1080 / vh))
     return s
+
+
+def _ass_time(sec: float) -> str:
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    cs = int(round((sec - int(sec)) * 100))
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _hex_to_ass_color(hex_color: str) -> str:
+    """#RRGGBB → ASS &HAABBGGRR (alpha 00 = opaque)."""
+    h = hex_color.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        h = "FFFFFF"
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        r, g, b = 255, 255, 255
+    return f"&H00{b:02X}{g:02X}{r:02X}"
+
+
+def _hex_to_rgba(hex_color: str, opacity: int = 255) -> tuple:
+    h = hex_color.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        h = "FFFFFF"
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        r, g, b = 255, 255, 255
+    return (r, g, b, max(0, min(255, opacity)))
+
+
+def srt_to_ass_blackbox(
+    srt_content: str,
+    vw: int = 1920,
+    vh: int = 1080,
+    style: dict | None = None,
+) -> str:
+    """Convert SRT → ASS using the configured subtitle style."""
+    s = style or get_subtitle_style()
+    font = s.get("font_family", "Arial")
+    size = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
+    primary = _hex_to_ass_color(s.get("text_color", "#FFFFFF"))
+    outline_col = _hex_to_ass_color(s.get("outline_color", "#000000"))
+    bold = 1 if s.get("bold") else 0
+    italic = 1 if s.get("italic") else 0
+    outline_w = max(0, int(s.get("outline_width", 0)))
+    box_on = bool(s.get("box_enabled", True))
+    back_col = _hex_to_ass_color(s.get("box_color", "#000000"))
+    border_style = 3 if box_on else 1
+    if box_on:
+        # BorderStyle=3 → Outline chính là viền nền (box border). Ưu tiên
+        # box_border_width/color, fallback về outline_* (viền chữ) cho tương
+        # thích ngược khi người dùng chưa đặt box_border.
+        border_w = max(0, int(s.get("box_border_width", 0)))
+        if border_w > 0:
+            outline_w = border_w
+        elif outline_w < 1:
+            outline_w = 1
+        border_col = s.get("box_border_color", "")
+        if border_col:
+            outline_col = _hex_to_ass_color(border_col)
+    back_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
+    if box_on:
+        # ASS BackColour dạng &HAABBGGRR (AA = alpha) — áp độ mờ nền (box_opacity)
+        # thay vì bỏ lọt như trước (back_alpha tính ra nhưng không dùng).
+        back_col = f"&H{back_alpha:02X}{back_col[4:]}"
+    margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
+    margin_l = max(0, 50 + margin_h)
+    margin_r = max(0, 50 - margin_h)
+
+    header = f"""[Script Info]
+Title: Subtitle Black Box
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+PlayResX: {vw}
+PlayResY: {vh}
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,{margin_l},{margin_r},{max(0, int(int(s.get('margin_v', 40)) * vh / 1080))},1
+"""
+    lines = [header.rstrip("\n")]
+    for e in _resolve_overlaps(parse_srt(srt_content)):
+        text = e.text.replace("{", "\\{").replace("}", "\\}")
+        lines.append(
+            f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},SubStyle,,0,0,0,,{text}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _resolve_overlaps(entries):
     """Clip overlapping subtitle entries so they never stack or concatenate.
 
-    When two entries overlap in time, the LATER one (the one that started last)
-    wins the overlap region: the earlier entry is trimmed to end exactly when
-    the later one starts. Returns a new list with non-overlapping timeline.
+    When two entries overlap in time, the LATER one wins the overlap region:
+    the earlier entry is trimmed to end exactly when the later one starts.
     """
     if not entries:
         return []
@@ -226,6 +232,10 @@ def _has_subtitles_filter() -> bool:
     except Exception:
         return False
 
+
+# ---------------------------------------------------------------------------
+# Font finder (macOS)
+# ---------------------------------------------------------------------------
 
 _FONT_DIRS = [
     "/System/Library/Fonts/Supplemental",
@@ -271,24 +281,27 @@ def _find_font(family: str = "Arial", bold: bool = False, italic: bool = False) 
     return None
 
 
-def _wrap_text(draw, text: str, font, max_w: int) -> list[str]:
-    """Wrap text into multiple lines so no line exceeds max_w (video width)."""
-    if not text:
-        return [""]
-    lines: list[str] = []
-    current = ""
-    for word in text.split():
-        trial = f"{current} {word}".strip()
-        bbox = draw.textbbox((0, 0), trial, font=font)
-        if current and bbox[2] - bbox[0] > max_w:
-            lines.append(current)
-            current = word
-        else:
-            current = trial
-    if current:
-        lines.append(current)
-    return lines or [text]
+# ---------------------------------------------------------------------------
+# FFmpeg text escaping helpers
+# ---------------------------------------------------------------------------
 
+def _escape_drawtext(text: str) -> str:
+    """Escape special characters for FFmpeg drawtext filter option values.
+
+    FFmpeg filter option parsing treats ``:`` as a key/value separator and
+    ``\\`` as an escape character, so both must be escaped with ``\\``.
+    """
+    return text.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _escape_fontfile(path: str) -> str:
+    """Escape a font file path for drawtext's ``fontfile`` option value."""
+    return path.replace("\\", "\\\\").replace(":", "\\:")
+
+
+# ---------------------------------------------------------------------------
+# Subtitle preview render helpers (Pillow + OpenCV)
+# ---------------------------------------------------------------------------
 
 def _render_subtitle(
     text: str,
@@ -298,15 +311,16 @@ def _render_subtitle(
     style: dict | None = None,
     fixed_size: bool = False,
 ):
+    """Render `text` as an RGBA overlay (numpy array) sized to the frame."""
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
 
     s = style or get_subtitle_style()
-    font_size = max(10, int(s.get("font_size", 48)))
-    # scale font size relative to 1080p reference so it looks consistent
-    scale = vh / 1080
-    font_size = max(10, int(font_size * scale))
-    font_path = font_path or _find_font(s.get("font_family", "Arial"), s.get("bold"), s.get("italic"))
+    # font_size là tham chiếu 1080p → scale theo chiều cao thực tế.
+    font_size = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
+    font_path = font_path or _find_font(
+        s.get("font_family", "Arial"), s.get("bold"), s.get("italic")
+    )
     try:
         font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
     except Exception:
@@ -314,52 +328,42 @@ def _render_subtitle(
 
     text_color = _hex_to_rgba(s.get("text_color", "#FFFFFF"))
     outline_color = _hex_to_rgba(s.get("outline_color", "#000000"))
-    outline_w = max(0, int(int(s.get("outline_width", 0)) * scale))
+    outline_w = max(0, int(s.get("outline_width", 0)))
     box_on = bool(s.get("box_enabled", True))
     box_color = _hex_to_rgba(s.get("box_color", "#000000"), int(s.get("box_opacity", 210)))
-    box_radius = max(0, int(int(s.get("box_radius", 12)) * scale))
+    box_radius = max(0, int(s.get("box_radius", 12)))
     box_border_color = _hex_to_rgba(s.get("box_border_color", "#000000"))
-    box_border_w = max(0, int(int(s.get("box_border_width", 0)) * scale))
-    # margin_v is a 1080p reference, same as font_size, so the box stays at the
-    # same proportional position when the video resolution changes.
-    margin_v = max(0, int(int(s.get("margin_v", 40)) * scale))
-    # margin_h is a 1920px reference for horizontal offset (positive = right).
+    box_border_w = max(0, int(s.get("box_border_width", 0)))
+    # margin_v / margin_h đều là tham chiếu 1080p/1920p → scale theo khung hình.
+    margin_v = max(0, int(int(s.get("margin_v", 40)) * vh / 1080))
     margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
 
     img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     max_w = max(200, vw - 160)
-    # shrink text only if even the widest single word is too wide for the video
+    # shrink text if too wide for the video (unless a single uniform size is required)
     if not fixed_size:
         while font_size > 16:
             try:
                 font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
             except Exception:
                 font = ImageFont.load_default()
-            widest = max(
-                (draw.textbbox((0, 0), w, font=font)[2] - draw.textbbox((0, 0), w, font=font)[0] for w in text.split()),
-                default=0,
-            )
-            if widest <= max_w:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            if bbox[2] - bbox[0] <= max_w:
                 break
             font_size -= 2
 
-    # Wrap long lines so they fit within the video width (auto line break).
-    lines = _wrap_text(draw, text, font, max_w)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    top = bbox[1]
 
-    line_boxes = [draw.textbbox((0, 0), ln, font=font) for ln in lines]
-    tw = max((b[2] - b[0] for b in line_boxes), default=0)
-    line_heights = [b[3] - b[1] for b in line_boxes]
-    line_tops = [b[1] for b in line_boxes]
-    line_gap = max(2, int(font_size * 0.15))
-    th = sum(line_heights) + line_gap * (len(lines) - 1)
-
-    pad_x, pad_y = max(6, int(24 * scale)), max(4, int(16 * scale))
+    pad_x, pad_y = 24, 16
     box_w = tw + pad_x * 2 + outline_w * 2
     box_h = th + pad_y * 2 + outline_w * 2
     bx = (vw - box_w) // 2 + margin_h
-    by = vh - box_h - margin_v
+    by = vh - box_h - margin_v - 40
 
     # draw rounded background box
     if box_on:
@@ -379,20 +383,15 @@ def _render_subtitle(
                 width=box_border_w,
             )
 
-    # draw each wrapped line centered inside the box
-    y = by + pad_y + outline_w
-    for i, ln in enumerate(lines):
-        lw = line_boxes[i][2] - line_boxes[i][0]
-        lx = bx + pad_x + outline_w + (tw - lw) // 2
-        draw.text(
-            (lx, y - line_tops[i]),
-            ln,
-            font=font,
-            fill=text_color,
-            stroke_width=outline_w,
-            stroke_fill=outline_color,
-        )
-        y += line_heights[i] + line_gap
+    # draw text with optional outline stroke
+    draw.text(
+        (bx + pad_x + outline_w, by + pad_y + outline_w - top),
+        text,
+        font=font,
+        fill=text_color,
+        stroke_width=outline_w,
+        stroke_fill=outline_color,
+    )
     return np.array(img)
 
 
@@ -400,574 +399,15 @@ def _overlay_subtitle(frame, overlay_rgba):
     import cv2
     import numpy as np
 
-    # uint16 math (instead of float32) keeps transient memory roughly half and
-    # avoids the per-frame float32 churn that piled up during long burns.
-    a = overlay_rgba[:, :, 3].astype(np.uint16)
-    if not np.any(a):
-        return frame
-    inv = 255 - a
-    ov = cv2.cvtColor(overlay_rgba[:, :, :3], cv2.COLOR_RGB2BGR).astype(np.uint16)
-    base = frame.astype(np.uint16)
-    base *= inv[..., None]
-    base += ov * a[..., None]
-    base //= 255
-    frame[:] = base.astype(np.uint8)
-    return frame
+    alpha = overlay_rgba[:, :, 3:4].astype(np.float32) / 255.0
+    overlay_bgr = cv2.cvtColor(overlay_rgba[:, :, :3], cv2.COLOR_RGB2BGR).astype(np.float32)
+    blended = frame.astype(np.float32) * (1.0 - alpha) + overlay_bgr * alpha
+    return blended.astype(np.uint8)
 
 
-def _render_watermark_frame(
-    vw: int,
-    vh: int,
-    ts: float,
-    duration: float,
-    watermark: dict,
-):
-    """Build an RGBA overlay for the watermark: logo top-left + scrolling text.
-
-    The scrolling text travels around the clip border in a full loop from the
-    start of the video until the end (one revolution per video duration).
-    """
-    import numpy as np
-    from PIL import Image, ImageDraw, ImageFont
-
-    text = (watermark.get("text") or "").strip()
-    logo_path = watermark.get("logo_path")
-    if not text and not logo_path:
-        return None
-
-    img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    # --- Logo: top-left, height = 1/7 of frame height; margin from top & left = half logo height. ---
-    if logo_path:
-        try:
-            logo = Image.open(logo_path).convert("RGBA")
-            logo_h = max(36, int(vh / 7))
-            logo_w = int(logo.width * logo_h / logo.height)
-            margin = int(logo_h // 2.5)
-            logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
-            img.paste(logo, (margin, margin), logo)
-        except Exception:
-            pass
-
-    if text:
-        # Font scaled by resolution (~3.2% of height); white fill, no outline.
-        font_size = max(30, int(vh * 0.04))
-        font_path = _find_font("Arial", False, False)
-        try:
-            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
-        except Exception:
-            font = ImageFont.load_default()
-
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-
-        # One full revolution per video duration. Position advances along a
-        # rectangular perimeter: top (L→R), right (T→B), bottom (R→L), left (B→T).
-        gap = max(12, int(vh * 0.022))
-        perim = 2 * vw + 2 * vh
-        dur = duration if duration and duration > 0 else 1.0
-        dist = (ts / dur) % 1.0
-        total = perim + 2 * tw
-        d = dist * total
-
-        if d <= vw:
-            x, y = d - tw, gap
-        elif d <= vw + vh:
-            t = d - vw
-            x, y = vw - tw - gap, t
-        elif d <= 2 * vw + vh:
-            t = d - vw - vh
-            x, y = vw - t, vh - th - gap
-        else:
-            t = d - 2 * vw - vh
-            x, y = gap, vh - t
-
-        draw.text(
-            (x, y),
-            text,
-            font=font,
-            fill=(255, 255, 255, 153),
-        )
-
-    return np.array(img)
-
-
-def burn_subtitles_pillow(
-    video_path_str: str,
-    srt_path_str: str,
-    out_path: str,
-    progress_callback=None,
-    chunk_log_fn=None,
-    audio_source: str | None = None,
-    style: dict | None = None,
-    fixed_size: bool = False,
-    watermark: dict | None = None,
-    target_size: tuple[int, int] | None = None,
-    workers: int = 0,
-):
-    """Burn subtitles using OpenCV + Pillow (no libass required).
-
-    Frames are upscaled to ``target_size`` (>=1080 short edge) BEFORE the
-    subtitle/watermark are drawn, so text and logo are rendered crisply at the
-    final resolution instead of being upscaled afterwards.
-
-    Execution modes:
-    - ``workers`` <= 1: single process; frames piped straight into one ffmpeg
-      H.264 encode (no lossy intermediate).
-    - ``workers`` > 1 (auto when 0): the video is split into contiguous
-      segments; each segment is burned + encoded in a separate process (so the
-      CPU-heavy decode/render/blend work spreads across cores), then the
-      segments are concatenated with ``-c copy`` (lossless) and audio muxed.
-      More segments than workers are submitted so ``progress_callback``/``chunk_log_fn``
-      fire on finer granularity while only ``workers`` processes run at once.
-    """
-    import cv2
-
-    content = Path(srt_path_str).read_text(encoding="utf-8")
-    entries = _resolve_overlaps(parse_srt(content))
-    if not entries:
-        raise RuntimeError("No subtitle entries")
-
-    font_path = _find_font(
-        (style or get_subtitle_style()).get("font_family", "Arial"),
-        (style or get_subtitle_style()).get("bold"),
-        (style or get_subtitle_style()).get("italic"),
-    )
-
-    cap = cv2.VideoCapture(video_path_str)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path_str}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = (total / fps) if fps and total else 0.0
-    tw, th = target_size if target_size else target_dims_min1080(vw, vh)
-    cap.release()
-
-    if workers <= 0:
-        # Auto: 2 concurrent processes — a safe ceiling for laptop/thermal
-        # limits and 1440p HEVC decode. Set STE_hardcode_workers to override.
-        workers = min(2, os.cpu_count() or 2)
-
-    # Parallel burn only pays off on videos that are long enough — each spawned
-    # process costs a few seconds of startup, so keep short clips on the simple
-    # single-process path.
-    use_parallel = workers >= 2 and total > 0 and (total / fps) >= 30
-
-    if use_parallel:
-        return _burn_parallel(
-            video_path_str, srt_path_str, out_path,
-            workers=workers, total=total, fps=fps, tw=tw, th=th,
-            duration=duration, font_path=font_path, style=style,
-            fixed_size=fixed_size, watermark=watermark,
-            audio_source=audio_source, progress_callback=progress_callback,
-            chunk_log_fn=chunk_log_fn,
-        )
-
-    return _burn_single(
-        video_path_str, srt_path_str, out_path,
-        total=total, fps=fps, vw=vw, vh=vh, tw=tw, th=th,
-        font_path=font_path, style=style, fixed_size=fixed_size,
-        watermark=watermark, audio_source=audio_source,
-        progress_callback=progress_callback,
-    )
-
-
-def _burn_single(
-    video_path_str: str,
-    srt_path_str: str,
-    out_path: str,
-    *,
-    total: int,
-    fps: float,
-    vw: int,
-    vh: int,
-    tw: int,
-    th: int,
-    font_path: str | None,
-    style: dict | None,
-    fixed_size: bool,
-    watermark: dict | None,
-    audio_source: str | None,
-    progress_callback,
-):
-    import cv2
-
-    entries = _resolve_overlaps(parse_srt(Path(srt_path_str).read_text(encoding="utf-8")))
-    duration = (total / fps) if fps and total else 0.0
-
-    cap = cv2.VideoCapture(video_path_str)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path_str}")
-
-    # Single-pass H.264 encode: raw BGR frames piped into ffmpeg + muxed audio.
-    audio_in = audio_source or video_path_str
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "bgr24",
-        "-s", f"{tw}x{th}", "-r", f"{fps}",
-        "-i", "-",
-        "-i", audio_in,
-        "-map", "0:v:0",
-        "-map", "1:a:0?",
-        "-c:v", "libx264", "-preset", "faster", "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-shortest",
-        out_path,
-    ]
-    proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    # Overlay caches are LRU-bounded so memory stays flat no matter how many
-    # unique subtitle lines appear. A full-frame RGBA overlay is ~8 MB at 1080p;
-    # unbounded growth here was silently killing the worker (OOM) on long videos.
-    MAX_OVERLAY_CACHE = 32
-    cache = OrderedDict()
-    # Subtitle text is drawn at the target resolution, so the background
-    # interpolation only affects the underlying video frame — a fast kernel is
-    # fine (AREA for downscale, LINEAR for upscale).
-    interp = cv2.INTER_AREA if (tw < vw or th < vh) else cv2.INTER_LINEAR
-    idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if tw != vw or th != vh:
-            frame = cv2.resize(frame, (tw, th), interpolation=interp)
-        ts = idx / fps
-        active = [e for e in entries if e.start <= ts < e.end]
-        if active:
-            # Overlapping subtitles: never concatenate. Prioritize the one that
-            # started LAST (the "later" subtitle wins), so a new line taking
-            # over mid-scene replaces the previous one instead of merging text.
-            e = max(active, key=lambda x: (x.start, x.end))
-            text = e.text
-            if text not in cache:
-                if len(cache) >= MAX_OVERLAY_CACHE:
-                    cache.popitem(last=False)
-                cache[text] = _render_subtitle(text, tw, th, font_path, style, fixed_size)
-            else:
-                cache.move_to_end(text)
-            frame = _overlay_subtitle(frame, cache[text])
-        if watermark:
-            wm = _render_watermark_frame(tw, th, ts, duration, watermark)
-            if wm is not None:
-                frame = _overlay_subtitle(frame, wm)
-        try:
-            assert proc.stdin is not None
-            proc.stdin.write(frame.tobytes())
-        except BrokenPipeError:
-            break
-        idx += 1
-        if progress_callback and total and idx % 10 == 0:
-            progress_callback(min(90, int(idx / total * 90)))
-
-    cap.release()
-    assert proc.stdin is not None
-    proc.stdin.close()
-    err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-    ret = proc.wait()
-    if ret != 0:
-        raise RuntimeError(f"FFmpeg burn encode failed (code {ret}): {err[:1000]}")
-
-    if progress_callback:
-        progress_callback(100)
-    return Path(out_path)
-
-
-def _burn_segment(
-    video_path: str,
-    srt_path: str,
-    start: int,
-    end: int,
-    *,
-    tw: int,
-    th: int,
-    fps: float,
-    duration: float,
-    font_path: str | None,
-    style: dict | None,
-    fixed_size: bool,
-    watermark: dict | None,
-    out_seg: str,
-    progress_file: str | None = None,
-) -> int:
-    """Burn frames [start, end) to a standalone video-only segment.
-
-    Top-level function so it can be pickled into a ProcessPoolExecutor worker
-    (macOS uses spawn). Returns the number of frames written.
-
-    When ``progress_file`` is set, the worker periodically writes its running
-    frame count there (a tiny int) so the parent can report smooth progress
-    even while the segment is still encoding.
-    """
-    import cv2
-
-    entries = _resolve_overlaps(parse_srt(Path(srt_path).read_text(encoding="utf-8")))
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-    vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    # Seek ~1.5s before the segment start so H.264 keyframe seeking lands
-    # correctly; warm-up frames are decoded then discarded.
-    warm = max(0, start - max(1, int(fps * 1.5)))
-    cap.set(cv2.CAP_PROP_POS_FRAMES, warm)
-
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "bgr24",
-        "-s", f"{tw}x{th}", "-r", f"{fps}",
-        "-i", "-",
-        "-c:v", "libx264", "-preset", "faster", "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        out_seg,
-    ]
-    proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    MAX_OVERLAY_CACHE = 32
-    cache = OrderedDict()
-    interp = cv2.INTER_AREA if (tw < vw or th < vh) else cv2.INTER_LINEAR
-
-    idx = warm
-    written = 0
-    write_every = max(1, int(fps * 0.5))  # progress tick every ~0.5s
-    while idx < end:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if idx < start:
-            idx += 1
-            continue
-        if tw != vw or th != vh:
-            frame = cv2.resize(frame, (tw, th), interpolation=interp)
-        ts = idx / fps
-        active = [e for e in entries if e.start <= ts < e.end]
-        if active:
-            e = max(active, key=lambda x: (x.start, x.end))
-            text = e.text
-            if text not in cache:
-                if len(cache) >= MAX_OVERLAY_CACHE:
-                    cache.popitem(last=False)
-                cache[text] = _render_subtitle(text, tw, th, font_path, style, fixed_size)
-            else:
-                cache.move_to_end(text)
-            frame = _overlay_subtitle(frame, cache[text])
-        if watermark:
-            wm = _render_watermark_frame(tw, th, ts, duration, watermark)
-            if wm is not None:
-                frame = _overlay_subtitle(frame, wm)
-        try:
-            assert proc.stdin is not None
-            proc.stdin.write(frame.tobytes())
-        except BrokenPipeError:
-            break
-        idx += 1
-        written += 1
-        if progress_file and written % write_every == 0:
-            Path(progress_file).write_text(str(written))
-
-    cap.release()
-    assert proc.stdin is not None
-    proc.stdin.close()
-    err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-    ret = proc.wait()
-    if ret != 0:
-        raise RuntimeError(f"FFmpeg segment encode failed (code {ret}): {err[:500]}")
-    return written
-
-
-def _run_ffmpeg(cmd):
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    _, err = proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"FFmpeg failed (code {proc.returncode}): "
-            f"{err.decode('utf-8', 'replace')[:1000]}"
-        )
-
-
-def _burn_parallel(
-    video_path_str: str,
-    srt_path_str: str,
-    out_path: str,
-    *,
-    workers: int,
-    total: int,
-    fps: float,
-    tw: int,
-    th: int,
-    duration: float,
-    font_path: str | None,
-    style: dict | None,
-    fixed_size: bool,
-    watermark: dict | None,
-    audio_source: str | None,
-    progress_callback,
-    chunk_log_fn=None,
-):
-    import numpy as np
-
-    seg_dir = settings.temp_dir / "hardcode" / f"burn_{Path(out_path).stem}_{int(time.time() * 1000)}"
-    seg_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        # Submit more chunks than workers so the UI gets progress/log updates on
-        # finer granularity while only `workers` processes run concurrently.
-        n_chunks = max(workers * 2, 4)
-        bounds = np.linspace(0, total, n_chunks + 1, dtype=int)
-        chunks = [(int(bounds[i]), int(bounds[i + 1])) for i in range(n_chunks)]
-        chunks = [(s, e) for s, e in chunks if e > s]
-        n = len(chunks)
-
-        done_frames = 0
-        prog_files = [seg_dir / f"seg_{i:03d}.progress" for i in range(n)]
-        stop_evt = threading.Event()
-        last_reported = {"pct": 0}
-
-        # Background thread polls every segment's progress file (~0.5s ticks
-        # written by each child) and reports smooth overall progress. Without
-        # this the bar would sit frozen at the kick value until the FIRST
-        # segment of a long video finally completes.
-        def _reporter():
-            while not stop_evt.is_set():
-                frames = 0
-                for pf in prog_files:
-                    try:
-                        frames += int(pf.read_text())
-                    except Exception:
-                        pass
-                if progress_callback and total:
-                    pct = min(90, int(frames / total * 90))
-                    if pct > last_reported["pct"]:
-                        last_reported["pct"] = pct
-                        progress_callback(pct)
-                stop_evt.wait(0.5)
-
-        reporter = threading.Thread(target=_reporter, daemon=True)
-        reporter.start()
-
-        # NOTE: do NOT use `with ProcessPoolExecutor(...) as ex` — its __exit__ runs
-        # shutdown(wait=True), which blocks forever on a hung worker and wedges the
-        # whole server. Manage teardown manually with a bounded wait and force-kill
-        # any lingering child processes (they can hold the server's listening socket
-        # fd, which previously made the backend appear "listening" but dead).
-        ex = ProcessPoolExecutor(max_workers=min(workers, n))
-        try:
-            futures = {}
-            for i, (s, e) in enumerate(chunks):
-                seg_out = str(seg_dir / f"seg_{i:03d}.mp4")
-                fut = ex.submit(
-                    _burn_segment,
-                    video_path_str, srt_path_str, s, e,
-                    tw=tw, th=th, fps=fps, duration=duration,
-                    font_path=font_path, style=style, fixed_size=fixed_size,
-                    watermark=watermark, out_seg=seg_out,
-                    progress_file=str(prog_files[i]),
-                )
-                futures[fut] = (s, e, i)
-
-            remaining = set(futures)
-            completed_count = 0
-            while remaining:
-                done, remaining = wait(
-                    remaining, timeout=HARDCODE_STEP_TIMEOUT, return_when=FIRST_COMPLETED
-                )
-                if not done:
-                    raise RuntimeError(
-                        "Encode phụ đề bị treo: không có worker nào hoàn thành trong "
-                        f"{HARDCODE_STEP_TIMEOUT}s. Đã hủy tiến trình để không làm treo server."
-                    )
-                for fut in done:
-                    fut.result()  # propagate worker errors
-                    s, e, i = futures[fut]
-                    done_frames += (e - s)
-                    try:
-                        prog_files[i].write_text(str(e - s))  # finalize its count
-                    except Exception:
-                        pass
-                    completed_count += 1
-                    if chunk_log_fn:
-                        chunk_log_fn(
-                            f"Đã encode xong đoạn {completed_count}/{n} của video — đang tiếp tục..."
-                        )
-        finally:
-            ex.shutdown(wait=False, cancel_futures=True)
-            for _p in (getattr(ex, "_processes", None) or {}).values():
-                try:
-                    if _p.is_alive():
-                        _p.terminate()
-                except Exception:
-                    pass
-
-        stop_evt.set()
-        reporter.join(timeout=3)
-        if progress_callback and total:
-            progress_callback(min(90, int(done_frames / total * 90)))
-
-        seg_files = sorted(seg_dir.glob("seg_*.mp4"))
-        if not seg_files:
-            raise RuntimeError("No segments produced")
-
-        if chunk_log_fn:
-            chunk_log_fn("Ghép các đoạn đã encode (không giảm chất lượng)...")
-        list_file = seg_dir / "concat.txt"
-        list_file.write_text(
-            "".join(f"file '{seg.name}'\n" for seg in seg_files),
-            encoding="utf-8",
-        )
-
-        if audio_source:
-            joined = seg_dir / "joined.mp4"
-            _run_ffmpeg([
-                "ffmpeg", "-y", "-loglevel", "error", "-fflags", "+genpts",
-                "-f", "concat", "-safe", "0", "-i", str(list_file),
-                "-c", "copy", str(joined),
-            ])
-            if chunk_log_fn:
-                chunk_log_fn("Ghép audio lồng tiếng vào video...")
-            _run_ffmpeg([
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", str(joined), "-i", audio_source,
-                "-map", "0:v:0", "-map", "1:a:0?",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart", "-shortest", out_path,
-            ])
-        else:
-            # Không có audio lồng tiếng → concat segment, rồi mux audio GỐC của
-            # video (giống fallback của _burn_single) để clip không bị câm.
-            joined = seg_dir / "joined.mp4"
-            _run_ffmpeg([
-                "ffmpeg", "-y", "-loglevel", "error", "-fflags", "+genpts",
-                "-f", "concat", "-safe", "0", "-i", str(list_file),
-                "-c", "copy", str(joined),
-            ])
-            if chunk_log_fn:
-                chunk_log_fn("Ghép audio gốc vào video (không có audio lồng tiếng)...")
-            _run_ffmpeg([
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", str(joined), "-i", video_path_str,
-                "-map", "0:v:0", "-map", "1:a:0?",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart", "-shortest", out_path,
-            ])
-
-        if progress_callback:
-            progress_callback(100)
-        return Path(out_path)
-    finally:
-        shutil.rmtree(seg_dir, ignore_errors=True)
-
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def run_hardcode_sync(
     video_path_str: str,
@@ -978,6 +418,14 @@ def run_hardcode_sync(
     loop,
     job_id: str,
 ):
+    """Burn subtitles into the video using pure FFmpeg filters.
+
+    Builds a single FFmpeg command that chains:
+      scale → subtitles (libass) → overlay (logo) → drawtext (scrolling text)
+    and uses ``-progress pipe:1`` for smooth WebSocket progress updates.
+
+    Falls back to ``libx264`` when ``h264_videotoolbox`` is unavailable.
+    """
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 0, "phase": "hardcode"})
 
     def _log(message: str, level: str = "info"):
@@ -993,15 +441,16 @@ def run_hardcode_sync(
     if (tw, th) != (vw, vh):
         _log(f"Nâng độ phân giải xuất: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
 
+    # ── ASS subtitle file ──────────────────────────────────────────────────
     srt_content = Path(srt_path_str).read_text(encoding="utf-8")
     style = get_subtitle_style()
     if job.get("auto_fit") and job.get("region"):
         style = auto_fit_style(style, job["region"], vh, vw, srt_content)
         logger.info(
-            "hardcode job %s: auto-fit ON → font_size=%s margin_v=%s",
-            job_id, style["font_size"], style["margin_v"],
+            "hardcode job %s: auto_fit → font_size=%s margin_v=%s",
+            job_id, style.get("font_size"), style.get("margin_v"),
         )
-    elif job.get("style"):
+    if job.get("style"):
         style = apply_style_override(style, job["style"])
         logger.info(
             "hardcode job %s: manual style → font_size=%s margin_v=%s",
@@ -1013,167 +462,294 @@ def run_hardcode_sync(
     ass_path.write_text(ass_content, encoding="utf-8")
     _log(f"Đã tạo file ASS phụ đề ({len(parse_srt(srt_content))} dòng) — chuẩn bị encode...")
 
-    # Chạy ffmpeg từ thư mục chứa file .ass, chỉ truyền tên file tương đối
-    # để tránh lỗi escape đường dẫn tuyệt đối trong filter `subtitles`.
+    # FFmpeg subtitles filter: run from the ASS file's directory so a plain
+    # filename (no special chars) can be passed — avoids escaping issues.
     ass_dir = str(ass_path.parent)
     ass_filename = ass_path.name
 
-    # Use dubbed (instrumental + TTS Việt) audio if it exists, else original audio
+    # ── Audio source ───────────────────────────────────────────────────────
     video_id = Path(video_path_str).parent.name
     full_audio_path = settings.temp_dir / "tts" / video_id / "full_audio.m4a"
 
     def _valid_audio(p: Path) -> bool:
-        # A file can exist yet be corrupt (e.g. mux killed before finalize, no moov
-        # atom). Never feed a broken source to ffmpeg — fall back to original audio.
         return p.exists() and p.stat().st_size > 0 and _get_duration(str(p)) > 0
 
+    audio_src: Path | None = None
     if _valid_audio(full_audio_path):
         audio_src = full_audio_path
-    else:
-        if full_audio_path.exists():
-            logger.warning(
-                "hardcode job %s: dubbed audio invalid/corrupt, falling back to original audio", job_id
-            )
-            _log("Audio lồng tiếng bị lỗi — dùng audio gốc của video.")
-        audio_src = None
-    use_dubbed = audio_src is not None
-    if use_dubbed:
         logger.info("hardcode job %s: using dubbed audio (%s)", job_id, audio_src.name)
         _log("Dùng audio đã lồng tiếng Việt (full_audio/dubbed).")
     else:
-        logger.warning("hardcode job %s: no dubbed audio found → original audio", job_id)
-        _log("Không tìm thấy audio lồng tiếng Việt (chạy bước Lồng tiếng trước) — dùng audio gốc của video.", "warning")
+        if full_audio_path.exists():
+            logger.warning(
+                "hardcode job %s: dubbed audio invalid/corrupt, falling back", job_id,
+            )
+            _log("Audio lồng tiếng bị lỗi — tìm audio gốc thay thế.", "warning")
+        # Video Douyin (đã merge) là video-only → fallback về audio gốc tải trong
+        # bước merge (merged/{merge_id}_audio.mp4) để không mất tiếng.
+        merge_audio = _merge_audio_path(video_id)
+        if merge_audio and _valid_audio(merge_audio):
+            audio_src = merge_audio
+            logger.info("hardcode job %s: using original merged audio (%s)", job_id, audio_src.name)
+            _log("Không có audio lồng tiếng — dùng audio gốc của video.")
+        else:
+            logger.warning("hardcode job %s: no dubbed/merged audio → video's own audio", job_id)
+            _log(
+                "Không tìm thấy audio lồng tiếng/audio gốc (chạy bước Lồng tiếng trước) "
+                "— dùng audio của chính video.",
+                "warning",
+            )
+    use_external_audio = audio_src is not None
 
-    # Watermark (logo + scrolling text) is rendered only by the Pillow path, so
-    # when a watermark is configured we use Pillow even if libass is available.
+    # ── Watermark (logo + scrolling text) ──────────────────────────────────
     has_libass = _has_subtitles_filter()
     watermark = None
     if job.get("watermark"):
         from app.routers.config_router import get_watermark
+
         watermark = get_watermark(job.get("watermark_preset"))
         if watermark.get("text") or watermark.get("logo_path"):
-            logger.info("hardcode job %s: watermark ON (preset=%s, %s)", job_id, watermark.get("preset_id"), "text+logo" if watermark.get("logo_path") else "text")
-            _log(f"Bật watermark: {watermark.get('text') or 'logo'} (bộ: {watermark.get('preset_id') or 'default'}).")
+            logger.info(
+                "hardcode job %s: watermark ON (preset=%s, %s)",
+                job_id,
+                watermark.get("preset_id"),
+                "text+logo" if watermark.get("logo_path") else "text",
+            )
+            _log(
+                f"Bật watermark: {watermark.get('text') or 'logo'} "
+                f"(bộ: {watermark.get('preset_id') or 'default'})."
+            )
         else:
             logger.info("hardcode job %s: watermark requested but no text/logo configured", job_id)
             watermark = None
 
-    if not has_libass or watermark is not None:
-        if not has_libass:
-            logger.info("hardcode job %s: libass missing, using Pillow burn", job_id)
-            _log("FFmpeg thiếu libass → dùng engine vẽ phụ đề (Pillow) từng khung hình.")
-        elif watermark is not None:
-            logger.info("hardcode job %s: watermark requires Pillow burn", job_id)
-            _log("Có watermark (logo/chữ) → dùng engine vẽ phụ đề (Pillow) từng khung hình.")
+    # ── Build FFmpeg filter chain ──────────────────────────────────────────
+    has_logo = bool(watermark and watermark.get("logo_path"))
+    has_scroll = bool(watermark and watermark.get("text"))
+    use_complex = has_logo or has_scroll
 
-        def progress_cb(pct: int):
-            job["progress"] = pct
-            notify_ws_sync(loop, ws_clients, job_id, {
-                "type": "progress", "progress": pct, "phase": "hardcode",
-            })
+    # Escape the ASS filename for the subtitles filter.
+    ass_fn_esc = ass_filename.replace("\\", "\\\\").replace(":", "\\:")
 
-        # Pillow path: also emit a log line every 10% so the UI log feed moves.
-        last_pillow_log = {"pct": 0}
+    if use_complex:
+        # ── Complex filter graph: scale → subtitles → overlay → drawtext ──
+        fc_parts: list[str] = []
+        last_out = "0:v"
 
-        def _pillow_log_cb(pct: int):
-            progress_cb(pct)
-            if pct - last_pillow_log["pct"] >= 10:
-                last_pillow_log["pct"] = pct
-                _log(f"Đang vẽ phụ đề khung hình... {pct}%")
+        # Scale
+        fc_parts.append(f"[{last_out}]scale={tw}:{th}:flags=lanczos[scaled]")
+        last_out = "scaled"
 
-        w = settings.hardcode_workers or min(3, os.cpu_count() or 2)
-        if w >= 2 and total_dur and total_dur >= 30:
-            _log(f"Burn phụ đề song song trên {w} luồng xử lý — rút ngắn thời gian encode.")
-        else:
-            _log("Burn phụ đề xử lý tuần tự (video ngắn, không đáng bật đa luồng).")
+        # Subtitles (libass)
+        if has_libass:
+            fc_parts.append(f"[{last_out}]subtitles={ass_fn_esc}[sub]")
+            last_out = "sub"
 
-        # Kick progress so the bar isn't frozen at 0% while the first parallel
-        # segment (the slowest start) encodes.
-        progress_cb(2)
+        # Logo overlay
+        if has_logo:
+            logo_path = watermark["logo_path"]
+            logo_h = max(36, th // 7)
+            logo_margin = int(logo_h // 2.5)
+            fc_parts.append(
+                f"movie={_escape_fontfile(logo_path)},scale=-1:{logo_h}[logo]"
+            )
+            fc_parts.append(
+                f"[{last_out}][logo]overlay={logo_margin}:{logo_margin}[vlogo]"
+            )
+            last_out = "vlogo"
 
-        burn_subtitles_pillow(
-            video_path_str, srt_path_str, out_path,
-            progress_callback=_pillow_log_cb,
-            chunk_log_fn=_log,
-            audio_source=str(audio_src) if use_dubbed else None,
-            style=style,
-            # auto-fit or manual style must render at the exact size chosen.
-            fixed_size=bool(job.get("auto_fit")) or bool(job.get("style")),
-            watermark=watermark,
-            target_size=(tw, th),
-            workers=settings.hardcode_workers,
-        )
-        job["progress"] = 100
-        notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})
-        _log("Đã vẽ phụ đề xong toàn bộ khung hình.", "success")
-        return Path(out_path)
+        # Scrolling text drawtext
+        if has_scroll:
+            font_path = _find_font(
+                (style or get_subtitle_style()).get("font_family", "Arial"),
+                (style or get_subtitle_style()).get("bold"),
+                (style or get_subtitle_style()).get("italic"),
+            )
+            font_size = max(30, int(th * 0.04))
+            gap = max(12, int(th * 0.022))
+            dur = total_dur if total_dur and total_dur > 0 else 1.0
+            text_raw = watermark.get("text", "")
 
-    if use_dubbed:
-        cmd = [
-            "ffmpeg",
-            "-i", video_path_str,
-            "-i", str(audio_src),
-            # Scale to >=1080 FIRST, then burn subtitles rendered at that size.
-            "-vf", f"scale={tw}:{th}:flags=lanczos,subtitles={ass_filename}",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "libx264",
-            "-crf", "18",
-            "-preset", "medium",
-            "-c:a", "copy",
-            "-shortest",
-            "-y",
-            out_path,
-        ]
+            # FFmpeg drawtext expression for scrolling text around the border.
+            # ``mod(t/{dur},1)`` cycles [0,1) each revolution.
+            # ``text_w(text)`` gives pixel width of the drawn text.
+            # Perimeter total = 2*w + 2*h + 2*tw.
+            #
+            # Position mapping (d = progress * total):
+            #   d ≤ w          → top    (x = d-tw,     y = gap)
+            #   d ≤ w+h        → right  (x = w-tw-gap, y = d-w)
+            #   d ≤ 2w+h       → bottom (x = w-d+h,    y = h-th-gap)
+            #   else           → left   (x = gap,       y = 2h+2w-d)
+            #
+            # The text naturally wraps off-screen when coordinates go negative
+            # (FFmpeg clips automatically), so no ``enable`` condition is needed.
+            esc_text = _escape_drawtext(text_raw)
+            # text_w là HẰNG (không phải hàm) trong drawtext → trả độ rộng chữ.
+            d_expr = f"mod(t/{dur},1)*(2*w+2*h+2*text_w)"
+            x_expr = (
+                f"if(lte({d_expr},{tw}),{d_expr}-{tw},"
+                f"if(lte({d_expr},{tw + th}),{tw}-{tw}-{gap},"
+                f"if(lte({d_expr},{2 * tw + th}),{tw}-{d_expr}+{th},{gap})))"
+            )
+            y_expr = (
+                f"if(lte({d_expr},{tw}),{gap},"
+                f"if(lte({d_expr},{tw + th}),{d_expr}-{tw},"
+                f"if(lte({d_expr},{2 * tw + th}),{th}-{tw}-{gap},{th}-{d_expr}+{2 * tw + th})))"
+            )
+            fc_parts.append(
+                f"[{last_out}]drawtext="
+                f"fontfile={_escape_fontfile(font_path)}:"
+                f"fontsize={font_size}:"
+                f"fontcolor=white@0.6:"
+                f"text={esc_text}:"
+                f"x='{x_expr}':"
+                f"y='{y_expr}'"
+                f"[vout]"
+            )
+            last_out = "vout"
+
+        filter_complex = ";".join(fc_parts)
     else:
-        cmd = [
-            "ffmpeg",
-            "-i", video_path_str,
-            "-vf", f"scale={tw}:{th}:flags=lanczos,subtitles={ass_filename}",
-            "-c:v", "libx264",
-            "-crf", "18",
-            "-preset", "medium",
-            "-c:a", "copy",
-            "-y",
-            out_path,
-        ]
+        # ── Simple chain: just scale + subtitles via -vf ───────────────────
+        vf_parts = [f"scale={tw}:{th}:flags=lanczos"]
+        if has_libass:
+            vf_parts.append(f"subtitles={ass_fn_esc}")
+
+    # ── Encoder selection ──────────────────────────────────────────────────
+    def _has_videotoolbox() -> bool:
+        try:
+            out = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return "h264_videotoolbox" in (out.stdout or "")
+        except Exception:
+            return False
+
+    use_vtb = _has_videotoolbox()
+    if use_vtb:
+        v_enc = ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
+    else:
+        v_enc = ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+
+    # ── Assemble the full FFmpeg command ───────────────────────────────────
+    # Input layout: [0]=video, [1]=audio (nếu có nguồn audio riêng), [last]=logo
+    cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
+    cmd += ["-i", video_path_str]
+
+    audio_idx = 0  # input index for the audio stream
+    if use_external_audio:
+        cmd += ["-i", str(audio_src)]
+        audio_idx = 1
+
+    logo_idx = -1
+    if has_logo:
+        cmd += ["-i", watermark["logo_path"]]
+        logo_idx = audio_idx + 1
+
+    # Video filters
+    if use_complex:
+        cmd += ["-filter_complex", filter_complex]
+        cmd += ["-map", f"[{last_out}]"]
+    else:
+        cmd += ["-vf", ",".join(vf_parts)]
+
+    # Audio mapping
+    if use_external_audio:
+        cmd += ["-map", f"{audio_idx}:a"]
+    else:
+        cmd += ["-map", "0:a?"]
+
+    cmd += v_enc
+    cmd += ["-c:a", "aac", "-b:a", "128k"]
+    cmd += ["-movflags", "+faststart", "-shortest"]
+    cmd += ["-progress", "pipe:1", "-stats_period", "0.5"]
+    cmd += [out_path]
 
     logger.info("hardcode job %s: %s", job_id, " ".join(shlex.quote(str(p)) for p in cmd))
-    _log("Khởi động FFmpeg encode phụ đề cứng (libass)...")
+    _log("Khởi động FFmpeg encode phụ đề cứng...")
 
+    # ── Run FFmpeg with progress tracking ──────────────────────────────────
     proc = subprocess.Popen(
         cmd,
         cwd=ass_dir,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        universal_newlines=True,
-        bufsize=1,
     )
 
     last_progress = 0
-    assert proc.stderr is not None
-    for line in proc.stderr:
+
+    def _progress_watcher():
+        """Read FFmpeg ``-progress`` output on stdout and push WebSocket updates."""
+        nonlocal last_progress
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if job.get("cancelled"):
+                proc.terminate()
+                return
+            if line.startswith("out_time_us="):
+                try:
+                    us = int(line.split("=", 1)[1])
+                    secs = us / 1_000_000
+                    if total_dur and total_dur > 0:
+                        pct = min(99, int(secs / total_dur * 100))
+                        if pct >= last_progress + 10:
+                            last_progress = pct
+                            job["progress"] = pct
+                            notify_ws_sync(loop, ws_clients, job_id, {
+                                "type": "progress", "progress": pct, "phase": "hardcode",
+                            })
+                            _log(f"FFmpeg đang encode phụ đề... {pct}%")
+                except (ValueError, ZeroDivisionError):
+                    pass
+            elif line.startswith("out_time="):
+                # Fallback: parse HH:MM:SS.ss format
+                try:
+                    ts = line.split("=", 1)[1]
+                    h, m, s = ts.split(":")
+                    secs = int(h) * 3600 + int(m) * 60 + float(s)
+                    if total_dur and total_dur > 0:
+                        pct = min(99, int(secs / total_dur * 100))
+                        if pct >= last_progress + 10:
+                            last_progress = pct
+                            job["progress"] = pct
+                            notify_ws_sync(loop, ws_clients, job_id, {
+                                "type": "progress", "progress": pct, "phase": "hardcode",
+                            })
+                            _log(f"FFmpeg đang encode phụ đề... {pct}%")
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+    progress_thread = threading.Thread(target=_progress_watcher, daemon=True)
+    progress_thread.start()
+
+    # Read stderr in a separate thread so the pipe buffer doesn't block FFmpeg.
+    stderr_lines: list[str] = []
+
+    def _read_stderr():
+        assert proc.stderr is not None
+        for raw_line in proc.stderr:
+            stderr_lines.append(raw_line.decode("utf-8", errors="replace"))
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
+
+    # Wait for completion, checking for cancellation periodically.
+    while proc.poll() is None:
         if job.get("cancelled"):
             proc.terminate()
+            proc.wait()
             raise JobCancelled()
-        if "time=" in line and total_dur > 0:
-            try:
-                time_str = line.split("time=")[1].split()[0]
-                h, m, s = time_str.split(":")
-                secs = int(h) * 3600 + int(m) * 60 + float(s)
-                pct = min(99, int(secs / total_dur * 100))
-                if pct >= last_progress + 10:
-                    last_progress = pct
-                    job["progress"] = pct
-                    notify_ws_sync(loop, ws_clients, job_id, {
-                        "type": "progress", "progress": pct, "phase": "hardcode",
-                    })
-                    _log(f"FFmpeg đang encode phụ đề... {pct}%")
-            except Exception:
-                pass
+        time.sleep(0.5)
 
-    ret = proc.wait()
+    progress_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+
+    ret = proc.returncode
     if ret != 0:
-        raise RuntimeError(f"FFmpeg hardcode failed with code {ret}")
+        err = "".join(stderr_lines)[:1000]
+        raise RuntimeError(f"FFmpeg hardcode failed with code {ret}: {err}")
 
     job["progress"] = 100
     notify_ws_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 100, "phase": "done"})

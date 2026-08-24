@@ -49,6 +49,17 @@ def _read_user_config() -> dict:
     return {}
 
 
+def _original_name(video_id: str) -> str:
+    """Lấy tên gốc của video từ videos/{video_id}/meta.json (bỏ đuôi .mp4)."""
+    meta = settings.temp_dir / "videos" / video_id / "meta.json"
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+        name = str(data.get("filename", "")).strip()
+        return name.rsplit(".", 1)[0].strip() if name else ""
+    except Exception:
+        return ""
+
+
 def generate_video_meta(video_id: str) -> dict:
     """Generate meta.json from video context + share text via Gemini."""
     context = load_video_context(video_id) or ""
@@ -91,6 +102,15 @@ def generate_video_meta(video_id: str) -> dict:
     meta.setdefault("episode", 1)
     meta.setdefault("original_title", "")
     meta.setdefault("original_description", "")
+
+    # Chuẩn hoá title: strip + cắt ≤100 ký tự (giới hạn YouTube). Nếu Gemini trả
+    # title rỗng thì fallback về tên gốc của video để tránh lỗi "invalidTitle".
+    title = str(meta.get("title", "")).strip()
+    if not title:
+        title = _original_name(video_id) or f"Video {video_id}"
+    title = title[:100].strip()
+    meta["title"] = title
+    meta["ctr_title"] = title
 
     out_dir = settings.temp_dir / "meta" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -374,6 +374,10 @@ const dictionaries = {
     "region.confirm": "Confirm",
     "region.capture": "Capture frame",
     "region.extract": "Extract",
+    "region.startTime": "Start from",
+    "region.useCurrentTime": "Use current time",
+    "region.seconds": "seconds",
+    "region.ocrStartFrom": "OCR will start from {time}s",
 
     // VideoPlayer
     "videoplayer.pause": "Pause",
@@ -1210,6 +1214,10 @@ const dictionaries = {
     "region.confirm": "Xác nhận",
     "region.capture": "Chụp khung hình",
     "region.extract": "Trích xuất",
+    "region.startTime": "Bắt đầu từ",
+    "region.useCurrentTime": "Dùng thời điểm hiện tại",
+    "region.seconds": "giây",
+    "region.ocrStartFrom": "OCR sẽ bắt đầu từ {time}s",
 
     // VideoPlayer
     "videoplayer.pause": "Tạm dừng",

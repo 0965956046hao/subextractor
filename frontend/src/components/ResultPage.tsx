@@ -12,6 +12,7 @@ interface Props {
   region: Region;
   lang?: OcrLang;
   ocrType?: OcrType;
+  startTime?: number;
   onReset: () => void;
   onDone?: () => void;
   onViewLibrary?: () => void;
@@ -265,6 +266,7 @@ export default function ResultPage({
   region,
   lang = "ch",
   ocrType = "apple",
+  startTime,
   onReset,
   onDone,
   onViewLibrary,
@@ -348,7 +350,7 @@ export default function ResultPage({
     (async () => {
       try {
         appendLog(t("result.sendingRequest"));
-        const job = await startProcess(videoId, region, lang, ocrType);
+        const job = await startProcess(videoId, region, lang, ocrType, undefined, startTime);
         jobIdRef.current = job.job_id;
         setPhase("queued");
         connectWs(job.job_id);

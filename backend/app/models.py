@@ -19,6 +19,8 @@ class ProcessRequest(BaseModel):
     fps: int | None = None
     lang: str = "ch"
     ocr_type: OcrType = "apple"
+    start_time: float | None = None  # Skip frames before this timestamp (seconds)
+    end_time: float | None = None    # Stop at this timestamp (seconds)
 
 
 class LogEntry(BaseModel):

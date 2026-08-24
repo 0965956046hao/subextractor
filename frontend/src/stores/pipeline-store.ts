@@ -899,6 +899,12 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
     await sleep(800);
     try {
       const r = await fetch(`/api/video-merge/${jobId}`);
+      if (r.status === 404) {
+        return {
+          status: "error",
+          error: "Merge job không tồn tại (backend đã restart?).",
+        };
+      }
       if (!r.ok) continue;
       fails = 0;
       const d = await r.json();
@@ -1263,19 +1269,22 @@ function appendLog(id: string, msg: string, level = "info") {
 }
 
 // Đảm bảo voice_map.json tồn tại (multi-voice CapCut) và CHỜ tạo xong rồi mới tiếp tục.
+// Cache kết quả theo video_id trong session để tránh GET/POST lặp lại (ensure
+// được gọi 2 lần: bước dịch và bước lồng tiếng).
+const voiceMapEnsuredIds = new Set<string>();
+
 async function ensureVoiceMap(
   videoId: string,
   id: string,
   targetLang: string = "vi",
 ): Promise<boolean> {
+  if (voiceMapEnsuredIds.has(videoId)) return true;
   try {
     const vmCheck = await fetch(`/api/voice-map/${videoId}`);
     const vmData = await vmCheck.json();
     if (vmData.exists) {
-      appendLog(
-        id,
-        `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`,
-      );
+      voiceMapEnsuredIds.add(videoId);
+      appendLog(id, `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`);
       return true;
     }
     appendLog(
@@ -1289,6 +1298,7 @@ async function ensureVoiceMap(
     });
     const vmd = await vmRes.json();
     if (vmRes.ok && vmd.status === "done") {
+      voiceMapEnsuredIds.add(videoId);
       appendLog(
         id,
         `Đã tạo voice_map.json: ${vmd.voices} dòng có giọng riêng.`,
@@ -1520,28 +1530,19 @@ async function runPrep(id: string, startStep = 0) {
         );
         markStepEnd(id, 0);
 
-        // Lấy thumbnail + ảnh ngữ cảnh (big_thumbs) trước — sau đó merge sẽ tải
-        // các file này song song với video + audio.
-        try {
-          const tr = await fetch("/api/video-download/thumbnail", {
-            method: "POST",
-            headers: JSON_HEADERS,
-            body: JSON.stringify({ url: cleaned }),
-          });
-          const td = await tr.json();
-          if (td.thumbnail) {
-            thumbUrl = td.thumbnail;
-            patch(id, { thumbnail: td.thumbnail });
-            appendLog(id, `Thumbnail: ${td.thumbnail}`);
-          } else {
-            appendLog(id, "Thumbnail: không lấy được");
-          }
-          if (Array.isArray(td.bigThumbs) && td.bigThumbs.length) {
-            bigThumbsUrls = td.bigThumbs;
-            patch(id, { bigThumbs: td.bigThumbs });
-          }
-        } catch {
+        // Thumbnail + big_thumbs giờ được resolve trả về ngay trong cùng 1
+        // Chrome session (gộp từ /api/video-download/thumbnail). Resolve đã chờ
+        // đủ 15s cho response detail nên không cần fallback mở Chrome lần 2.
+        if (rd.thumbnail) {
+          thumbUrl = rd.thumbnail;
+          patch(id, { thumbnail: rd.thumbnail });
+          appendLog(id, `Thumbnail: ${rd.thumbnail}`);
+        } else {
           appendLog(id, "Thumbnail: không lấy được");
+        }
+        if (Array.isArray(rd.bigThumbs) && rd.bigThumbs.length) {
+          bigThumbsUrls = rd.bigThumbs;
+          patch(id, { bigThumbs: rd.bigThumbs });
         }
       }
     }
@@ -1593,10 +1594,10 @@ async function runPrep(id: string, startStep = 0) {
         appendLog(id, `Gửi import-video (filename: ${impName})…`);
         const impBody = mergeId
           ? {
+              // merge_id branch: backend copy thumbnail từ merged context,
+              // bỏ qua thumbnail_url/big_thumbs (đã tải trong bước merge).
               merge_id: mergeId,
               filename: impName,
-              thumbnail_url: thumbUrl || "",
-              big_thumbs: bigThumbsUrls,
             }
           : {
               url: videoUrl,
@@ -1702,8 +1703,8 @@ async function runPrep(id: string, startStep = 0) {
 }
 
 // ── Auto checks (dedup + timeline overlap) ─────────────────────────────────
-// Run twice in the pipeline — right after OCR (original SRT) and again after
-// translation (translated SRT) — so both files get the same double-check.
+// Chạy sau OCR (trên SRT gốc) và lại sau dịch (trên SRT dịch). Backend dùng
+// _srt_best_path nên tự chọn đúng file: bản dịch nếu có, ngược lại bản gốc.
 async function runSrtAutoChecks(id: string, videoId: string | null) {
   if (!videoId) return;
   // 1) Nội dung trùng: gộp các dòng liền kề giống nhau >=80% (dedup).
@@ -1821,50 +1822,6 @@ async function runPipeline(id: string, startStep = 4) {
   try {
     if (abortedPipelines.has(id)) return;
 
-    // 3.5 Watermark region selection — before delogo + OCR
-    if (
-      startStep <= 4 &&
-      cur.removeWatermarkEnabled &&
-      cur.removeWatermarkRegions.length === 0
-    ) {
-      patch(id, { stage: "watermark_region", resumeStep: 4 });
-      markStepStart(id, 4);
-      appendLog(id, "Kéo vùng watermark cần xoá trên video...");
-      const wmRegions = await waitForWatermarkRegion(id);
-      patch(id, { removeWatermarkRegions: wmRegions });
-      appendLog(
-        id,
-        `Đã chọn ${wmRegions.length} vùng watermark`,
-      );
-    }
-
-    // Re-read from store after patch to get updated removeWatermarkRegions
-    const curAfterWm = usePipelineStore.getState().pipelines.find((x) => x.id === id);
-    const wmRegionsNow = curAfterWm?.removeWatermarkRegions ?? [];
-
-    // 3.6 Delogo (remove watermark) — before OCR
-    if (startStep <= 4 && wmRegionsNow.length > 0) {
-      patch(id, { stage: "processing" });
-      appendLog(id, "Đang xoá watermark khỏi video...");
-      try {
-        const delogoRes = await fetch(`/api/delogo/${videoId}`, {
-          method: "POST",
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ regions: wmRegionsNow }),
-        });
-        if (!delogoRes.ok) {
-          const err = await delogoRes.json().catch(() => ({}));
-          throw new Error(err.detail || "Xoá watermark thất bại");
-        }
-        appendLog(id, "Đã xoá watermark thành công.");
-      } catch (e) {
-        appendLog(
-          id,
-          `Xoá watermark lỗi: ${e instanceof Error ? e.message : e} — tiếp tục với video gốc.`,
-        );
-      }
-    }
-
     // 4. OCR
     if (startStep <= 4) {
       if (!region) {
@@ -1879,8 +1836,12 @@ async function runPipeline(id: string, startStep = 4) {
       try {
         const srtCheck = await fetch(`/api/srt/${videoId}`);
         if (srtCheck.ok) {
-          const srtData = await srtCheck.json();
-          srtExists = Boolean(srtData?.content?.trim());
+          try {
+            const srtData = await srtCheck.json();
+            srtExists = Boolean(srtData?.content?.trim());
+          } catch {
+            // Response is not JSON — SRT check failed, continue to OCR
+          }
         }
       } catch {
         // ignore — chạy OCR bình thường
@@ -1903,17 +1864,154 @@ async function runPipeline(id: string, startStep = 4) {
             ocr_type: ocrType,
           }),
         });
-        const pd = await pr.json();
-        if (!pr.ok) {
-          appendLog(id, `OCR HTTP ${pr.status}: ${pd.detail || "lỗi"}`);
-          throw new Error(pd.detail || "Không thể bắt đầu OCR");
+        let pd: Record<string, unknown> = {};
+        try {
+          pd = await pr.json();
+        } catch {
+          const text = await pr.text().catch(() => "");
+          appendLog(id, `OCR HTTP ${pr.status}: ${text.slice(0, 500)}`);
+          throw new Error(`OCR server error ${pr.status}: ${text.slice(0, 200)}`);
         }
-        const ps = await pollJob(pd.job_id, tick(4));
+        if (!pr.ok) {
+          appendLog(id, `OCR HTTP ${pr.status}: ${(pd as any).detail || "lỗi"}`);
+          throw new Error((pd as any).detail || "Không thể bắt đầu OCR");
+        }
+        const jobId = (pd as any).job_id as string;
+        const ps = await pollJob(jobId, tick(4));
         if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
         appendLog(id, "OCR xong, đã có phụ đề.");
         // Double-check #1: chạy ngay trên SRT gốc (OCR) trước khi dịch.
         await runSrtAutoChecks(id, videoId);
         markStepEnd(id, 4);
+      }
+    }
+
+    // 3.5 Watermark region selection — sau OCR (trước delogo)
+    if (
+      startStep <= 4 &&
+      cur.removeWatermarkEnabled &&
+      cur.removeWatermarkRegions.length === 0
+    ) {
+      patch(id, { stage: "watermark_region", resumeStep: 4 });
+      markStepStart(id, 4);
+      appendLog(id, "Kéo vùng watermark cần xoá trên video...");
+      const wmRegions = await waitForWatermarkRegion(id);
+      patch(id, { removeWatermarkRegions: wmRegions });
+      appendLog(
+        id,
+        `Đã chọn ${wmRegions.length} vùng watermark`,
+      );
+    }
+
+    // Re-read from store after patch to get updated removeWatermarkRegions
+    const curAfterWm = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    const wmRegionsNow = curAfterWm?.removeWatermarkRegions ?? [];
+
+    // 3.6 Delogo (remove watermark) — sau OCR
+    let delogoFailed = false;
+    if (startStep <= 4 && wmRegionsNow.length > 0) {
+      // Check if delogo.mp4 already exists and is valid
+      let skipDelogo = false;
+      try {
+        const statusRes = await fetch(`/api/delogo/${videoId}/status`);
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          if (statusData.exists && statusData.valid) {
+            skipDelogo = true;
+            appendLog(id, "Delogo.mp4 đã tồn tại — bỏ qua bước xoá watermark.");
+            patch(id, { progress: 100, stepProgress: stepProgressFor("processing", 100) });
+          }
+        }
+      } catch {
+        // ignore — will run delogo
+      }
+
+      if (!skipDelogo) {
+        patch(id, { stage: "processing" });
+        appendLog(id, "Đang xoá watermark khỏi video...");
+        appendLog(id, `Regions: ${JSON.stringify(wmRegionsNow)}`);
+        try {
+          const delogoRes = await fetch(`/api/delogo/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ regions: wmRegionsNow }),
+          });
+
+          if (!delogoRes.ok) {
+            // Non-streaming error response
+            let errMsg = `HTTP ${delogoRes.status}`;
+            try {
+              const errBody = await delogoRes.json();
+              errMsg = (errBody as any).detail || errMsg;
+            } catch {
+              const text = await delogoRes.text().catch(() => "");
+              errMsg = text.slice(0, 500) || errMsg;
+            }
+            appendLog(id, `Delogo HTTP error ${delogoRes.status}: ${errMsg}`);
+            delogoFailed = true;
+          } else {
+            // SSE stream — read line by line
+            const reader = delogoRes.body?.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let delogoDone = false;
+
+            if (reader) {
+              while (!delogoDone) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+                for (const line of lines) {
+                  if (!line.startsWith("data: ")) continue;
+                  try {
+                    const evt = JSON.parse(line.slice(6));
+                    if (evt.type === "log") {
+                      appendLog(id, `[delogo] ${evt.message}`);
+                    } else if (evt.type === "progress") {
+                      // Update pipeline progress AND step progress for delogo
+                      const newStepProgress = stepProgressFor("processing", evt.pct);
+                      patch(id, { progress: evt.pct, stepProgress: newStepProgress });
+                    } else if (evt.type === "error") {
+                      appendLog(id, `[delogo] ERROR: ${evt.message}`);
+                      delogoFailed = true;
+                      delogoDone = true;
+                    } else if (evt.type === "done") {
+                      const elapsed =
+                        evt.elapsed != null ? ` trong ${evt.elapsed}s` : "";
+                      appendLog(
+                        id,
+                        `[delogo] Xoá watermark xong${elapsed} — output: ${evt.path} (${((evt.output_size || 0) / 1024 / 1024).toFixed(1)} MB)`,
+                      );
+                      patch(id, { progress: 100, stepProgress: stepProgressFor("processing", 100) });
+                      delogoDone = true;
+                    }
+                  } catch {
+                    // skip malformed lines
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          appendLog(
+            id,
+            `Xoá watermark lỗi: ${e instanceof Error ? e.message : e}`,
+          );
+          delogoFailed = true;
+        }
+      }
+
+      // Nếu delogo thất bại → dừng pipeline (OCR đã chạy xong).
+      if (delogoFailed) {
+        patch(id, { status: "error", stage: "error" });
+        appendLog(id, "Xoá watermark thất bại — dừng pipeline. Vui lòng chọn lại vùng và thử lại.");
+        return;
+      }
+
+      if (wmRegionsNow.length > 0) {
+        appendLog(id, "Delogo hoàn tất.");
       }
     }
 
@@ -1992,13 +2090,16 @@ async function runPipeline(id: string, startStep = 4) {
         );
         translateSkipped = true;
       } else {
-        // Resume: nếu bản dịch đúng ngôn ngữ đích đã tồn tại thì dùng thẳng kết quả.
+        // Resume: fetch 1 lần — nếu bản dịch đúng ngôn ngữ đích đã tồn tại thì
+        // dùng thẳng kết quả (tránh fetch 2 lần cùng URL).
         let translatedExists = false;
+        let srtText = "";
         try {
-          const trCheck = await fetch(
+          const srtRes = await fetch(
             `/api/download/translated/${videoId}?lang=${translateTarget}`,
           );
-          translatedExists = trCheck.ok;
+          translatedExists = srtRes.ok;
+          if (translatedExists) srtText = await srtRes.text();
         } catch {
           // ignore
         }
@@ -2028,15 +2129,17 @@ async function runPipeline(id: string, startStep = 4) {
 
         patch(id, { stage: "saving" });
         appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
-        const srtRes = await fetch(
-          `/api/download/translated/${videoId}?lang=${translateTarget}`,
-        );
-        if (!srtRes.ok) {
-          throw new Error(
-            "Không tải được bản dịch phụ đề (máy chủ trả lỗi). Vui lòng chạy lại bước dịch.",
+        if (!translatedExists || !srtText) {
+          const srtRes = await fetch(
+            `/api/download/translated/${videoId}?lang=${translateTarget}`,
           );
+          if (!srtRes.ok) {
+            throw new Error(
+              "Không tải được bản dịch phụ đề (máy chủ trả lỗi). Vui lòng chạy lại bước dịch.",
+            );
+          }
+          srtText = await srtRes.text();
         }
-        let srtText = await srtRes.text();
 
         // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
         // trong bản gốc mà bản dịch không phủ (dòng bị rơi mất) và dòng chưa
@@ -2114,12 +2217,12 @@ async function runPipeline(id: string, startStep = 4) {
           );
         }
 
-        // Double-check #2: chạy trên SRT đã dịch — gộp dòng trùng + sửa overlap
-        // timeline (giống check đã chạy trên SRT gốc sau OCR). Chạy bằng code
-        // (không tốn Gemini), xong mới tới bước kiểm tra timeline thủ công.
+        // Chạy dedup + fix overlap trên BẢN DỊCH (endpoint dùng _srt_best_path
+        // nên khi đã có bản dịch sẽ thao tác trên file dịch) để ra file SRT cuối,
+        // rồi mới tới bước kiểm tra timeline thủ công.
         await runSrtAutoChecks(id, videoId);
 
-        // Optional: pause for the user to review the translated SRT in the
+        // (Optional) pause for the user to review the translated SRT in the
         // timeline-check popup (only when checkSubs is on). No auto-skip.
         if (cur.checkSubs && videoId) {
           appendLog(id, "Kiểm tra timeline phụ đề đã dịch...");
@@ -2319,8 +2422,12 @@ async function runPipeline(id: string, startStep = 4) {
       }
     }
 
-    // 9. Meta (bước cuối — sau khi có video cuối)
-    if (startStep <= 9) {
+    // 9 + 10. Meta (Gemini) và Thumbnail (fal.ai/ChatGPT) KHÔNG phụ thuộc nhau:
+    // chạy song song để tiết kiệm thời gian chờ (trước đây chạy tuần tự).
+    let abortAfterThumbnail = false;
+
+    const doMeta = async () => {
+      if (startStep > 9) return;
       patch(id, { stage: "meta" });
       markStepStart(id, 9);
       appendLog(id, "Tạo meta (tiêu đề/mô tả/tags) từ ngữ cảnh...");
@@ -2337,15 +2444,16 @@ async function runPipeline(id: string, startStep = 4) {
         appendLog(id, "Bỏ qua tạo meta (lỗi).");
       }
       markStepEnd(id, 9);
-    }
+    };
 
-    // 10. Cập nhật thumbnail (fal.ai image-to-image)
-    if (startStep <= 10) {
+    const doThumbnail = async () => {
+      if (startStep > 10) return;
       // Skip if thumbnail already exists (from previous run or already generated)
       if (cur.updatedThumbnailUrl) {
         appendLog(id, `Thumbnail đã có sẵn: ${cur.updatedThumbnailUrl}`);
         markStepSkipped(id, 10);
-      } else {
+        return;
+      }
       patch(id, { stage: "thumbnail" });
       markStepStart(id, 10);
 
@@ -2396,6 +2504,7 @@ async function runPipeline(id: string, startStep = 4) {
             `Cần đăng nhập ChatGPT: Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại.`,
           );
           markStepEnd(id, 10);
+          abortAfterThumbnail = true;
           return;
         }
 
@@ -2426,6 +2535,7 @@ async function runPipeline(id: string, startStep = 4) {
             markStepEnd(id, 10);
             // Use setTimeout to avoid deep recursion; enqueue will pick up from step 10
             enqueue(id, 10);
+            abortAfterThumbnail = true;
             return;
           }
           // "accept" → keep updatedThumbnailUrl, continue
@@ -2442,7 +2552,7 @@ async function runPipeline(id: string, startStep = 4) {
         try {
           await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
 
-          const deadline = Date.now() + 100_000;
+          const deadline = Date.now() + 180_000;
           let thumbUrl: string | null = null;
           let errorMsg: string | null = null;
           let done = false;
@@ -2471,7 +2581,7 @@ async function runPipeline(id: string, startStep = 4) {
           } else if (errorMsg) {
             appendLog(id, `Không cập nhật được thumbnail: ${errorMsg}`);
           } else {
-            appendLog(id, "Hết thời gian chờ thumbnail (100s).");
+            appendLog(id, "Hết thời gian chờ thumbnail (180s).");
           }
         } catch (e) {
           appendLog(
@@ -2481,8 +2591,11 @@ async function runPipeline(id: string, startStep = 4) {
         }
         markStepEnd(id, 10);
       }
-      }
-    }
+    };
+
+    await Promise.all([doMeta(), doThumbnail()]);
+    if (abortAfterThumbnail) return;
+
 
     // 11. Upload YouTube (chỉ khi bật auto upload)
     if (startStep <= 11) {

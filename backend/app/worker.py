@@ -30,7 +30,7 @@ from app.services.media_utils import _srt_path, _srt_best_path, _duration_covers
 logger = logging.getLogger(__name__)
 
 
-_executor = ThreadPoolExecutor(max_workers=1)
+_executor = ThreadPoolExecutor(max_workers=max(1, settings.job_workers))
 _context_executor = ThreadPoolExecutor(max_workers=1)
 
 
@@ -42,6 +42,8 @@ def enqueue_job(
     fps: int | None = None,
     lang: str = "ch",
     ocr_type: str = "apple",
+    start_time: float | None = None,
+    end_time: float | None = None,
 ) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -52,6 +54,8 @@ def enqueue_job(
         "fps": fps,
         "lang": lang,
         "ocr_type": ocr_type,
+        "start_time": start_time,
+        "end_time": end_time,
         "job_type": "ocr",
         "status": "queued",
         "phase": "",
@@ -60,7 +64,7 @@ def enqueue_job(
         "srt_path": None,
     }
     jobs[job_id] = job
-    logger.info("job %s: queued (lang=%s, ocr=%s)  |  %s", job_id, lang, ocr_type, video_path)
+    logger.info("job %s: queued (lang=%s, ocr=%s, start=%s, end=%s)  |  %s", job_id, lang, ocr_type, start_time, end_time, video_path)
     return job
 
 
@@ -116,8 +120,11 @@ def process_job_sync(
     job_id: str,
     loop: asyncio.AbstractEventLoop,
     job: dict,
+    lang: str,
+    start_time: float | None = None,
+    end_time: float | None = None,
 ):
-    logger.info("job %s: extracting frames...", job_id)
+    logger.info("job %s: extracting frames... (start=%s, end=%s)", job_id, start_time, end_time)
     t0 = time.time()
 
     import cv2
@@ -127,16 +134,29 @@ def process_job_sync(
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     cap.release()
 
+    # Adjust total frames if start_time or end_time specified
+    if start_time and start_time > 0:
+        skipped = int(start_time * video_fps)
+        total_frames = max(0, total_frames - skipped)
+    if end_time and end_time > 0:
+        end_frame = int(end_time * video_fps)
+        total_frames = min(total_frames, end_frame)
+
+    # Đếm khớp với stream_frames_generator (step = round(video_fps / target_fps))
+    # để progress bar không bị lệch do khác công thức round vs floor.
     if target_fps and target_fps > 0:
-        total_crops = max(1, round(total_frames * min(target_fps, video_fps) / video_fps))
+        step = max(1, int(round(video_fps / target_fps)))
+        total_crops = max(1, (total_frames + step - 1) // step)
     else:
         total_crops = total_frames
 
+    if start_time and start_time > 0:
+        job_log(job, ws_clients, loop, f"Bắt đầu OCR từ giây {start_time:.1f}…")
     job_log(job, ws_clients, loop, "Đang đọc từng khung hình của video…")
 
     crops = (
-        (crop_region(frame, region), frame, ts)
-        for frame, ts in stream_frames_generator(video_path, target_fps)
+        (crop_region(frame, region), ts)
+        for frame, ts in stream_frames_generator(video_path, target_fps, start_time=start_time, end_time=end_time)
     )
 
     job["progress"] = 0
@@ -170,12 +190,16 @@ def process_job_sync(
             "text",
         )
 
-    srt_content = generate_srt(
-        crops, region, ocr_engine,
-        progress_callback=progress_cb,
-        text_callback=text_cb,
-        total_frames=total_crops,
-    )
+    # Giữ lock suốt set_lang + vòng OCR: engine chia sẻ dHash cache + language
+    # nên 2 job song song (job_workers > 1) sẽ làm hỏng nhau nếu không tuần tự.
+    with ocr_engine.lock():
+        ocr_engine.set_lang(lang)
+        srt_content = generate_srt(
+            crops, ocr_engine,
+            progress_callback=progress_cb,
+            text_callback=text_cb,
+            total_frames=total_crops,
+        )
     t2 = time.time()
     logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)
     return srt_content
@@ -212,7 +236,6 @@ async def run_job(
             raise RuntimeError(
                 f"OCR engine '{ocr_type}' không khả dụng trên máy chủ này"
             )
-        ocr_engine.set_lang(lang)
         await job_log_async(
             job, ws_clients,
             f"Đang xử lý bằng {ocr_engine.name} (ngôn ngữ: {lang})",
@@ -225,6 +248,7 @@ async def run_job(
             process_job_sync,
             video_path, region, target_fps,
             ocr_engine, ws_clients, job_id, loop, job,
+            lang, job.get("start_time"), job.get("end_time"),
         )
 
         logger.info("job %s: processing started  |  %s", job_id, video_path)
@@ -519,7 +543,6 @@ async def run_translate_job(
 
         job["status"] = "processing"
         job["phase"] = "translate"
-        await job_log_async(job, ws_clients, "Bắt đầu dịch phụ đề bằng Gemini…")
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 0, "phase": "translate",
         })
@@ -536,12 +559,12 @@ async def run_translate_job(
             timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
-        job["status"] = "done"
-        job["progress"] = 100
-        await job_log_async(job, ws_clients, "Dịch hoàn tất! File SRT tiếng Việt đã sẵn sàng.", "success")
-
-        now_str = datetime.now().strftime("%H:%M:%S")
-        await _tg_notify(f"✅ <b>Dịch phụ đề xong!</b>\n🎬 {job['video_id']}\n🕐 {now_str}")
+        # run_translate_sync tự set status done/error + gửi WS. Chỉ thêm log
+        # success + Telegram khi thực sự done (tránh ghi đè status=error).
+        if job.get("status") == "done":
+            await job_log_async(job, ws_clients, "Dịch hoàn tất! File SRT tiếng Việt đã sẵn sàng.", "success")
+            now_str = datetime.now().strftime("%H:%M:%S")
+            await _tg_notify(f"✅ <b>Dịch phụ đề xong!</b>\n🎬 {job['video_id']}\n🕐 {now_str}")
 
     except JobCancelled:
         logger.info("translate job %s: cancelled", job_id)

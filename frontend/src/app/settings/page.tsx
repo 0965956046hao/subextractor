@@ -605,28 +605,24 @@ export default function SettingsPage() {
   };
 
   // Environment tools check/install
-  const isTauriEnv = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
   const checkTools = async () => {
-    if (!isTauriEnv) return;
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<Array<{name: string, display: string, installed: boolean}>>("check_tools");
-      setToolsStatus(result);
+      const res = await fetch("/api/tools/check");
+      const data = await res.json();
+      setToolsStatus(data.tools || []);
     } catch (e) {
       console.error("[tools] check error:", e);
     }
   };
 
   const handleInstallTools = async () => {
-    if (!isTauriEnv) return;
     setToolsInstalling(true);
     setToolsLogs([]);
     setShowToolsModal(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const logs = await invoke<Array<{tool: string, status: string, message: string}>>("install_tools");
-      setToolsLogs(logs);
+      const res = await fetch("/api/tools/install", { method: "POST" });
+      const data = await res.json();
+      setToolsLogs(data.logs || []);
       await checkTools();
     } catch (e) {
       console.error("[tools] install error:", e);

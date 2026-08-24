@@ -6,15 +6,16 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
-from app.services.media_utils import _srt_path, _video_path, _hardcoded_is_complete, _delogo_video_path
+from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _hardcoded_is_complete, _delogo_video_path
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
-
+import subprocess
+import math
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -39,7 +40,7 @@ def _original_download_name(video_id: str, suffix: str, ext: str = ".mp4") -> st
 
 @router.get("/api/srt/{video_id}/entries")
 async def get_srt_entries(video_id: str):
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     content = srt_path.read_text(encoding="utf-8")
     return {"entries": [e.model_dump() for e in parse_srt(content)]}
 
@@ -49,7 +50,7 @@ async def get_srt_entries(video_id: str):
 
 @router.get("/api/srt/{video_id}/validate")
 async def validate_srt_timeline(video_id: str):
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     issues = validate_timeline(parse_srt(srt_path.read_text(encoding="utf-8")))
@@ -62,7 +63,7 @@ async def validate_srt_timeline(video_id: str):
 
 @router.post("/api/srt/{video_id}/fix-timeline")
 async def fix_srt_timeline(video_id: str):
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current = srt_path.read_text(encoding="utf-8")
@@ -92,7 +93,7 @@ async def fix_srt_timeline(video_id: str):
 
 @router.post("/api/srt/{video_id}/dedup")
 async def dedup_srt(video_id: str):
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current = srt_path.read_text(encoding="utf-8")
@@ -122,7 +123,7 @@ async def dedup_srt(video_id: str):
 
 @router.post("/api/srt/{video_id}/auto-fix-overlaps")
 async def auto_fix_srt_overlaps(video_id: str):
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current = srt_path.read_text(encoding="utf-8")
@@ -245,6 +246,12 @@ async def retranslate_srt(video_id: str, request: Request):
         )
     except ValueError as e:
         raise HTTPException(404, str(e))
+    # Ghi luôn bản đã vá lên file SRT cuối (bản dịch) để các dòng chưa dịch
+    # không bị rớt mất — trước đây chỉ trả về content mà không lưu.
+    if updated != content:
+        out_path = _srt_best_path(video_id)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(updated, encoding="utf-8")
     return {
         "video_id": video_id,
         "content": updated,
@@ -572,7 +579,6 @@ def _render_preview_image(
         raise HTTPException(500, "Không đọc được frame từ video")
 
     from app.services.hardcode_service import (
-        auto_fit_style,
         apply_style_override,
         _find_font,
         _render_subtitle,
@@ -580,11 +586,9 @@ def _render_preview_image(
     )
     from app.routers.config_router import get_subtitle_style
 
-    # Base style: start from the region-fit (matches what auto_fit would pick),
-    # then let the user override font size / vertical position / etc.
+    # Base style = cấu hình hiện tại; FE luôn gửi kèm font_size/margin_v/margin_h
+    # nên không cần auto-fit ở đây (auto-fit chỉ dùng ở bước hardcode thật).
     style = get_subtitle_style()
-    if region and isinstance(region, dict):
-        style = auto_fit_style(style, region, vh, vw)
     style = apply_style_override(style, style_override)
 
     font_path = _find_font(
@@ -613,84 +617,787 @@ def _render_preview_image(
     return Response(content=buf.tobytes(), media_type="image/jpeg")
 
 
+# ── GET /api/delogo/{video_id}/status ──
+
+@router.get("/api/delogo/{video_id}/status")
+async def delogo_status(video_id: str):
+    """Check if delogo.mp4 exists and is valid."""
+    delogo_path = _delogo_video_path(video_id)
+    exists = delogo_path.exists() and delogo_path.stat().st_size > 0
+    valid = False
+    if exists:
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(delogo_path)],
+                capture_output=True,
+                timeout=10,
+                check=True,
+            )
+            duration_str = probe.stdout.decode("utf-8", errors="replace").strip()
+            valid = bool(duration_str) and float(duration_str) > 0
+        except Exception:
+            valid = False
+    return {"exists": exists, "valid": valid, "path": str(delogo_path) if exists else None}
+
+
 # ── POST /api/delogo/{video_id} ──
 
 @router.post("/api/delogo/{video_id}")
 async def delogo_video(video_id: str, request: Request):
-    """Apply FFmpeg delogo filter to remove watermark(s) from video.
-
-    Accepts either:
-      - { region: { x1, y1, x2, y2 } }  (single region, legacy)
-      - { regions: [ {x1,y1,x2,y2}, ... ] }  (multiple regions)
     """
-    import subprocess
+    Apply FFmpeg delogo filter to remove watermark(s).
+
+    Request body:
+
+    Single region:
+    {
+        "region": {
+            "x1": 0.75,
+            "y1": 0.85,
+            "x2": 0.95,
+            "y2": 0.95
+        }
+    }
+
+    Multiple regions:
+    {
+        "regions": [
+            {
+                "x1": 0.75,
+                "y1": 0.85,
+                "x2": 0.95,
+                "y2": 0.95
+            },
+            {
+                "x1": 0.10,
+                "y1": 0.10,
+                "x2": 0.30,
+                "y2": 0.20
+            }
+        ]
+    }
+
+    Coordinates are normalized 0..1.
+    """
 
     video_path = _video_path(video_id)
 
-    # Parse body
-    body = {}
+    logger.info(
+        f"[delogo] video_id={video_id} "
+        f"video_path={video_path} "
+        f"exists={video_path.exists()}"
+    )
+
+    # ============================================================
+    # 1. Parse request body
+    # ============================================================
+
     try:
         body = await request.json()
-    except Exception:
-        pass
 
-    # Support both legacy single region and new regions array
-    raw_regions = body.get("regions") or []
-    if not raw_regions and body.get("region"):
-        raw_regions = [body["region"]]
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must be a JSON object"
+            )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"[delogo] Failed to parse request body: {e}")
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON request body"
+        )
+
+    # ============================================================
+    # 2. Get regions
+    # ============================================================
+
+    raw_regions = body.get("regions")
 
     if not raw_regions:
-        raise HTTPException(400, "Provide regions: [{ x1, y1, x2, y2 }] normalized 0-1")
+        legacy_region = body.get("region")
 
-    # Validate all regions
-    for r in raw_regions:
-        if not all(isinstance(r.get(k), (int, float)) for k in ("x1", "y1", "x2", "y2")):
-            raise HTTPException(400, f"Invalid region: {r}")
+        if legacy_region:
+            raw_regions = [legacy_region]
+        else:
+            raw_regions = []
 
-    # Get video resolution
-    try:
-        probe = subprocess.check_output(
-            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "csv=s=x:p=0", str(video_path)],
-            timeout=10,
+    logger.info(f"[delogo] Received regions: {raw_regions}")
+
+    if not raw_regions:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide regions: "
+                "[{x1, y1, x2, y2}] "
+                "with normalized coordinates 0..1"
+            )
         )
-        w, h = map(int, probe.decode().strip().split("x"))
-    except Exception:
-        raise HTTPException(500, "Cannot probe video resolution")
 
-    # Convert all regions to pixel coordinates and build delogo filters
+    if not isinstance(raw_regions, list):
+        raise HTTPException(
+            status_code=400,
+            detail="regions must be an array"
+        )
+
+    # Limit number of regions
+    if len(raw_regions) > 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 20 delogo regions allowed"
+        )
+
+    # ============================================================
+    # 3. Check video
+    # ============================================================
+
+    if not video_path.exists():
+        logger.error(
+            f"[delogo] Video file not found: {video_path}"
+        )
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Video not found: {video_id}"
+        )
+
+    if not video_path.is_file():
+        logger.error(
+            f"[delogo] Path is not a file: {video_path}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Video path is not a file"
+        )
+
+    file_size = video_path.stat().st_size
+
+    logger.info(
+        f"[delogo] Video size: "
+        f"{file_size} bytes "
+        f"({file_size / 1024 / 1024:.2f} MB)"
+    )
+
+    # ============================================================
+    # 4. Get video resolution using ffprobe
+    # ============================================================
+
+    try:
+
+        probe_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+            str(video_path),
+        ]
+
+        logger.info(
+            f"[delogo] ffprobe command: "
+            f"{' '.join(probe_cmd)}"
+        )
+
+        probe = subprocess.run(
+            probe_cmd,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+
+        probe_str = probe.stdout.decode(
+            "utf-8",
+            errors="replace"
+        ).strip()
+
+        logger.info(
+            f"[delogo] ffprobe output: {probe_str}"
+        )
+
+        parts = probe_str.split("x")
+
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid ffprobe resolution: {probe_str}"
+            )
+
+        width = int(parts[0])
+        height = int(parts[1])
+
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                f"Invalid video resolution: "
+                f"{width}x{height}"
+            )
+
+    except subprocess.TimeoutExpired:
+
+        logger.error(
+            f"[delogo] ffprobe timeout: {video_path}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="ffprobe timed out"
+        )
+
+    except subprocess.CalledProcessError as e:
+
+        stderr = (
+            e.stderr.decode(
+                "utf-8",
+                errors="replace"
+            )
+            if e.stderr
+            else ""
+        )
+
+        logger.error(
+            f"[delogo] ffprobe failed: {stderr}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"ffprobe failed: {stderr[-500:]}"
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            f"[delogo] Cannot determine resolution"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot probe video resolution: {e}"
+        )
+
+    logger.info(
+        f"[delogo] Video resolution: "
+        f"{width}x{height}"
+    )
+
+    # ============================================================
+    # 5. Convert normalized coordinates -> pixels
+    # ============================================================
+
     delogo_filters = []
-    for r in raw_regions:
-        x = max(0, min(int(float(r["x1"]) * w), w - 1))
-        y = max(0, min(int(float(r["y1"]) * h), h - 1))
-        rw = max(1, min(int((float(r["x2"]) - float(r["x1"])) * w), w - x))
-        rh = max(1, min(int((float(r["y2"]) - float(r["y1"])) * h), h - y))
-        delogo_filters.append(f"delogo=x={x}:y={y}:w={rw}:h={rh}")
+
+    for index, region in enumerate(raw_regions):
+
+        logger.info(
+            f"[delogo] Processing region {index + 1}: "
+            f"{region}"
+        )
+
+        if not isinstance(region, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Region {index + 1} must be an object"
+            )
+
+        # --------------------------------------------------------
+        # Check keys
+        # --------------------------------------------------------
+
+        required_keys = (
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+        )
+
+        if not all(
+            key in region
+            for key in required_keys
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} must contain "
+                    "x1, y1, x2, y2"
+                )
+            )
+
+        # --------------------------------------------------------
+        # Parse float
+        # --------------------------------------------------------
+
+        try:
+
+            x1 = float(region["x1"])
+            y1 = float(region["y1"])
+            x2 = float(region["x2"])
+            y2 = float(region["y2"])
+
+        except (TypeError, ValueError):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "coordinates must be numbers"
+                )
+            )
+
+        # --------------------------------------------------------
+        # Check NaN / Infinity
+        # --------------------------------------------------------
+
+        values = (x1, y1, x2, y2)
+
+        if not all(
+            math.isfinite(value)
+            for value in values
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "contains invalid number"
+                )
+            )
+
+        # --------------------------------------------------------
+        # Clamp normalized coordinates
+        # --------------------------------------------------------
+
+        x1 = max(0.0, min(1.0, x1))
+        y1 = max(0.0, min(1.0, y1))
+        x2 = max(0.0, min(1.0, x2))
+        y2 = max(0.0, min(1.0, y2))
+
+        # --------------------------------------------------------
+        # Handle dragging in any direction
+        #
+        # Example:
+        #
+        # x1=0.8, x2=0.5
+        #
+        # becomes:
+        #
+        # left=0.5
+        # right=0.8
+        # --------------------------------------------------------
+
+        left = min(x1, x2)
+        right = max(x1, x2)
+
+        top = min(y1, y2)
+        bottom = max(y1, y2)
+
+        # --------------------------------------------------------
+        # Ignore zero-size regions
+        # --------------------------------------------------------
+
+        if right - left <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "has zero width"
+                )
+            )
+
+        if bottom - top <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "has zero height"
+                )
+            )
+
+        # ========================================================
+        # Convert to pixel coordinates
+        # ========================================================
+
+        x = int(round(left * width))
+        y = int(round(top * height))
+
+        x2_pixel = int(round(right * width))
+        y2_pixel = int(round(bottom * height))
+
+        # --------------------------------------------------------
+        # Clamp coordinates
+        # --------------------------------------------------------
+
+        x = max(
+            0,
+            min(x, width - 1)
+        )
+
+        y = max(
+            0,
+            min(y, height - 1)
+        )
+
+        x2_pixel = max(
+            x + 1,
+            min(x2_pixel, width)
+        )
+
+        y2_pixel = max(
+            y + 1,
+            min(y2_pixel, height)
+        )
+
+        # ========================================================
+        # Calculate size
+        # ========================================================
+
+        region_width = x2_pixel - x
+        region_height = y2_pixel - y
+
+        # --------------------------------------------------------
+        # Final safety validation
+        # --------------------------------------------------------
+
+        if region_width <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "has invalid width"
+                )
+            )
+
+        if region_height <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "has invalid height"
+                )
+            )
+
+        if x + region_width > width:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "extends outside video width"
+                )
+            )
+
+        if y + region_height > height:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Region {index + 1} "
+                    "extends outside video height"
+                )
+            )
+
+        # ========================================================
+        # Build FFmpeg delogo filter
+        # ========================================================
+
+        filter_str = (
+            f"delogo="
+            f"x={x}:"
+            f"y={y}:"
+            f"w={region_width}:"
+            f"h={region_height}"
+        )
+
+        delogo_filters.append(filter_str)
+
+        logger.info(
+            f"[delogo] Region {index + 1}: "
+            f"normalized="
+            f"({x1:.6f},"
+            f"{y1:.6f},"
+            f"{x2:.6f},"
+            f"{y2:.6f}) "
+            f"-> pixels="
+            f"x={x},"
+            f"y={y},"
+            f"w={region_width},"
+            f"h={region_height} "
+            f"filter={filter_str}"
+        )
+
+    # ============================================================
+    # 6. Build output path
+    # ============================================================
 
     output = _delogo_video_path(video_id)
-    output.parent.mkdir(parents=True, exist_ok=True)
+
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    logger.info(
+        f"[delogo] Output path: {output}"
+    )
+
+    # ============================================================
+    # 7. Build FFmpeg filter
+    # ============================================================
+
+    video_filter = ",".join(
+        delogo_filters
+    )
+
+    # ============================================================
+    # 8. FFmpeg command
+    # ============================================================
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-y",
+
+        "-i",
+        str(video_path),
+
+        "-vf",
+        video_filter,
+
+        # Re-encode video because delogo modifies frames
+        "-c:v",
+        "h264_videotoolbox",
+        # "libx264",
+
+        "-b:v",
+        "10M",
+
+        # Good quality
+        # "-preset",
+        # "medium",
+
+        # "-crf",
+        # "18",
+
+        # Keep audio without re-encoding
+        "-c:a",
+        "copy",
+
+        # MP4 optimization
+        "-movflags",
+        "+faststart",
+
+        # Progress output for parsing
+        "-progress",
+        "pipe:1",
+        "-stats_period",
+        "0.5",
+
+        str(output),
+    ]
+
+    logger.info(
+        f"[delogo] FFmpeg command:\n"
+        f"{' '.join(ffmpeg_cmd)}"
+    )
+
+    # ============================================================
+    # 9. Get total duration for progress tracking
+    # ============================================================
+
+    total_duration_seconds = 0.0
 
     try:
-        subprocess.run(
+        duration_probe = subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vf", ",".join(delogo_filters),
-                "-c:a", "copy",
-                "-movflags", "+faststart",
-                str(output),
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                str(video_path),
             ],
-            check=True,
             capture_output=True,
-            timeout=600,
+            timeout=10,
+            check=True,
         )
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(500, f"FFmpeg delogo failed: {e.stderr.decode()[:500]}")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(500, "FFmpeg delogo timed out")
+        duration_str = duration_probe.stdout.decode("utf-8", errors="replace").strip()
+        total_duration_seconds = float(duration_str)
+        logger.info(f"[delogo] Video duration: {total_duration_seconds:.2f}s")
+    except Exception as e:
+        logger.warning(f"[delogo] Cannot get duration: {e}")
 
-    return {"status": "ok", "path": str(output), "regions": len(delogo_filters)}
+    # ============================================================
+    # 10. Run FFmpeg — SSE stream
+    # ============================================================
 
+    import subprocess as _sp
+    import re as _re
+    import threading
+    import time as _time
+
+    def _run_delogo_sse():
+        start_time = _time.time()
+        proc = _sp.Popen(
+            ffmpeg_cmd,
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
+        )
+
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+
+        last_progress_pct = 0
+
+        # ffmpeg periodic stats line (frame=… fps=…) — bỏ khỏi log live để dễ đọc
+        # (tiến trình % đã được parse riêng từ -progress pipe:1).
+        _stats_re = _re.compile(r"frame=\s*\d+.*fps=")
+
+        def _read_stderr():
+            """Read stderr for logs and progress info."""
+            nonlocal last_progress_pct
+            for raw_line in iter(proc.stderr.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    # Try to parse progress from stderr (some FFmpeg versions output here)
+                    if total_duration_seconds > 0:
+                        time_match = _re.search(r"time=(\d{2}):(\d{2}):(\d{2})\.(\d+)", line)
+                        if time_match:
+                            hours = int(time_match.group(1))
+                            minutes = int(time_match.group(2))
+                            seconds = int(time_match.group(3))
+                            millis = int(time_match.group(4))
+                            current_seconds = hours * 3600 + minutes * 60 + seconds + millis / (10 ** len(time_match.group(4)))
+                            progress_pct = min(99, int((current_seconds / total_duration_seconds) * 100))
+                            if progress_pct != last_progress_pct:
+                                last_progress_pct = progress_pct
+                    if _stats_re.search(line):
+                        continue
+                    # Yield will be done from main thread via queue
+                    stderr_queue.put(("log", line))
+
+        def _read_stdout():
+            """Read stdout for -progress output."""
+            nonlocal last_progress_pct
+            for raw_line in iter(proc.stdout.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line.startswith("out_time_us="):
+                    try:
+                        out_time_us = int(line.split("=", 1)[1])
+                        current_seconds = out_time_us / 1_000_000
+                        if total_duration_seconds > 0:
+                            progress_pct = min(99, int((current_seconds / total_duration_seconds) * 100))
+                            if progress_pct != last_progress_pct:
+                                last_progress_pct = progress_pct
+                                stderr_queue.put(("progress", progress_pct, current_seconds))
+                    except (ValueError, IndexError):
+                        pass
+                elif line.startswith("out_time="):
+                    time_match = _re.search(r"out_time=(\d{2}):(\d{2}):(\d{2})\.(\d+)", line)
+                    if time_match:
+                        hours = int(time_match.group(1))
+                        minutes = int(time_match.group(2))
+                        seconds = int(time_match.group(3))
+                        millis = int(time_match.group(4))
+                        current_seconds = hours * 3600 + minutes * 60 + seconds + millis / (10 ** len(time_match.group(4)))
+                        if total_duration_seconds > 0:
+                            progress_pct = min(99, int((current_seconds / total_duration_seconds) * 100))
+                            if progress_pct != last_progress_pct:
+                                last_progress_pct = progress_pct
+                                stderr_queue.put(("progress", progress_pct, current_seconds))
+
+        from queue import Queue, Empty
+        stderr_queue: Queue = Queue()
+
+        # Start reader threads
+        t_stderr = threading.Thread(target=_read_stderr, daemon=True)
+        t_stdout = threading.Thread(target=_read_stdout, daemon=True)
+        t_stderr.start()
+        t_stdout.start()
+
+        # Real-time drain: đẩy log/progress ra ngay khi ffmpeg còn chạy (không
+        # buffer tới cuối như trước — người dùng theo dõi được tiến trình live).
+        while True:
+            try:
+                item = stderr_queue.get(timeout=0.5)
+            except Empty:
+                if proc.poll() is not None:
+                    break
+                continue
+            if item[0] == "log":
+                yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"
+            elif item[0] == "progress":
+                yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
+
+        # Process xong → chờ reader threads đọc nốt rồi drain phần còn lại.
+        t_stderr.join(timeout=5)
+        t_stdout.join(timeout=5)
+
+        while not stderr_queue.empty():
+            try:
+                item = stderr_queue.get_nowait()
+            except Empty:
+                break
+            if item[0] == "log":
+                yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"
+            elif item[0] == "progress":
+                yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
+
+        # Close streams
+        if proc.stderr:
+            proc.stderr.close()
+        if proc.stdout:
+            proc.stdout.close()
+
+        # Check result
+        if proc.returncode != 0:
+            try:
+                if output.exists():
+                    output.unlink()
+            except Exception:
+                pass
+            yield f"data: {json.dumps({'type': 'error', 'message': f'FFmpeg failed (code {proc.returncode})'})}\n\n"
+            return
+
+        # Verify output file exists
+        if not output.exists():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'FFmpeg produced no output file'})}\n\n"
+            return
+
+        output_size = output.stat().st_size
+        if output_size <= 0:
+            try:
+                output.unlink()
+            except Exception:
+                pass
+            yield f"data: {json.dumps({'type': 'error', 'message': 'FFmpeg produced an empty output file'})}\n\n"
+            return
+
+        # Verify with ffprobe
+        try:
+            probe = _sp.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(output)],
+                capture_output=True,
+                timeout=10,
+                check=True,
+            )
+            duration_str = probe.stdout.decode("utf-8", errors="replace").strip()
+            if not duration_str or float(duration_str) <= 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Output video has no duration'})}\n\n"
+                return
+        except Exception as e:
+            logger.warning(f"[delogo] ffprobe output failed: {e}")
+
+        elapsed = _time.time() - start_time
+        yield f"data: {json.dumps({'type': 'done', 'video_id': video_id, 'path': str(output), 'width': width, 'height': height, 'regions': len(delogo_filters), 'filters': delogo_filters, 'output_size': output_size, 'elapsed': round(elapsed, 1)})}\n\n"
+
+    return StreamingResponse(
+        _run_delogo_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 # ── POST /api/hardcode/{video_id} ──
 
@@ -907,7 +1614,7 @@ async def generate_voice_map_now(request: Request, video_id: str):
         pass
     target_lang = str(body.get("target_lang", "vi") or "vi")
 
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     entries = parse_srt(srt_path.read_text(encoding="utf-8"))
     if not entries:
         raise HTTPException(400, "No SRT entries")
@@ -1003,7 +1710,7 @@ async def check_tts_alignment(video_id: str):
     from app.services.translation_service import load_voice_map
     from app.services.context_service import _load_capcut_voice_display_map
 
-    srt_path = _srt_path(video_id)
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     entries = parse_srt(srt_path.read_text(encoding="utf-8"))

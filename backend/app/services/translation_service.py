@@ -321,6 +321,8 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
 
             # Clean up uploaded file
             delete_gemini_file(audio_uri)
+            # Xóa file wav trung gian sau khi đã dùng xong (chỉ dùng cho diarization).
+            audio_path.unlink(missing_ok=True)
 
     except Exception as e:
         logger.warning("Audio diarization failed, falling back to context-only: %s", e)
@@ -382,9 +384,18 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
             data = json.loads(raw)
             if isinstance(data, dict):
                 for k, v in data.items():
-                    idx = int(str(k).strip())
+                    try:
+                        idx = int(str(k).strip())
+                    except (ValueError, TypeError):
+                        continue
                     voice = str(v).strip()
-                    if 1 <= idx <= len(batch) and voice:
+                    if not voice:
+                        continue
+                    # Gemini có thể trả index batch-relative (1..50) hoặc global
+                    # (51..100) — chấp nhận cả hai như _reconcile_batch.
+                    if batch_start + 1 <= idx <= batch_start + len(batch):
+                        voice_map[idx] = voice
+                    elif 1 <= idx <= len(batch):
                         voice_map[batch_start + idx] = voice
         except Exception as e:
             logger.warning("Voice map batch %d-%d failed: %s", batch_start + 1, min(batch_start + batch_size, total), e)
@@ -643,7 +654,7 @@ def retranslate_untranslated(
     return entries_to_srt(out)
 
 
-def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None) -> str:
+def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None, progress_callback=None) -> str:
     """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
@@ -682,6 +693,9 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
+
+        if progress_callback:
+            progress_callback(bi + 1, total_batches)
 
         # Prepend accumulated patch context so names/honorifics/terminology stay consistent
         if patch_context:
@@ -833,6 +847,15 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
         def _log(msg: str, level: str = "info"):
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
+        def _progress(done_batches: int, total_batches: int):
+            pct = 10 + int(80 * done_batches / max(1, total_batches))
+            job["progress"] = pct
+            notify_ws_sync(loop, ws_clients, job_id, {
+                "type": "progress",
+                "progress": pct,
+                "phase": "translating",
+            })
+
         result = translate_srt(
             video_id,
             source_lang=job.get("source_lang", "zh"),
@@ -840,6 +863,7 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             use_custom_srt=job.get("use_custom_srt", False),
             multi_voice=job.get("multi_voice", False),
             log_fn=_log,
+            progress_callback=_progress,
         )
 
         job["progress"] = 100

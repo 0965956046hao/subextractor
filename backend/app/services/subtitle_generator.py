@@ -154,13 +154,12 @@ def postprocess_entries(
 
 def generate_srt(
     frames: Iterable[tuple[object, float]],
-    region: dict,
     ocr_engine,
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
 ) -> str:
-    """Build SRT from a stream of (crop, _full_frame, timestamp) frames.
+    """Build SRT from a stream of (crop, timestamp) frames.
 
     A subtitle boundary is placed at the midpoint between the last frame that
     still showed the old text and the first frame that shows the new text,
@@ -175,7 +174,7 @@ def generate_srt(
 
     pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
-    for i, (crop, _full_frame, timestamp) in enumerate(frames):
+    for i, (crop, timestamp) in enumerate(frames):
 
         text = ocr_engine.ocr_region_cached(crop)
         text = clean_text(text)
