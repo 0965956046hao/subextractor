@@ -2,9 +2,11 @@
 
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import List
+from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
 from app.services.srt_utils import entries_to_srt, merge_similar_adjacent, parse_srt
@@ -21,10 +23,6 @@ from app.services.tts_service import synthesize_srt, synthesize_srt_capcut
 logger = logging.getLogger(__name__)
 
 MAX_TEMPO = 1.6
-# Giới hạn số input mỗi lệnh ffmpeg amix. macOS mặc định chỉ ~256 file
-# descriptor, và amix hàng trăm input sẽ tràn bộ nhớ → ffmpeg treo/OOM làm
-# chết server. Gộp phân tầng đảm bảo mỗi amix ≤ MAX_AMIX_INPUTS input.
-MAX_AMIX_INPUTS = 24
 
 
 def _dur_timeout(dur: float, per_sec: float, floor: int) -> int:
@@ -90,6 +88,21 @@ def _run_ffmpeg(cmd: list, timeout: int = 3600) -> None:
         raise RuntimeError(f"FFmpeg failed: {result.stderr[-500:]}")
 
 
+def _ensure_free_space(need_gb: float, label: str = "bước xử lý"):
+    """Dừng sớm (RuntimeError) nếu ổ đĩa chứa temp sắp đầy, thay vì ghi đến khi
+    đầy rồi bị OS kill (từng gây vòng lặp tử thần sinh file 70-80GB trên clip dài)."""
+    try:
+        st = os.statvfs(settings.temp_dir)
+    except OSError:
+        return
+    free_gb = st.f_bavail * st.f_frsize / (1024 ** 3)
+    if free_gb < need_gb:
+        raise RuntimeError(
+            f"Ổ đĩa sắp đầy ({free_gb:.1f}GB trống) — không đủ {need_gb:.0f}GB cho {label}. "
+            f"Hãy dọn backend/temp trước khi chạy clip dài."
+        )
+
+
 def combine_tts_mp3(
     audio_files: List[Path],
     entries,
@@ -103,7 +116,7 @@ def combine_tts_mp3(
     bị cụt, dài bằng đúng phần ffmpeg kịp xử lý). Sau khi concat sẽ kiểm tra
     duration đầu ra phải đạt đủ thời lượng dòng phụ đề cuối.
     """
-    CHUNK_SECONDS = 600.0
+    CHUNK_SECONDS = 300.0
 
     # Thu thập các file TTS hợp lệ. File dài hơn khung phụ đề (mp3 > 1.02× khung)
     # được ép tốc độ (atempo) RIÊNG trước khi đưa vào amix — vì đặt atempo TRƯỚC
@@ -113,15 +126,42 @@ def combine_tts_mp3(
     tempo_files: List[Path] = []
     chunk_dir = out_path.parent
     chunk_files: List[Path] = []
+
+    # Xoá rác combine/tempo từ lần chạy trước bị kill giữa chừng (không chạy tới
+    # finally) — tránh tồn đọng file khổng lồ làm đầy ổ đĩa ở lần chạy sau.
+    for pat in (".combine_*.mp3", ".tempo_*.mp3", ".combine_list.txt"):
+        for p in chunk_dir.glob(pat):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+    # Thu thập candidate trước, sau đó đo duration TTS SONG SONG.
+    # (Loop ffprobe tuần tự từng file trên video 4000 đoạn mất ~30 phút — nguyên
+    # nhân bước "Gộp ... đoạn" như bị treo. 16-32 worker xong trong ~1-2 phút.)
+    candidates = []
+    for i, entry in enumerate(entries):
+        if i >= len(audio_files):
+            break
+        af = audio_files[i]
+        if not af or not af.exists() or af.stat().st_size == 0:
+            continue
+        candidates.append((i, entry, af))
+
+    def _probe(cand):
+        i, entry, af = cand
+        try:
+            return (i, entry, af, _get_audio_duration(af))
+        except Exception:
+            return (i, entry, af, 0.0)
+
     try:
-        for i, entry in enumerate(entries):
-            if i >= len(audio_files):
-                break
-            af = audio_files[i]
-            if not af or not af.exists() or af.stat().st_size == 0:
-                continue
+        nw = min(32, max(8, (os.cpu_count() or 4) * 2))
+        with ThreadPoolExecutor(max_workers=nw) as ex:
+            probed = list(ex.map(_probe, candidates))
+
+        for i, entry, af, mp3_dur in probed:
             srt_dur = entry.end - entry.start
-            mp3_dur = _get_audio_duration(af)
             tempo = "-"
             if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
                 speed = min(mp3_dur / srt_dur, MAX_TEMPO)
@@ -165,6 +205,7 @@ def combine_tts_mp3(
             is_last = c == max_chunk
             if is_last:
                 dur = max(0.5, chunk_last_end[c] - chunk_start)
+                dur = min(dur, CHUNK_SECONDS * 2)  # clamp an toàn (tránh dur khổng lồ)
             else:
                 dur = CHUNK_SECONDS
 
@@ -178,7 +219,29 @@ def combine_tts_mp3(
                     str(chunk_path),
                 ])
             else:
-                _build_chunk_audio(chunk_items, chunk_start, dur, chunk_path, chunk_dir)
+                # Flat amix: 1 lệnh ffmpeg cho TOÀN BỘ entries trong chunk.
+                cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+                parts = []
+                for k, (af, start) in enumerate(chunk_items):
+                    cmd.extend(["-i", str(af)])
+                    delay_ms = int((start - chunk_start) * 1000)
+                    if delay_ms < 0:
+                        delay_ms = 0
+                    parts.append(f"[{k}:a]adelay={delay_ms}|{delay_ms}[t{k}]")
+                mix_in = "".join(f"[t{k}]" for k in range(len(chunk_items)))
+                parts.append(
+                    f"{mix_in}amix=inputs={len(chunk_items)}:duration=longest:"
+                    f"dropout_transition=0:normalize=0,apad[out]"
+                )
+                cmd += [
+                    "-filter_complex", ";".join(parts),
+                    "-map", "[out]",
+                    "-t", f"{dur:.3f}",
+                    "-c:a", "libmp3lame", "-b:a", "192k",
+                    "-ar", "24000", "-ac", "1",
+                    str(chunk_path),
+                ]
+                _run_ffmpeg(cmd)
             chunk_files.append(chunk_path)
 
         # Concat các chunk (cùng codec/rate/sample format) → full_voice.mp3
@@ -208,107 +271,8 @@ def combine_tts_mp3(
             p.unlink(missing_ok=True)
         for p in tempo_files:
             p.unlink(missing_ok=True)
-        for p in chunk_dir.glob(".combine_part_*.mp3"):
-            p.unlink(missing_ok=True)
-        for p in chunk_dir.glob(".combine_mrg_*.mp3"):
-            p.unlink(missing_ok=True)
         (chunk_dir / ".combine_list.txt").unlink(missing_ok=True)
     return out_path
-
-
-def _amix_leaves(leaves, dur, out_path, chunk_dir):
-    """Gộp 1 nhóm (≤ MAX_AMIX_INPUTS) leaf (file, delay_ms) thành track dài `dur`."""
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-    parts = []
-    for k, (af, delay_ms) in enumerate(leaves):
-        cmd.extend(["-i", str(af)])
-        # adelay với 1 giá trị áp dụng cho mọi kênh (đúng cả mono & stereo).
-        # Tránh dùng "d1|d2" vì nếu input là mono thì sai kênh → ra câm.
-        parts.append(f"[{k}:a]adelay={delay_ms}[t{k}]")
-    mix_in = "".join(f"[t{k}]" for k in range(len(leaves)))
-    parts.append(
-        f"{mix_in}amix=inputs={len(leaves)}:duration=longest:"
-        f"dropout_transition=0:normalize=0,apad[out]"
-    )
-    cmd += [
-        "-filter_complex", ";".join(parts),
-        "-map", "[out]",
-        "-t", f"{dur:.3f}",
-        "-c:a", "libmp3lame", "-b:a", "192k",
-        "-ar", "24000", "-ac", "1",
-        str(out_path),
-    ]
-    _run_ffmpeg(cmd, timeout=1800)
-
-
-def _amix_tracks(tracks, dur, out_path, chunk_dir):
-    """Gộp các track đã render (full-duration) bằng amix (không cần adelay)."""
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-    for k in range(len(tracks)):
-        cmd.extend(["-i", str(tracks[k])])
-    mix_in = "".join(f"[{k}:a]" for k in range(len(tracks)))
-    fc = (
-        f"{mix_in}amix=inputs={len(tracks)}:duration=longest:"
-        f"dropout_transition=0:normalize=0,apad[out]"
-    )
-    cmd += [
-        "-filter_complex", fc,
-        "-map", "[out]",
-        "-t", f"{dur:.3f}",
-        "-c:a", "libmp3lame", "-b:a", "192k",
-        "-ar", "24000", "-ac", "1",
-        str(out_path),
-    ]
-    _run_ffmpeg(cmd, timeout=1800)
-
-
-def _merge_all(tracks, dur, out_path, chunk_dir, depth=0):
-    """Gộp đệ quy các track, mỗi lệnh amix ≤ MAX_AMIX_INPUTS input."""
-    if len(tracks) <= MAX_AMIX_INPUTS:
-        _amix_tracks(tracks, dur, out_path, chunk_dir)
-        return
-    groups = [tracks[i:i + MAX_AMIX_INPUTS] for i in range(0, len(tracks), MAX_AMIX_INPUTS)]
-    partials = []
-    try:
-        for gi, g in enumerate(groups):
-            p = chunk_dir / f".combine_mrg_{depth}_{gi}.mp3"
-            _merge_all(g, dur, p, chunk_dir, depth + 1)
-            partials.append(p)
-        _amix_tracks(partials, dur, out_path, chunk_dir)
-    finally:
-        for p in partials:
-            p.unlink(missing_ok=True)
-
-
-def _build_chunk_audio(items, chunk_start, dur, out_path, chunk_dir):
-    """Gộp các (file, start_abs) của 1 chunk thành track dài `dur`.
-
-    Dùng gộp phân tầng: chia items thành nhóm ≤ MAX_AMIX_INPUTS, gộp mỗi nhóm
-    (đặt delay rồi amix), rồi đệ quy amix các track kết quả. Nhờ đó mỗi lệnh
-    ffmpeg chỉ mở ≤ MAX_AMIX_INPUTS file và amix ≤ MAX_AMIX_INPUTS input — không
-    vượt giới hạn file descriptor macOS (~256) và không tràn bộ nhớ dù video có
-    hàng nghìn đoạn phụ đề.
-    """
-    norm = []
-    for af, start_abs in items:
-        delay_ms = int((start_abs - chunk_start) * 1000)
-        if delay_ms < 0:
-            delay_ms = 0
-        norm.append((af, delay_ms))
-    if len(norm) <= MAX_AMIX_INPUTS:
-        _amix_leaves(norm, dur, out_path, chunk_dir)
-        return
-    groups = [norm[i:i + MAX_AMIX_INPUTS] for i in range(0, len(norm), MAX_AMIX_INPUTS)]
-    partials = []
-    try:
-        for gi, g in enumerate(groups):
-            p = chunk_dir / f".combine_part_{gi}.mp3"
-            _amix_leaves(g, dur, p, chunk_dir)
-            partials.append(p)
-        _merge_all(partials, dur, out_path, chunk_dir)
-    finally:
-        for p in partials:
-            p.unlink(missing_ok=True)
 
 
 def _mix_background_with_voice(
@@ -366,6 +330,23 @@ def build_full_audio(
     out_dir = settings.temp_dir / "tts" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Dọn rác combine/tempo từ lần chạy trước bị kill giữa chừng (process bị
+    # SIGKILL nên finally không chạy). Phải dọn TRƯỚC mọi bước nặng (Demucs, TTS,
+    # combine) để nếu server die ở bước nào thì lần sau rác cũng đã bị xoá sạch.
+    _stale_patterns = (
+        ".combine_*.mp3", ".tempo_*.mp3", ".combine_list.txt",
+    )
+    stale_count = 0
+    for pat in _stale_patterns:
+        for p in out_dir.glob(pat):
+            try:
+                p.unlink()
+                stale_count += 1
+            except OSError:
+                pass
+    if stale_count:
+        logger.info("Dọn %d file rác combine/tempo từ lần chạy trước.", stale_count)
+
     srt_path = _srt_path(video_id)
     srt_content = srt_path.read_text(encoding="utf-8")
 
@@ -407,6 +388,7 @@ def build_full_audio(
                 log_fn("Đã có nhạc nền từ lần chạy trước — tái sử dụng (bỏ qua Demucs).")
         else:
             try:
+                _ensure_free_space(12.0, "tách giọng (Demucs)")
                 instrumental = separate_instrumental(video_path, out_dir)
                 background_volume = 1.0
                 if log_fn:
@@ -491,6 +473,7 @@ def build_full_audio(
                 log_fn=log_fn,
             )
         cb(75)
+        _ensure_free_space(8.0, "gộp giọng (dub)")
         if log_fn:
             log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
         combine_tts_mp3(audio_files, entries, full_voice)

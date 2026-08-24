@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
 
+# Một dòng phụ đề TTS nhiều nhất vài chục giây → file MP3 hợp lệ < 1MB.
 from app.config import settings
 from app.services.srt_utils import _texts_similar, parse_srt
 from app.services.media_utils import _srt_path
@@ -363,17 +364,27 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
             if progress_callback:
                 progress_callback(done, total_)
 
-        written = generate_segments_to_dir(
-            missing_texts,
-            out_dir,
-            voice=voice_name,
-            rate=rate,
-            prefix="segment",
-            progress_callback=cb,
-            log_fn=log_fn,
-            indices=missing_indices,
-        )
-        written_names = {p.name for p in written}
+        try:
+            written = generate_segments_to_dir(
+                missing_texts,
+                out_dir,
+                voice=voice_name,
+                rate=rate,
+                prefix="segment",
+                progress_callback=cb,
+                log_fn=log_fn,
+                indices=missing_indices,
+            )
+            written_names = {p.name for p in written}
+        except Exception as _e:
+            # Lỗi service (vd file trả về khổng lồ bị xoá bởi download_audio) →
+            # chèn khoảng lặng cho các dòng thiếu thay vì phá toàn bộ job.
+            logger.warning("CapCut TTS lỗi (có thể do file khổng lồ): %s", _e)
+            if log_fn:
+                log_fn(f"  ⚠ CapCut TTS lỗi: {_e}. Các dòng thiếu sẽ chèn khoảng lặng.", level="warning")
+            for idx in missing_indices:
+                sp = out_dir / f"{idx:04d}.mp3"
+                _create_silence(sp, max(entries[idx - 1].end - entries[idx - 1].start, 0.5))
     elif log_fn:
         log_fn(f"  Tất cả {total} dòng đã có sẵn — bỏ qua gen voice.", level="success")
 

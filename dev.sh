@@ -1,6 +1,9 @@
 #!/bin/bash
 # Start capcut-tts-api service + backend (uvicorn) + frontend (Next.js dev) cùng lúc
-# Usage: ./dev.sh
+# Usage:
+#   ./dev.sh                 # backend chạy --reload (tiện dev)
+#   STE_NO_RELOAD=1 ./dev.sh # backend KHÔNG --reload (job dài 2-4h: tránh reloader
+#                            #   tự kill/restart worker giữa chừng & che mất traceback)
 
 set -e
 
@@ -35,8 +38,22 @@ echo "==> Starting capcut-tts-api service  http://localhost:8100"
 (cd "$CAPCUT" && exec "$BACKEND/.venv/bin/python" -m service.main) &
 CAPCUT_PID=$!
 
-echo "==> Starting backend  http://localhost:8000"
-(cd "$BACKEND" && exec .venv/bin/uvicorn app.main:app --reload --port 8000) &
+# Backend: mặc định --reload (tiện dev). Khi chạy job dài (OCR/dub 2-4h) đặt
+# STE_NO_RELOAD=1 để reloader không tự kill/restart worker giữa chừng và không
+# che mất traceback khi process crash. Đồng thời nâng giới hạn file descriptor
+# (macOS mặc định chỉ 256) để pipeline hàng nghìn file TTS không bị lỗi FD.
+if [ "${STE_NO_RELOAD:-0}" = "1" ]; then
+  RELOAD_FLAG=""
+  echo "==> Starting backend  http://localhost:8000  (KHÔNG --reload, chạy job dài)"
+else
+  RELOAD_FLAG="--reload"
+  echo "==> Starting backend  http://localhost:8000"
+fi
+(
+  cd "$BACKEND"
+  ulimit -n 4096 2>/dev/null || true
+  exec .venv/bin/uvicorn app.main:app $RELOAD_FLAG --port 8000
+) &
 BACKEND_PID=$!
 
 echo "==> Starting ds2api  http://localhost:${DS2API_PORT}"
