@@ -1131,6 +1131,43 @@ async def _tg_web_app_video_url(video_id: str) -> str:
     return f"{base}/api/video/{video_id}/video.mp4?duration=10"
 
 
+async def _tg_wait_pipeline_decision(
+    pipeline_states: dict, video_id: str, check_key: str, skip_key: str, timeout: float = 600,
+) -> str | None:
+    """Poll pipeline_states for a decision from the Mini App (timeline/voice check).
+
+    ``check_key`` = "timeline_check" | "voice_check". Returns the decision
+    ("continue"/"fix") or "skip" if the user tapped the Telegram skip button,
+    or None on timeout.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        ps = pipeline_states.get(video_id) or {}
+        check = ps.get(check_key) or {}
+        decision = check.get("decision")
+        if decision:
+            return decision
+        # Skip button (Telegram fallback).
+        data = _tg_checkpoint_data.get(skip_key)
+        if data and data.get("action") == "skip":
+            _tg_checkpoint_data.pop(skip_key, None)
+            _tg_checkpoint_events.pop(skip_key, None)
+            return "skip"
+        if asyncio.get_event_loop().time() >= deadline:
+            return None
+        await asyncio.sleep(2)
+
+
+def _init_pipeline_wait(pipeline_states: dict, video_id: str, check_key: str, issues: list | None = None):
+    """Mark a review step as waiting so the Mini App / other tabs see the popup."""
+    ps = pipeline_states.get(video_id) or {}
+    entry = {"waiting": True, "open": False, "decision": None}
+    if issues is not None:
+        entry["issues"] = issues
+    ps[check_key] = entry
+    pipeline_states[video_id] = ps
+
+
 async def _tg_wait_checkpoint(video_id: str, timeout: float = 1800) -> dict:
     """Wait for a user response at a checkpoint. Returns response dict or empty on timeout."""
     event = asyncio.Event()
@@ -1165,6 +1202,7 @@ async def run_telegram_auto_job(
     ws_clients: dict,
     ocr_engines: dict[str, list],
     job_id: str,
+    pipeline_states: dict,
 ):
     """Run the full Douyin pipeline for a Telegram /douyin command.
 
@@ -1266,12 +1304,12 @@ async def run_telegram_auto_job(
             web_app_base = settings.annotation_web_app_url.rstrip("/")
             video_url = await _tg_web_app_video_url(video_id)
 
-            # 1) Chọn vùng OCR (mode=region) — có nút Bỏ qua.
+            # 1) Chọn vùng OCR (mode=ocr) — có nút Bỏ qua.
             await _tg_send(chat_id, "📐 <b>Chọn vùng quét phụ đề</b> — bấm Mini App, hoặc Bỏ qua để dùng vùng mặc định.")
             await _tg_send_web_app_with_skip(
                 chat_id,
                 f"📐 <b>Chọn vùng OCR</b>\nVideo: <code>{video_id}</code>",
-                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=region",
+                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=ocr",
                 "📐 Chọn vùng quét sub",
                 f"tgcp:{video_id}:skip_region",
             )
@@ -1289,12 +1327,12 @@ async def run_telegram_auto_job(
             else:
                 await _tg_send(chat_id, "⚠️ Không nhận được vùng — dùng vùng mặc định.")
 
-            # 2) Chọn vị trí hiển thị sub (mode=style) — có nút Bỏ qua.
+            # 2) Chọn vị trí hiển thị sub (mode=subtitle) — có nút Bỏ qua.
             await _tg_send(chat_id, "🎨 <b>Chọn vị trí hiển thị phụ đề</b> — bấm Mini App, hoặc Bỏ qua để tự căn.")
             await _tg_send_web_app_with_skip(
                 chat_id,
                 f"🎨 <b>Chọn vị trí phụ đề</b>\nVideo: <code>{video_id}</code>",
-                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=style",
+                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=subtitle",
                 "🎨 Chọn vị trí sub",
                 f"tgcp:{video_id}:skip_style",
             )
@@ -1341,19 +1379,50 @@ async def run_telegram_auto_job(
         line_count = srt_text.count("-->")
         await _tg_send(chat_id, f"✅ OCR xong: {line_count} dòng phụ đề")
 
-        # ── Step 3: Check subs checkpoint ──
+        # ── Step 3: Check subs (timeline review) via Mini App ──
         if job.get("check_subs"):
-            preview = _srt_preview(srt_text)
-            keyboard = [[
-                {"text": "✓ OK", "callback_data": f"tgcp:{video_id}:ok"},
-                {"text": "✏️ Chỉnh sửa", "callback_data": f"tgcp:{video_id}:edit"},
-            ]]
-            await _tg_send_keyboard(
-                chat_id, f"📋 <b>Preview phụ đề:</b>\n<pre>{preview}</pre>", keyboard
+            job["phase"] = "timeline_check"
+            await _tg_send(chat_id, "📝 Đang kiểm tra timeline phụ đề...")
+
+            # Validate timeline để Mini App hiển thị issues (nếu có).
+            issues: list = []
+            try:
+                from app.services.srt_utils import parse_srt, validate_timeline
+                issues = validate_timeline(parse_srt(srt_text))
+            except Exception:
+                issues = []
+
+            # Mark waiting so the Mini App TimelineCheckTab sees the review popup.
+            _init_pipeline_wait(pipeline_states, video_id, "timeline_check", issues)
+
+            web_app_base = settings.annotation_web_app_url.rstrip("/")
+            video_url = await _tg_web_app_video_url(video_id)
+            await _tg_send_web_app_with_skip(
+                chat_id,
+                "📝 <b>Kiểm tra phụ đề</b> — bấm Mini App để rà soát thời gian từng dòng, "
+                "hoặc Bỏ qua để giữ nguyên.",
+                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=timeline",
+                "📝 Kiểm tra phụ đề",
+                f"tgcp:{video_id}:skip_timeline",
             )
-            resp = await _tg_wait_checkpoint(video_id)
-            if resp.get("action") == "edit":
-                await _tg_send(chat_id, "⚠️ Chỉnh sửa cần giao diện web. Tiếp tục với phụ đề hiện tại.")
+            if issues:
+                await _tg_send(chat_id, f"⚠️ Phát hiện {len(issues)} lỗi timeline — chờ bạn duyệt.")
+
+            decision = await _tg_wait_pipeline_decision(pipeline_states, video_id, "timeline_check", f"{video_id}:skip_timeline")
+            if decision == "fix":
+                await _tg_send(chat_id, "🔧 Đang tự sửa timeline phụ đề...")
+                try:
+                    from app.services.srt_utils import parse_srt, fix_timeline, entries_to_srt
+                    fixed, _ = fix_timeline(parse_srt(srt_text))
+                    srt_content.write_text(entries_to_srt(fixed), encoding="utf-8")
+                    srt_text = entries_to_srt(fixed)
+                    await _tg_send(chat_id, "✅ Đã sửa timeline phụ đề.")
+                except Exception:
+                    await _tg_send(chat_id, "⚠️ Sửa timeline thất bại — giữ nguyên.")
+            elif decision == "skip":
+                await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra phụ đề.")
+            else:
+                await _tg_send(chat_id, "✅ Đã xác nhận phụ đề.")
 
         # ── Step 4: Context (needed for translate/dub quality) ──
         if job.get("translate_on") or job.get("auto_dub"):
@@ -1433,20 +1502,31 @@ async def run_telegram_auto_job(
             else:
                 await _tg_send(chat_id, f"⚠️ Lồng tiếng thất bại: {jobs[dub_job_id].get('error', 'unknown')}")
 
-            # Voice check checkpoint
+            # Voice check — duyệt giọng đọc từng dòng qua Mini App (mode=voice)
             if job.get("check_voice"):
-                keyboard = [[
-                    {"text": "✓ OK", "callback_data": f"tgcp:{video_id}:ok"},
-                    {"text": "🔄 Thử lại", "callback_data": f"tgcp:{video_id}:retry"},
-                ]]
-                await _tg_send_keyboard(
-                    chat_id, "🎧 <b>Kiểm tra giọng đọc</b> — xác nhận để tiếp tục:", keyboard
+                job["phase"] = "voice_check"
+                await _tg_send(chat_id, "🎧 Đang chuẩn bị kiểm tra giọng đọc...")
+
+                _init_pipeline_wait(pipeline_states, video_id, "voice_check")
+
+                web_app_base = settings.annotation_web_app_url.rstrip("/")
+                video_url = await _tg_web_app_video_url(video_id)
+                await _tg_send_web_app_with_skip(
+                    chat_id,
+                    "🎧 <b>Kiểm tra giọng đọc</b> — bấm Mini App để nghe và chỉnh giọng từng dòng, "
+                    "hoặc Bỏ qua để giữ nguyên.",
+                    f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=voice",
+                    "🎧 Kiểm tra giọng đọc",
+                    f"tgcp:{video_id}:skip_voice",
                 )
-                resp = await _tg_wait_checkpoint(video_id)
-                if resp.get("action") == "retry":
-                    await _tg_send(chat_id, "🔄 Đang thử lại lồng tiếng...")
-                    jobs[dub_job_id]["status"] = "queued"
-                    await run_dub_job(jobs, ws_clients, dub_job_id)
+
+                decision = await _tg_wait_pipeline_decision(pipeline_states, video_id, "voice_check", f"{video_id}:skip_voice")
+                if decision == "continue":
+                    await _tg_send(chat_id, "✅ Đã xác nhận giọng đọc.")
+                elif decision == "skip":
+                    await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra giọng đọc.")
+                else:
+                    await _tg_send(chat_id, "⚠️ Không nhận được xác nhận — tiếp tục.")
 
         # ── Step 7: Hardcode SRT into video ──
         job["phase"] = "muxing"
@@ -1598,6 +1678,7 @@ async def worker_loop(
     ws_clients: dict,
     ocr_engines: dict[str, list],
     queue: asyncio.Queue,
+    pipeline_states: dict,
 ):
     logger.info("Worker loop started")
     while True:
@@ -1607,7 +1688,7 @@ async def worker_loop(
             if job:
                 job_type = job.get("job_type", "ocr")
                 if job_type == "telegram_auto":
-                    await run_telegram_auto_job(jobs, ws_clients, ocr_engines, job_id)
+                    await run_telegram_auto_job(jobs, ws_clients, ocr_engines, job_id, pipeline_states)
                 elif job_type == "hardcode":
                     await run_hardcode_job(jobs, ws_clients, job_id)
                 elif job_type == "align":

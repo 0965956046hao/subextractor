@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
                 app.state.ws_clients,
                 ocr_engines,
                 app.state.job_queue,
+                app.state.pipeline_states,
             )
         )
         for _ in range(max(1, settings.job_workers))
