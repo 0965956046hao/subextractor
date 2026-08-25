@@ -66,6 +66,32 @@ class TimelineAction(BaseModel):
     issues: list[dict] = []
 
 
+class TelegramAutoRequest(BaseModel):
+    """Request body for POST /api/telegram/auto — full Douyin pipeline config."""
+    url: str
+    chat_id: int
+    src_lang: str = "zh"
+    region_mode: str = "auto"
+    dub_on: bool = True
+    dub_engine: str = "capcut"
+    dub_voice: str = "BV421_vivn_streaming"
+    original_voice: str = "mute"
+    original_gain_db: float = -12.0
+    multi_voice: bool = False
+    auto_fit: bool = True
+    translate_on: bool = True
+    translate_target: str = "vi"
+    auto_dub: bool = True
+    watermark: str = "none"
+    watermark_preset: str = ""
+    remove_watermark: bool = False
+    check_subs: bool = True
+    check_voice: bool = True
+    thumbnail: str = "none"
+    auto_upload_youtube: bool = False
+    youtube_channel: str = ""
+
+
 class PipelineState(BaseModel):
     """Frontend AutoPipeline progress reported for a video, so other tabs (and
     the video list) can mirror the exact step-by-step progress."""

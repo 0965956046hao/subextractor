@@ -1005,6 +1005,300 @@ async def _auto_context(video_id: str, generate_fn, loop, target_lang: str = "vi
         logger.warning("Auto context generation failed (non-critical)", exc_info=True)
 
 
+# ── Telegram Auto Pipeline ────────────────────────────────────────────────
+
+_tg_checkpoint_events: dict[str, asyncio.Event] = {}  # video_id → event
+_tg_checkpoint_data: dict[str, dict] = {}              # video_id → user response
+
+_LANG_TO_OCR = {"zh": "ch", "en": "en", "vi": "latin"}
+
+
+def tg_resolve_checkpoint(video_id: str, data: dict):
+    """Resolve a pending checkpoint — called from the TelegramBot callback handler."""
+    _tg_checkpoint_data[video_id] = data
+    event = _tg_checkpoint_events.get(video_id)
+    if event:
+        event.set()
+
+
+async def _tg_send(chat_id: int, text: str):
+    try:
+        from app.services.telegram_service import telegram_service
+        await telegram_service.send_message(chat_id, text)
+    except Exception:
+        pass
+
+
+async def _tg_send_keyboard(chat_id: int, text: str, keyboard: list[list[dict]]) -> int | None:
+    try:
+        from app.services.telegram_service import telegram_service
+        return await telegram_service.send_message_with_keyboard(chat_id, text, keyboard)
+    except Exception:
+        return None
+
+
+async def _tg_wait_checkpoint(video_id: str, timeout: float = 1800) -> dict:
+    """Wait for a user response at a checkpoint. Returns response dict or empty on timeout."""
+    event = asyncio.Event()
+    _tg_checkpoint_events[video_id] = event
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+        return _tg_checkpoint_data.pop(video_id, {})
+    except asyncio.TimeoutError:
+        return {"action": "timeout"}
+    finally:
+        _tg_checkpoint_events.pop(video_id, None)
+        _tg_checkpoint_data.pop(video_id, None)
+
+
+def _srt_preview(srt_content: str, max_lines: int = 8) -> str:
+    """Short preview of SRT content for Telegram display."""
+    preview = []
+    count = 0
+    for line in srt_content.strip().split("\n"):
+        if "-->" in line:
+            count += 1
+            if count > max_lines:
+                remaining = srt_content.count("-->") - max_lines
+                preview.append(f"\n… và {remaining} dòng nữa")
+                break
+        preview.append(line)
+    return "\n".join(preview) if preview else "Không có phụ đề"
+
+
+async def run_telegram_auto_job(
+    jobs: dict,
+    ws_clients: dict,
+    ocr_engines: dict[str, list],
+    job_id: str,
+):
+    """Run the full Douyin pipeline for a Telegram /douyin command.
+
+    Steps: resolve → OCR → (context) → translate → dub → hardcode → (thumbnail)
+    → (youtube) → done, with Telegram checkpoints at the interactive steps.
+    """
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    chat_id = job.get("chat_id", 0)
+    video_id = None
+    loop = asyncio.get_event_loop()
+
+    try:
+        job["status"] = "processing"
+        job["phase"] = "resolving"
+
+        # ── Step 1: Resolve Douyin link (download + register) ──
+        await _tg_send(chat_id, "📥 Đang tải video từ Douyin...")
+        from app.routers.video_download import _download_and_register
+        result = await loop.run_in_executor(
+            _executor, _download_and_register, job["url"], "douyin"
+        )
+        video_id = result["video_id"]
+        job["video_id"] = video_id
+        video_path = result["video_path"]
+        job["video_path"] = video_path
+        await _tg_send(chat_id, f"✅ Đã tải: {result['title'][:60]}")
+
+        # ── Step 2: OCR ──
+        job["phase"] = "processing"
+        await _tg_send(chat_id, "🔍 Đang nhận dạng phụ đề (OCR)...")
+
+        region = {"x1": 0.114, "y1": 0.748, "x2": 0.863, "y2": 0.972}  # DEFAULT_REGION
+        ocr_lang = _LANG_TO_OCR.get(job.get("src_lang", "zh"), "ch")
+        ocr_type = "apple" if "apple" in ocr_engines else "rapid"
+        engine_pool = ocr_engines.get(ocr_type)
+        if not engine_pool:
+            raise RuntimeError(f"OCR engine '{ocr_type}' không khả dụng")
+
+        # Create an OCR sub-job and run it via the existing runner.
+        ocr_job_id = uuid.uuid4().hex[:12]
+        ocr_job = {
+            "job_id": ocr_job_id,
+            "video_path": video_path,
+            "video_id": video_id,
+            "region": region,
+            "fps": settings.extract_fps or None,
+            "lang": ocr_lang,
+            "ocr_type": ocr_type,
+            "job_type": "ocr",
+            "status": "queued",
+            "phase": "",
+            "progress": 0,
+            "error": None,
+        }
+        jobs[ocr_job_id] = ocr_job
+        await run_job(jobs, ws_clients, ocr_engines, ocr_job_id)
+        if ocr_job.get("status") != "done":
+            raise RuntimeError(f"OCR thất bại: {ocr_job.get('error', 'unknown')}")
+
+        srt_content = settings.temp_dir / "srt" / video_id / "subtitles.srt"
+        srt_text = srt_content.read_text(encoding="utf-8")
+        line_count = srt_text.count("-->")
+        await _tg_send(chat_id, f"✅ OCR xong: {line_count} dòng phụ đề")
+
+        # ── Step 3: Check subs checkpoint ──
+        if job.get("check_subs"):
+            preview = _srt_preview(srt_text)
+            keyboard = [[
+                {"text": "✓ OK", "callback_data": f"tgcp:{video_id}:ok"},
+                {"text": "✏️ Chỉnh sửa", "callback_data": f"tgcp:{video_id}:edit"},
+            ]]
+            await _tg_send_keyboard(
+                chat_id, f"📋 <b>Preview phụ đề:</b>\n<pre>{preview}</pre>", keyboard
+            )
+            resp = await _tg_wait_checkpoint(video_id)
+            if resp.get("action") == "edit":
+                await _tg_send(chat_id, "⚠️ Chỉnh sửa cần giao diện web. Tiếp tục với phụ đề hiện tại.")
+
+        # ── Step 4: Context (needed for translate/dub quality) ──
+        if job.get("translate_on") or job.get("auto_dub"):
+            job["phase"] = "context"
+            await _tg_send(chat_id, "🧠 Đang phân tích ngữ cảnh video...")
+            try:
+                from app.services.context_service import generate_video_context
+                await loop.run_in_executor(
+                    _context_executor,
+                    generate_video_context, video_id, job.get("translate_target", "vi"),
+                )
+            except Exception:
+                await _tg_send(chat_id, "⚠️ Phân tích ngữ cảnh thất bại (không quan trọng).")
+
+        # ── Step 5: Translate ──
+        if job.get("translate_on"):
+            job["phase"] = "translating"
+            await _tg_send(chat_id, "🌐 Đang dịch phụ đề...")
+            tr_job_id = uuid.uuid4().hex[:12]
+            jobs[tr_job_id] = {
+                "job_id": tr_job_id,
+                "job_type": "translate",
+                "video_id": video_id,
+                "status": "queued",
+                "source_lang": job.get("src_lang", "zh"),
+                "target_lang": job.get("translate_target", "vi"),
+                "multi_voice": job.get("multi_voice", False),
+            }
+            await run_translate_job(jobs, ws_clients, tr_job_id)
+            if jobs[tr_job_id].get("status") == "done":
+                await _tg_send(chat_id, "✅ Dịch xong!")
+            else:
+                await _tg_send(chat_id, f"⚠️ Dịch thất bại: {jobs[tr_job_id].get('error', 'unknown')}")
+
+        # ── Step 6: Dub ──
+        if job.get("dub_on") and job.get("auto_dub"):
+            job["phase"] = "dub"
+            await _tg_send(chat_id, "🎤 Đang lồng tiếng...")
+
+            mute_original = job.get("original_voice", "mute") == "mute"
+            multi_voice = job.get("multi_voice", False)
+            dub_engine = job.get("dub_engine", "capcut")
+
+            # Multi-voice (CapCut) requires voice_map.json before dubbing. The
+            # translate step normally generates it, but if translation is off
+            # we must generate it here (mirrors the /api/dub endpoint guard).
+            if multi_voice and dub_engine == "capcut":
+                from app.services.translation_service import load_voice_map, generate_voice_map
+                from app.services.media_utils import _srt_path
+                from app.services.srt_utils import parse_srt
+                if not load_voice_map(video_id):
+                    srt_p = _srt_path(video_id)
+                    entries = parse_srt(srt_p.read_text(encoding="utf-8")) if srt_p.exists() else []
+                    if entries:
+                        await _tg_send(chat_id, "🎭 Đang tạo voice_map cho nhiều giọng...")
+                        voice_map = await loop.run_in_executor(
+                            _context_executor, generate_voice_map, video_id, entries, None
+                        )
+                        if not voice_map:
+                            await _tg_send(chat_id, "⚠️ Không tạo được voice_map — lồng tiếng 1 giọng.")
+
+            dub_job_id = uuid.uuid4().hex[:12]
+            jobs[dub_job_id] = {
+                "job_id": dub_job_id,
+                "job_type": "dub",
+                "video_id": video_id,
+                "status": "queued",
+                "tts_voice": job.get("dub_voice", "BV421_vivn_streaming"),
+                "tts_engine": dub_engine,
+                "mute_original": mute_original,
+                "original_gain_db": job.get("original_gain_db", -12.0),
+                "multi_voice": multi_voice,
+            }
+            await run_dub_job(jobs, ws_clients, dub_job_id)
+            if jobs[dub_job_id].get("status") == "done":
+                await _tg_send(chat_id, "✅ Lồng tiếng xong!")
+            else:
+                await _tg_send(chat_id, f"⚠️ Lồng tiếng thất bại: {jobs[dub_job_id].get('error', 'unknown')}")
+
+            # Voice check checkpoint
+            if job.get("check_voice"):
+                keyboard = [[
+                    {"text": "✓ OK", "callback_data": f"tgcp:{video_id}:ok"},
+                    {"text": "🔄 Thử lại", "callback_data": f"tgcp:{video_id}:retry"},
+                ]]
+                await _tg_send_keyboard(
+                    chat_id, "🎧 <b>Kiểm tra giọng đọc</b> — xác nhận để tiếp tục:", keyboard
+                )
+                resp = await _tg_wait_checkpoint(video_id)
+                if resp.get("action") == "retry":
+                    await _tg_send(chat_id, "🔄 Đang thử lại lồng tiếng...")
+                    jobs[dub_job_id]["status"] = "queued"
+                    await run_dub_job(jobs, ws_clients, dub_job_id)
+
+        # ── Step 7: Hardcode SRT into video ──
+        job["phase"] = "muxing"
+        await _tg_send(chat_id, "🎬 Đang nhúng phụ đề vào video...")
+        hc_job_id = uuid.uuid4().hex[:12]
+        jobs[hc_job_id] = {
+            "job_id": hc_job_id,
+            "job_type": "hardcode",
+            "video_id": video_id,
+            "video_path": video_path,
+            "status": "queued",
+            "watermark": job.get("watermark") == "preset",
+            "watermark_preset": job.get("watermark_preset", ""),
+        }
+        await run_hardcode_job(jobs, ws_clients, hc_job_id)
+        if jobs[hc_job_id].get("status") == "done":
+            await _tg_send(chat_id, "✅ Video đã nhúng phụ đề!")
+        else:
+            await _tg_send(chat_id, f"⚠️ Nhúng phụ đề thất bại: {jobs[hc_job_id].get('error', 'unknown')}")
+
+        # ── Done ──
+        job["status"] = "done"
+        job["progress"] = 100
+        job["phase"] = "done"
+
+        final_dir = settings.temp_dir / "hardcoded" / video_id
+        mp4_files = list(final_dir.glob("*_hardcoded.mp4")) if final_dir.exists() else []
+        if mp4_files:
+            try:
+                from app.services.telegram_service import telegram_service
+                sent = await telegram_service.send_video(
+                    chat_id, str(mp4_files[0]), f"✅ {result['title'][:50]}"
+                )
+            except Exception:
+                sent = False
+            if not sent and settings.public_url:
+                base = settings.public_url.rstrip("/")
+                await _tg_send(
+                    chat_id,
+                    "✅ <b>Hoàn tất!</b>\n\n"
+                    f"▶️ <a href='{base}/api/preview/hardcoded/{video_id}'>Xem video</a>\n"
+                    f"⬇️ <a href='{base}/api/download/hardcoded/{video_id}'>Tải video</a>",
+                )
+        else:
+            await _tg_send(chat_id, "✅ <b>Hoàn tất!</b> Video đã sẵn sàng.")
+
+        logger.info("telegram_auto job %s: done", job_id)
+
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+        logger.exception("telegram_auto job %s: FAILED | %s", job_id, e)
+        await _tg_send(chat_id, f"❌ <b>Lỗi:</b> {str(e)[:200]}")
+
+
 async def run_risk_check_job(
     jobs: dict,
     ws_clients: dict,
@@ -1106,7 +1400,9 @@ async def worker_loop(
         try:
             if job:
                 job_type = job.get("job_type", "ocr")
-                if job_type == "hardcode":
+                if job_type == "telegram_auto":
+                    await run_telegram_auto_job(jobs, ws_clients, ocr_engines, job_id)
+                elif job_type == "hardcode":
                     await run_hardcode_job(jobs, ws_clients, job_id)
                 elif job_type == "align":
                     await run_align_job(jobs, ws_clients, job_id)

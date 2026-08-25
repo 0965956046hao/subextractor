@@ -85,6 +85,43 @@ def _yt_download(url: str, out_dir: Path) -> None:
         raise RuntimeError(f"Tải video thất bại: {err}")
 
 
+def _download_and_register(url: str, source: str) -> dict:
+    """Download a video via yt-dlp (auto-merge) and register it in the store.
+
+    Returns ``{video_id, title, filename, video_path}``. Raises on failure.
+    """
+    video_id = uuid.uuid4().hex[:12]
+    video_dir = settings.temp_dir / "videos" / video_id
+    video_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        title = _yt_title(url)
+        filename = f"{_sanitize_filename(title)}.mp4"
+        _yt_download(url, video_dir)
+    except Exception as e:
+        shutil.rmtree(video_dir, ignore_errors=True)
+        raise RuntimeError(str(e)) from e
+
+    video_path = video_dir / "video.mp4"
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        shutil.rmtree(video_dir, ignore_errors=True)
+        raise RuntimeError("Tải video thất bại: file rỗng hoặc không tìm thấy")
+
+    try:
+        (video_dir / "meta.json").write_text(
+            json.dumps(
+                {"filename": filename, "source": source, "source_url": url, "title": title},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    logger.info("%s import %s → %s (%s)", source, video_id, filename, video_path)
+    return {"video_id": video_id, "title": title, "filename": filename, "video_path": str(video_path)}
+
+
 @router.post("/api/video-download/yt-import")
 async def yt_import(body: YtImportRequest):
     """Download a YouTube video via yt-dlp and register it for the pipeline."""
@@ -92,33 +129,38 @@ async def yt_import(body: YtImportRequest):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL không hợp lệ")
 
-    video_id = uuid.uuid4().hex[:12]
-    video_dir = settings.temp_dir / "videos" / video_id
-    video_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        title = await asyncio.to_thread(_yt_title, url)
-        filename = f"{_sanitize_filename(title)}.mp4"
-        await asyncio.to_thread(_yt_download, url, video_dir)
-    except HTTPException:
-        shutil.rmtree(video_dir, ignore_errors=True)
-        raise
+        result = await asyncio.to_thread(_download_and_register, url, "youtube")
     except Exception as e:
-        shutil.rmtree(video_dir, ignore_errors=True)
         raise HTTPException(500, str(e))
 
-    video_path = video_dir / "video.mp4"
-    if not video_path.exists() or video_path.stat().st_size == 0:
-        shutil.rmtree(video_dir, ignore_errors=True)
-        raise HTTPException(500, "Tải video thất bại: file rỗng hoặc không tìm thấy")
+    return {"video_id": result["video_id"], "title": result["title"], "filename": result["filename"]}
+
+
+class DouyinResolveRequest(BaseModel):
+    url: str
+
+
+@router.post("/api/video-download/resolve")
+async def douyin_resolve(body: DouyinResolveRequest):
+    """Resolve a Douyin link: download the video via yt-dlp and register it.
+
+    Returns ``{video_id, title, filename, video_url}`` where ``video_url`` is
+    the local serving path for the downloaded file.
+    """
+    url = (body.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "URL không hợp lệ")
 
     try:
-        (video_dir / "meta.json").write_text(
-            json.dumps({"filename": filename, "source": "youtube", "source_url": url}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+        result = await asyncio.to_thread(_download_and_register, url, "douyin")
+    except Exception as e:
+        raise HTTPException(500, f"Tải video Douyin thất bại: {e}")
 
-    logger.info("yt-import %s → %s (%s)", video_id, filename, video_path)
+    return {
+        "video_id": result["video_id"],
+        "title": result["title"],
+        "filename": result["filename"],
+        "video_url": f"/api/video/{result['video_id']}",
+    }
     return {"video_id": video_id, "title": title, "filename": filename}

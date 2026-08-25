@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.services.ocr_engine import OCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
-from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image
+from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation
 from app.worker import worker_loop
 
 logging.basicConfig(
@@ -74,6 +74,10 @@ async def lifespan(app: FastAPI):
     from app.services.telegram_service import telegram_service
     await telegram_service.load_from_config()
 
+    # Start Telegram bot handler (registers /douyin + callback handlers)
+    from app.services.telegram_bot import telegram_bot
+    await telegram_bot.start()
+
     logger.info("")
     logger.info("Server ready  >>>  http://localhost:8000")
     logger.info("")
@@ -122,6 +126,8 @@ app.include_router(google_tts.router)
 app.include_router(video_download.router)
 app.include_router(env_tools.router)
 app.include_router(image.router)
+app.include_router(telegram_auto.router)
+app.include_router(annotation.router)
 
 
 @app.get("/api/health")
