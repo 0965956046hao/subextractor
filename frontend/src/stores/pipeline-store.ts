@@ -2430,7 +2430,8 @@ async function runPipeline(id: string, startStep = 4) {
     if (startStep <= 8) {
       patch(id, { stage: "muxing" });
       markStepStart(id, 8);
-      // Resume: nếu video đã có phụ đề cứng thì bỏ qua.
+      // Resume: nếu video đã có phụ đề cứng thì bỏ qua — nhưng PHẢI encode lại
+      // khi bật watermark (video cũ chưa có watermark) để chữ/logo xuất hiện.
       let hardcodedExists = false;
       try {
         const hcCheck = await fetch(`/api/download/hardcoded/${videoId}`);
@@ -2438,10 +2439,13 @@ async function runPipeline(id: string, startStep = 4) {
       } catch {
         // ignore
       }
-      if (hardcodedExists) {
+      if (hardcodedExists && !cur.watermark) {
         appendLog(id, "Video đã có phụ đề cứng — bỏ qua encode.");
         markStepSkipped(id, 8);
       } else {
+        if (hardcodedExists) {
+          appendLog(id, "Đã có phụ đề cứng nhưng bật watermark — encode lại để chèn watermark.");
+        }
         appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
         const hr = await fetch(`/api/hardcode/${videoId}`, {
           method: "POST",

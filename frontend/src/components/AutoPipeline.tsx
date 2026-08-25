@@ -1830,6 +1830,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               now={now}
               onRemove={() => removePipelineEntry(selected)}
               onStartNext={focusNewVideo}
+              ytChannels={ytChannels}
+              presets={presets}
             />
           </AnimatedBlock>
         ) : (
@@ -2351,11 +2353,15 @@ function DetailView({
   now,
   onRemove,
   onStartNext,
+  ytChannels,
+  presets,
 }: {
   pipeline: Pipeline;
   now: number;
   onRemove: () => void;
   onStartNext?: () => void;
+  ytChannels: YouTubeChannelInfo[];
+  presets: WatermarkPreset[];
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2732,6 +2738,44 @@ function DetailView({
                         ? tr(STEP_DETAIL_KEYS[i])
                         : s.detail}
                   </p>
+                  {i === 11 && p.autoUploadYoutube && (active || done) && (
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] text-ink-light flex-shrink-0">
+                        {tr("pipeline.youtubeChannel")}
+                      </span>
+                      <select
+                        value={p.youtubeChannel || ""}
+                        onChange={(e) => updatePipeline(p.id, { youtubeChannel: e.target.value })}
+                        className="rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                      >
+                        <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
+                        {ytChannels.map((ch) => (
+                          <option key={ch.id} value={ch.id}>
+                            {ch.name}
+                          </option>
+                        ))}
+                      </select>
+                      {p.watermark && (
+                        <>
+                          <span className="text-[11px] text-ink-light flex-shrink-0">
+                            {tr("pipeline.watermarkSet")}
+                          </span>
+                          <select
+                            value={p.watermarkPreset || ""}
+                            onChange={(e) => updatePipeline(p.id, { watermarkPreset: e.target.value })}
+                            className="rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                          >
+                            <option value="">{tr("pipeline.watermarkNone")}</option>
+                            {presets.map((pr) => (
+                              <option key={pr.id} value={pr.id}>
+                                {pr.name}
+                              </option>
+                            ))}
+                          </select>
+                        </>
+                      )}
+                    </div>
+                  )}
                   {(active || done) && !skipped && (
                     <div className="mt-1.5 h-1 rounded-full bg-black/[0.06] overflow-hidden">
                       <div
@@ -2766,12 +2810,18 @@ function DetailView({
                   )}
                   {canRerun && (i >= 4 || Boolean(p.url)) && (
                     <button
-                      onClick={() => rerunPipeline(p.id, i)}
-                      title={tr("pipeline.rerunFrom", {
-                        label: STEP_LABEL_KEYS[i]
-                          ? tr(STEP_LABEL_KEYS[i])
-                          : s.label,
-                      })}
+                      onClick={() => rerunPipeline(p.id, i === 11 ? 8 : i)}
+                      title={
+                        i === 11
+                          ? tr("pipeline.rerunFrom", {
+                              label: tr("pipeline.step.label.mux"),
+                            })
+                          : tr("pipeline.rerunFrom", {
+                              label: STEP_LABEL_KEYS[i]
+                                ? tr(STEP_LABEL_KEYS[i])
+                                : s.label,
+                            })
+                      }
                       className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
                     >
                       <svg

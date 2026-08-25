@@ -1,10 +1,11 @@
 import json
 import logging
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.config import settings
@@ -391,9 +392,71 @@ def _media_type(path: Path) -> str:
     return MEDIA_TYPES.get(path.suffix.lower(), "video/mp4")
 
 
+def _trim_video(source: Path, duration: float, out_dir: Path) -> Path:
+    """Use FFmpeg to copy the first `duration` seconds (fast, no re-encode)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{source.stem}_first{int(duration)}s.mp4"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return out_path
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-t", str(duration),
+        "-c", "copy",
+        str(out_path),
+        "-hide_banner", "-loglevel", "error",
+    ]
+    subprocess.run(cmd, check=True, timeout=120)
+    return out_path
+
+
+@router.get("/api/video/{video_id}/{filename:path}")
+async def get_video(
+    video_id: str,
+    filename: str,
+    duration: float | None = Query(None, description="Duration in seconds — first N seconds of the video"),
+):
+    """Serve a video file by video_id and filename.
+
+    Examples:
+        /api/video/{id}/video.mp4
+        /api/video/{id}/video.mp4?duration=10
+    """
+    base = settings.temp_dir / "videos" / video_id
+    target = base / filename
+    if not (target.exists() and target.is_file()):
+        hd_dir = settings.temp_dir / "hardcoded" / video_id
+        for f in hd_dir.glob("*_hardcoded.mp4"):
+            target = f
+            break
+        else:
+            raise HTTPException(404, "Video file not found")
+
+    if duration and duration > 0:
+        trim_dir = settings.temp_dir / "trimmed" / video_id
+        try:
+            target = _trim_video(target, duration, trim_dir)
+        except Exception as e:
+            raise HTTPException(500, f"Failed to trim video: {e}")
+
+    return FileResponse(str(target), media_type=_media_type(target))
+
+
 @router.get("/api/video/{video_id}")
-async def get_video(video_id: str):
+async def get_video_compat(
+    video_id: str,
+    duration: float | None = Query(None, description="Duration in seconds — first N seconds of the video"),
+):
+    """Legacy endpoint — auto-detect video file by video_id."""
     video_path = _get_video_path(video_id)
+
+    if duration and duration > 0:
+        trim_dir = settings.temp_dir / "trimmed" / video_id
+        try:
+            video_path = _trim_video(video_path, duration, trim_dir)
+        except Exception as e:
+            raise HTTPException(500, f"Failed to trim video: {e}")
+
     return FileResponse(str(video_path), media_type=_media_type(video_path))
 
 

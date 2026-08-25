@@ -103,15 +103,26 @@ def combine_tts_mp3(
     chunk_dir = out_path.parent
     chunk_files: List[Path] = []
     try:
+        # Pass 1 — thu thập file TTS hợp lệ (không gọi subprocess).
+        valid: list[tuple[int, object, Path]] = []
         for i, entry in enumerate(entries):
             if i >= len(audio_files):
                 break
             af = audio_files[i]
             if not af or not af.exists() or af.stat().st_size == 0:
                 continue
+            valid.append((i, entry, af))
+
+        # Pass 2 — ffprobe (đo duration) + atempo SONG SONG: mỗi file là 1
+        # subprocess riêng nên chạy tuần tự rất chậm với hàng trăm dòng.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _prepare(vi: tuple[int, object, Path]):
+            i, entry, af = vi
             srt_dur = entry.end - entry.start
             mp3_dur = _get_audio_duration(af)
             tempo = "-"
+            adj_path: Path | None = None
             # Tolerance 10%: skip auto-atempo if audio already close to SRT timing
             # (user may have manually adjusted speed via the alignment panel).
             if srt_dur > 0 and mp3_dur > srt_dur * 1.10:
@@ -126,13 +137,21 @@ def combine_tts_mp3(
                     str(adj),
                 ])
                 af = adj
-                tempo_files.append(adj)
+                adj_path = adj
                 tempo = f"{speed:.4f}"
-            items.append((af, entry.start, entry.end))
-            logger.info(
-                "  [%s] delay=%dms tempo=%s | %s",
-                entry.startLabel, int(entry.start * 1000), tempo, entry.text,
-            )
+            return af, entry, tempo, adj_path
+
+        if valid:
+            with ThreadPoolExecutor(max_workers=min(8, len(valid))) as executor:
+                prepared = list(executor.map(_prepare, valid))
+            for af, entry, tempo, adj_path in prepared:
+                if adj_path:
+                    tempo_files.append(adj_path)
+                items.append((af, entry.start, entry.end))
+                logger.info(
+                    "  [%s] delay=%dms tempo=%s | %s",
+                    entry.startLabel, int(entry.start * 1000), tempo, entry.text,
+                )
 
         if not items:
             raise RuntimeError("Không có file TTS nào để gộp")

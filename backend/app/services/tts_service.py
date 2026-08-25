@@ -540,27 +540,36 @@ def synthesize_srt_capcut_multi(
             failed.append(i)
         return found
 
-    for voice, idxs in groups.items():
+    # Gửi các batch job song song (mỗi giọng 1 job CapCut, prefix riêng → không
+    # đụng file). Download cũng song song; rename + cập nhật state tuần tự sau.
+    def _submit_group(voice, idxs):
         idxs = [i for i in idxs if entries[i].text.strip()]
         if not idxs:
-            continue
+            return voice, [], idxs
         texts = [entries[i].text.strip() for i in idxs]
-        # Unique prefix per voice so per-group files never collide in out_dir.
         prefix = "mv_" + re.sub(r"[^A-Za-z0-9_]", "_", voice)[:40]
         if log_fn:
             log_fn(f"  Giọng {voice}: {len(idxs)} dòng...")
         try:
             written = generate_segments_to_dir(
-                texts,
-                out_dir,
-                voice=voice,
-                rate=rate,
-                prefix=prefix,
+                texts, out_dir, voice=voice, rate=rate, prefix=prefix,
                 progress_callback=None,
             )
         except Exception as e:
             logger.warning("CapCut multi-voice job failed for %s: %s", voice, e)
             written = []
+        return voice, written, idxs
+
+    group_items = list(groups.items())
+    results: List[tuple] = []
+    if len(group_items) > 1:
+        with ThreadPoolExecutor(max_workers=min(4, len(group_items))) as executor:
+            results = list(executor.map(lambda it: _submit_group(it[0], it[1]), group_items))
+    elif group_items:
+        results = [_submit_group(group_items[0][0], group_items[0][1])]
+
+    for voice, written, idxs in results:
+        prefix = "mv_" + re.sub(r"[^A-Za-z0-9_]", "_", voice)[:40]
         _write_found(prefix, written, idxs)
 
     # Fallback: any line whose assigned voice failed → retry with the DEFAULT voice.
