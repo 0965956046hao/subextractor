@@ -1314,6 +1314,31 @@ function enqueue(id: string, startStep = 0) {
   processQueue();
 }
 
+// Watches the backend for a voice-review decision made from another tab or the
+// Telegram Mini App (POST /api/pipeline/{id}/voice {action:"continue"}).
+function pollBackendVoiceDecision(
+  videoId: string,
+  id: string,
+  signal: AbortSignal,
+): Promise<string> {
+  return new Promise((resolve) => {
+    const step = async () => {
+      if (signal.aborted) return;
+      try {
+        const st = await getPipelineState(videoId);
+        if (st?.voice_check?.decision === "continue") {
+          resolve("continue");
+          return;
+        }
+      } catch {
+        // ignore transient
+      }
+      if (!signal.aborted) setTimeout(step, 1000);
+    };
+    setTimeout(step, 1000);
+  });
+}
+
 async function processQueue() {
   if (processing) return;
   if (queue.length === 0) return;
@@ -2331,6 +2356,18 @@ async function runPipeline(id: string, startStep = 4) {
             // Report the pause so other tabs/browsers can show the same popup,
             // and let a remote "Tiếp tục xử lý" / "Sửa timeline" unblock us.
             reportTimelineAction(videoId, "wait", issues).catch(() => {});
+            // Telegram Mini App button — duyệt timeline từ điện thoại.
+            try {
+              await fetch(`/api/telegram/web-app/${videoId}`, {
+                method: "POST",
+                headers: JSON_HEADERS,
+                body: JSON.stringify({
+                  button_text: "📝 Kiểm tra phụ đề",
+                  mode: "timeline",
+                }),
+              });
+              appendLog(id, "Đã gửi nút Mini App kiểm tra sub qua Telegram.");
+            } catch { /* ignore */ }
             appendLog(
               id,
               issues.length > 0
@@ -2459,8 +2496,30 @@ async function runPipeline(id: string, startStep = 4) {
           voiceCheck: { waiting: true, open: false },
         });
         patch(id, { resumeStep: 8 });
+        // Report pause + Telegram Mini App button — duyệt voice từ điện thoại.
+        fetch(`/api/pipeline/${videoId}/voice`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ action: "wait" }),
+        }).catch(() => {});
         try {
-          await waitForVoiceCheck(id);
+          await fetch(`/api/telegram/web-app/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({
+              button_text: "🎙 Kiểm tra giọng đọc",
+              mode: "voice",
+            }),
+          });
+          appendLog(id, "Đã gửi nút Mini App kiểm tra voice qua Telegram.");
+        } catch { /* ignore */ }
+        try {
+          const voiceAbort = new AbortController();
+          await Promise.race([
+            waitForVoiceCheck(id),
+            pollBackendVoiceDecision(videoId, id, voiceAbort.signal),
+          ]);
+          voiceAbort.abort();
           appendLog(id, "Đã xác nhận giọng đọc.");
         } catch (e) {
           appendLog(

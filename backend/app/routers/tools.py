@@ -674,7 +674,10 @@ async def send_telegram_web_app(video_id: str, request: Request):
         video_url = f"{base_url}/api/video/{video_id}/video.mp4?duration=10"
 
     # Mini App URL
+    mode = str(body.get("mode", "") or "")
     mini_app_url = f"https://subtitlewatermark.vercel.app/?url={video_url}&videoid={video_id}"
+    if mode:
+        mini_app_url += f"&mode={mode}"
 
     # Message text
     text = (
@@ -2541,6 +2544,8 @@ async def update_pipeline_state(
     prev = pipeline_states.get(video_id) or {}
     if body.timeline_check is None:
         new_state["timeline_check"] = prev.get("timeline_check")
+    if prev.get("voice_check"):
+        new_state["voice_check"] = prev["voice_check"]
     if prev.get("watermark_confirm"):
         new_state["watermark_confirm"] = prev["watermark_confirm"]
     pipeline_states[video_id] = new_state
@@ -2600,5 +2605,32 @@ async def update_timeline_check(
             "decision": body.action,
         })
     ps["timeline_check"] = tc
+    pipeline_states[video_id] = ps
+    return {"ok": True, "video_id": video_id}
+
+
+# ── POST /api/pipeline/{video_id}/voice ──
+
+@router.post("/api/pipeline/{video_id}/voice")
+async def update_voice_check(
+    video_id: str,
+    body: dict,
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
+    """Voice-review pause state, mirroring timeline_check so a remote client
+    (Telegram Mini App) can resolve the desktop pipeline's voice check.
+    Body: {action: "wait"} or {action: "continue"}."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    action = str(body.get("action", "") or "")
+    ps = pipeline_states.get(video_id) or {}
+    vc = dict(ps.get("voice_check") or {})
+    if action == "wait":
+        vc.update({"waiting": True, "decision": None})
+    elif action == "continue":
+        vc.update({"waiting": False, "decision": "continue"})
+    else:
+        raise HTTPException(400, "action must be wait|continue")
+    ps["voice_check"] = vc
     pipeline_states[video_id] = ps
     return {"ok": True, "video_id": video_id}

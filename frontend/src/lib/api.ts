@@ -68,6 +68,7 @@ export interface PipelineProgress {
   step_progress: (number | null)[];
   error?: string;
   timeline_check?: PipelineTimelineCheck | null;
+  voice_check?: { waiting?: boolean; decision?: string | null } | null;
 }
 
 export interface VideoMeta {
