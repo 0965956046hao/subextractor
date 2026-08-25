@@ -1114,9 +1114,10 @@ async def _tg_wait_annotation_or_skip(
         val = meta.get(field)
         if val:
             return val, False
-        # Check skip checkpoint (non-blocking).
+        # Check skip checkpoint (non-blocking). Any data under the skip key
+        # means the user tapped the skip button (action = "skip_region"/"skip_style").
         data = _tg_checkpoint_data.get(skip_key)
-        if data and data.get("action") == "skip":
+        if data:
             _tg_checkpoint_data.pop(skip_key, None)
             _tg_checkpoint_events.pop(skip_key, None)
             return None, True
@@ -1152,9 +1153,9 @@ async def _tg_wait_pipeline_decision(
         decision = check.get("decision")
         if decision:
             return decision
-        # Skip button (Telegram fallback).
+        # Skip button (Telegram fallback). Any data under the skip key means skip.
         data = _tg_checkpoint_data.get(skip_key)
-        if data and data.get("action") == "skip":
+        if data:
             _tg_checkpoint_data.pop(skip_key, None)
             _tg_checkpoint_events.pop(skip_key, None)
             return "skip"
