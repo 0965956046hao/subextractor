@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # endpoint này để lấy video_url + audio_url cho link Douyin (giống luồng FE).
     frontend_url: str = "http://localhost:3000"
 
+    # Telegram Mini App dùng cho chọn vùng OCR + vị trí hiển thị phụ đề
+    # (annotator). Cùng app với watermark (subtitlewatermark.vercel.app), phân
+    # biệt hành động qua tham số `mode` (region | style).
+    annotation_web_app_url: str = "https://subtitlewatermark.vercel.app"
+
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
 

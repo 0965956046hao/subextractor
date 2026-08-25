@@ -1037,6 +1037,52 @@ async def _tg_send_keyboard(chat_id: int, text: str, keyboard: list[list[dict]])
         return None
 
 
+async def _tg_send_web_app(chat_id: int, text: str, web_app_url: str, button_text: str):
+    """Send a Telegram Mini App button to a specific chat."""
+    try:
+        from app.services.telegram_service import telegram_service
+        await telegram_service.send_web_app_button(chat_id, text, web_app_url, button_text)
+    except Exception:
+        pass
+
+
+def _annotation_path(video_id: str) -> Path:
+    return settings.temp_dir / "videos" / video_id / "meta.json"
+
+
+def _read_annotation_meta(video_id: str) -> dict:
+    p = _annotation_path(video_id)
+    if not p.exists():
+        return {}
+    try:
+        import json as _json
+        return _json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+async def _tg_wait_annotation(video_id: str, field: str, timeout: float = 900) -> dict | None:
+    """Poll meta.json until `field` (region/style) is set by the Mini App.
+
+    Returns the saved value dict, or None on timeout.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        meta = await asyncio.get_event_loop().run_in_executor(None, _read_annotation_meta, video_id)
+        val = meta.get(field)
+        if val:
+            return val
+        if asyncio.get_event_loop().time() >= deadline:
+            return None
+        await asyncio.sleep(2)
+
+
+async def _tg_web_app_video_url(video_id: str) -> str:
+    """Build the public video URL the Mini App needs to preview the frame."""
+    base = (settings.public_url or "http://localhost:8000").rstrip("/")
+    return f"{base}/api/video/{video_id}/video.mp4?duration=10"
+
+
 async def _tg_wait_checkpoint(video_id: str, timeout: float = 1800) -> dict:
     """Wait for a user response at a checkpoint. Returns response dict or empty on timeout."""
     event = asyncio.Event()
@@ -1156,11 +1202,51 @@ async def run_telegram_auto_job(
 
         await _tg_send(chat_id, f"✅ Đã tải: {title[:60] or video_id}")
 
+        # ── Step 1.5: Manual region + subtitle position (via Mini App) ──
+        region = {"x1": 0.114, "y1": 0.748, "x2": 0.863, "y2": 0.972}  # DEFAULT_REGION
+        selected_style = None
+
+        if job.get("region_mode") == "manual":
+            web_app_base = settings.annotation_web_app_url.rstrip("/")
+            video_url = await _tg_web_app_video_url(video_id)
+
+            # 1) Chọn vùng OCR (mode=region)
+            await _tg_send(chat_id, "📐 <b>Chọn vùng quét phụ đề</b> — bấm nút để mở Mini App.")
+            await _tg_send_web_app(
+                chat_id,
+                f"📐 <b>Chọn vùng OCR</b>\nVideo: <code>{video_id}</code>",
+                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=region",
+                "📐 Chọn vùng quét sub",
+            )
+            chosen_region = await _tg_wait_annotation(video_id, "region")
+            if chosen_region and all(k in chosen_region for k in ("x1", "y1", "x2", "y2")):
+                region = {
+                    "x1": float(chosen_region["x1"]),
+                    "y1": float(chosen_region["y1"]),
+                    "x2": float(chosen_region["x2"]),
+                    "y2": float(chosen_region["y2"]),
+                }
+                await _tg_send(chat_id, f"✅ Đã chọn vùng: x {region['x1']:.2f}–{region['x2']:.2f} · y {region['y1']:.2f}–{region['y2']:.2f}")
+            else:
+                await _tg_send(chat_id, "⚠️ Không nhận được vùng — dùng vùng mặc định.")
+
+            # 2) Chọn vị trí hiển thị sub (mode=style)
+            await _tg_send(chat_id, "🎨 <b>Chọn vị trí hiển thị phụ đề</b> — bấm nút để mở Mini App.")
+            await _tg_send_web_app(
+                chat_id,
+                f"🎨 <b>Chọn vị trí phụ đề</b>\nVideo: <code>{video_id}</code>",
+                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=style",
+                "🎨 Chọn vị trí sub",
+            )
+            style_val = await _tg_wait_annotation(video_id, "style")
+            if isinstance(style_val, dict) and style_val:
+                selected_style = style_val
+                await _tg_send(chat_id, "✅ Đã chọn vị trí phụ đề.")
+
         # ── Step 2: OCR ──
         job["phase"] = "processing"
         await _tg_send(chat_id, "🔍 Đang nhận dạng phụ đề (OCR)...")
 
-        region = {"x1": 0.114, "y1": 0.748, "x2": 0.863, "y2": 0.972}  # DEFAULT_REGION
         ocr_lang = _LANG_TO_OCR.get(job.get("src_lang", "zh"), "ch")
         ocr_type = "apple" if "apple" in ocr_engines else "rapid"
         engine_pool = ocr_engines.get(ocr_type)
@@ -1312,6 +1398,9 @@ async def run_telegram_auto_job(
             "status": "queued",
             "watermark": job.get("watermark") == "preset",
             "watermark_preset": job.get("watermark_preset", ""),
+            "auto_fit": job.get("auto_fit", True),
+            "region": region,
+            "style": selected_style,
         }
         await run_hardcode_job(jobs, ws_clients, hc_job_id)
         if jobs[hc_job_id].get("status") == "done":
