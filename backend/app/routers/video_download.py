@@ -15,6 +15,7 @@ import sys
 import uuid
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -143,24 +144,31 @@ class DouyinResolveRequest(BaseModel):
 
 @router.post("/api/video-download/resolve")
 async def douyin_resolve(body: DouyinResolveRequest):
-    """Resolve a Douyin link: download the video via yt-dlp and register it.
+    """Resolve a Douyin link by delegating to the frontend Chrome resolver.
 
-    Returns ``{video_id, title, filename, video_url}`` where ``video_url`` is
-    the local serving path for the downloaded file.
+    The frontend (Next.js route ``/api/video-download/resolve``) opens Chrome,
+    captures the separate ``video_url`` + ``audio_url`` CDN tracks, plus
+    thumbnail and context images. Backend just proxies that call so the
+    Telegram pipeline can reuse the exact same FE flow (resolve → merge →
+    import).
     """
     url = (body.url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL không hợp lệ")
 
+    frontend = settings.frontend_url.rstrip("/")
     try:
-        result = await asyncio.to_thread(_download_and_register, url, "douyin")
-    except Exception as e:
-        raise HTTPException(500, f"Tải video Douyin thất bại: {e}")
+        async with httpx.AsyncClient(timeout=90) as client:
+            resp = await client.post(f"{frontend}/api/video-download/resolve", json={"url": url})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Không kết nối được frontend resolve: {e}")
 
-    return {
-        "video_id": result["video_id"],
-        "title": result["title"],
-        "filename": result["filename"],
-        "video_url": f"/api/video/{result['video_id']}",
-    }
-    return {"video_id": video_id, "title": title, "filename": filename}
+    if resp.status_code != 200:
+        detail = ""
+        try:
+            detail = resp.json().get("detail", resp.text[:200])
+        except Exception:
+            detail = resp.text[:200]
+        raise HTTPException(resp.status_code, detail)
+
+    return resp.json()

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # xem/tải video trong thông báo Telegram. Rỗng = không kèm link.
     public_url: str = ""
 
+    # URL frontend Next.js (resolve Douyin bằng Chrome/Puppeteer). Backend gọi
+    # endpoint này để lấy video_url + audio_url cho link Douyin (giống luồng FE).
+    frontend_url: str = "http://localhost:3000"
+
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
 

@@ -44,7 +44,7 @@ async def _tg_notify_video(video_path, caption: str) -> bool:
     except Exception:
         pass
     return False
-from app.services.media_utils import _srt_path, _srt_best_path, _duration_covers, _get_duration
+from app.services.media_utils import _srt_path, _srt_best_path, _duration_covers, _get_duration, _video_path
 
 logger = logging.getLogger(__name__)
 
@@ -1089,17 +1089,72 @@ async def run_telegram_auto_job(
         job["status"] = "processing"
         job["phase"] = "resolving"
 
-        # ── Step 1: Resolve Douyin link (download + register) ──
-        await _tg_send(chat_id, "📥 Đang tải video từ Douyin...")
-        from app.routers.video_download import _download_and_register
-        result = await loop.run_in_executor(
-            _executor, _download_and_register, job["url"], "douyin"
+        # ── Step 1: Resolve Douyin link (same flow as FE: resolve → merge → import) ──
+        await _tg_send(chat_id, "📥 Đang phân tích link Douyin...")
+
+        # 1a. Resolve via frontend Chrome resolver → video_url + audio_url + thumbnail + big_thumbs
+        from app.routers.video_download import douyin_resolve, DouyinResolveRequest, _sanitize_filename
+        from app.routers.video_merge import (
+            merge_video_audio, import_video, MergeRequest, ImportRequest, get_merge_status,
         )
-        video_id = result["video_id"]
+
+        rd = await douyin_resolve(DouyinResolveRequest(url=job["url"]))
+        video_url = rd.get("video_url")
+        audio_url = rd.get("audio_url")
+        title = rd.get("title") or ""
+        thumbnail = rd.get("thumbnail")
+        big_thumbs = rd.get("bigThumbs") or []
+
+        original_name = _sanitize_filename(title) or "video"
+        imp_name = f"{original_name}.mp4"
+
+        # 1b. Merge (nếu có 2 file video + audio riêng), rồi import.
+        if audio_url and video_url:
+            await _tg_send(chat_id, "⬇️ Đang tải video + audio và gộp...")
+            merge_result = merge_video_audio(MergeRequest(
+                video_url=video_url,
+                audio_url=audio_url,
+                thumbnail_url=thumbnail or "",
+                big_thumbs=big_thumbs,
+            ))
+            merge_id = merge_result["job_id"]
+
+            # Poll merge status until done (mirrors FE pollMerge).
+            for _ in range(360):
+                ms = await get_merge_status(merge_id)
+                if ms.get("status") == "done":
+                    break
+                if ms.get("status") == "error":
+                    raise RuntimeError(ms.get("error") or "Merge thất bại")
+                await asyncio.sleep(2)
+            else:
+                raise RuntimeError("Merge quá thời gian chờ")
+            await _tg_send(chat_id, "✅ Đã tải và gộp video + audio xong.")
+
+            imp_result = import_video(ImportRequest(merge_id=merge_id, filename=imp_name))
+        else:
+            # Chỉ 1 file video (đã có audio) → import trực tiếp theo URL.
+            await _tg_send(chat_id, "⬇️ Đang tải video...")
+            imp_result = import_video(ImportRequest(
+                url=video_url,
+                filename=imp_name,
+                thumbnail_url=thumbnail or "",
+                big_thumbs=big_thumbs,
+            ))
+
+        video_id = imp_result["video_id"]
         job["video_id"] = video_id
-        video_path = result["video_path"]
+        video_path = str(_video_path(video_id))
         job["video_path"] = video_path
-        await _tg_send(chat_id, f"✅ Đã tải: {result['title'][:60]}")
+
+        # Lưu share text (ngữ cảnh gốc) — giống FE gửi /api/context/{id}/share-text.
+        try:
+            from app.services.context_service import save_share_text
+            save_share_text(video_id, job["url"])
+        except Exception:
+            pass
+
+        await _tg_send(chat_id, f"✅ Đã tải: {title[:60] or video_id}")
 
         # ── Step 2: OCR ──
         job["phase"] = "processing"
