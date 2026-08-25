@@ -555,7 +555,9 @@ class TelegramBot:
             f"🔗 <code>{_shorten(config.url, 60)}</code>",
         )
 
-        base = settings.public_url.rstrip("/") if settings.public_url else "http://localhost:8000"
+        # Gọi trực tiếp backend local để trigger pipeline (KHÔNG dùng public_url —
+        # tunnel công khai không route được loopback về chính tiến trình này).
+        base = "http://localhost:8000"
         body = {
             "url": config.url,
             "chat_id": chat_id,
