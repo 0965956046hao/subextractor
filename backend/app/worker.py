@@ -1131,6 +1131,11 @@ async def _tg_web_app_video_url(video_id: str) -> str:
     return f"{base}/api/video/{video_id}/video.mp4?duration=10"
 
 
+async def _tg_next_step(chat_id: int):
+    """Notify the user that the pipeline is moving to the next step."""
+    await _tg_send(chat_id, "▶️ Đang thực hiện bước tiếp theo...")
+
+
 async def _tg_wait_pipeline_decision(
     pipeline_states: dict, video_id: str, check_key: str, skip_key: str, timeout: float = 600,
 ) -> str | None:
@@ -1322,10 +1327,13 @@ async def run_telegram_auto_job(
                     "y2": float(chosen_region["y2"]),
                 }
                 await _tg_send(chat_id, f"✅ Đã chọn vùng: x {region['x1']:.2f}–{region['x2']:.2f} · y {region['y1']:.2f}–{region['y2']:.2f}")
+                await _tg_next_step(chat_id)
             elif skipped:
                 await _tg_send(chat_id, "⏭️ Bỏ qua — dùng vùng mặc định.")
+                await _tg_next_step(chat_id)
             else:
                 await _tg_send(chat_id, "⚠️ Không nhận được vùng — dùng vùng mặc định.")
+                await _tg_next_step(chat_id)
 
             # 2) Chọn vị trí hiển thị sub (mode=subtitle) — có nút Bỏ qua.
             await _tg_send(chat_id, "🎨 <b>Chọn vị trí hiển thị phụ đề</b> — bấm Mini App, hoặc Bỏ qua để tự căn.")
@@ -1340,8 +1348,10 @@ async def run_telegram_auto_job(
             if isinstance(style_val, dict) and style_val:
                 selected_style = style_val
                 await _tg_send(chat_id, "✅ Đã chọn vị trí phụ đề.")
+                await _tg_next_step(chat_id)
             elif skipped_style:
                 await _tg_send(chat_id, "⏭️ Bỏ qua — tự căn vị trí phụ đề.")
+                await _tg_next_step(chat_id)
 
         # ── Step 2: OCR ──
         job["phase"] = "processing"
@@ -1421,8 +1431,10 @@ async def run_telegram_auto_job(
                     await _tg_send(chat_id, "⚠️ Sửa timeline thất bại — giữ nguyên.")
             elif decision == "skip":
                 await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra phụ đề.")
+                await _tg_next_step(chat_id)
             else:
                 await _tg_send(chat_id, "✅ Đã xác nhận phụ đề.")
+                await _tg_next_step(chat_id)
 
         # ── Step 4: Context (needed for translate/dub quality) ──
         if job.get("translate_on") or job.get("auto_dub"):
@@ -1523,10 +1535,13 @@ async def run_telegram_auto_job(
                 decision = await _tg_wait_pipeline_decision(pipeline_states, video_id, "voice_check", f"{video_id}:skip_voice")
                 if decision == "continue":
                     await _tg_send(chat_id, "✅ Đã xác nhận giọng đọc.")
+                    await _tg_next_step(chat_id)
                 elif decision == "skip":
                     await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra giọng đọc.")
+                    await _tg_next_step(chat_id)
                 else:
                     await _tg_send(chat_id, "⚠️ Không nhận được xác nhận — tiếp tục.")
+                    await _tg_next_step(chat_id)
 
         # ── Step 7: Hardcode SRT into video ──
         job["phase"] = "muxing"
@@ -1557,6 +1572,12 @@ async def run_telegram_auto_job(
 
         final_dir = settings.temp_dir / "hardcoded" / video_id
         mp4_files = list(final_dir.glob("*_hardcoded.mp4")) if final_dir.exists() else []
+
+        base = (settings.public_url or "").rstrip("/")
+        preview_link = f"{base}/api/preview/hardcoded/{video_id}" if base else ""
+        download_link = f"{base}/api/download/hardcoded/{video_id}" if base else ""
+
+        # Luôn gửi link xem video để user bấm mở (ưu tiên gửi file nếu nhỏ).
         if mp4_files:
             try:
                 from app.services.telegram_service import telegram_service
@@ -1565,16 +1586,24 @@ async def run_telegram_auto_job(
                 )
             except Exception:
                 sent = False
-            if not sent and settings.public_url:
-                base = settings.public_url.rstrip("/")
-                await _tg_send(
-                    chat_id,
-                    "✅ <b>Hoàn tất!</b>\n\n"
-                    f"▶️ <a href='{base}/api/preview/hardcoded/{video_id}'>Xem video</a>\n"
-                    f"⬇️ <a href='{base}/api/download/hardcoded/{video_id}'>Tải video</a>",
-                )
         else:
-            await _tg_send(chat_id, "✅ <b>Hoàn tất!</b> Video đã sẵn sàng.")
+            sent = False
+
+        done_text = "✅ <b>Hoàn tất!</b>\n\n"
+        if preview_link:
+            done_text += f"▶️ <a href='{preview_link}'>Xem video</a>"
+        if download_link:
+            done_text += f" · ⬇️ <a href='{download_link}'>Tải video</a>"
+
+        if sent:
+            # Đã gửi file video trực tiếp — vẫn kèm link để xem trên web nếu có.
+            if preview_link:
+                await _tg_send(chat_id, done_text)
+        else:
+            if preview_link:
+                await _tg_send(chat_id, done_text)
+            else:
+                await _tg_send(chat_id, "✅ <b>Hoàn tất!</b> Video đã sẵn sàng.")
 
         logger.info("telegram_auto job %s: done", job_id)
 
