@@ -110,13 +110,15 @@ def combine_tts_mp3(
 ) -> Path:
     """Gộp các file mp3 TTS thành 1 file full voice mp3 (đặt theo timestamp SRT).
 
-    Revert behavior trước 19/8: 1 ffmpeg cho TOÀN BỘ entries, tempo inline
-    trong filter graph, không chunk, không concat, không apad.
+    Chunking 300s: mỗi lệnh ffmpeg xử lý 1 chunk.
+    Dùng WAV cho file chunk trung gian → KHÔNG CÓ encoder delay → không drift.
+    Tempo inline trong filter graph → KHÔNG tạo file tempo riêng.
     """
+    CHUNK_SECONDS = 300.0
     chunk_dir = out_path.parent
+    chunk_files: List[Path] = []
 
-    # Thu thập candidate trước, sau đó đo duration TTS SONG SONG.
-    # (Loop ffprobe tuần tự từng file trên video 4000 đoạn mất ~30 phút.)
+    # Thu thập candidate, đo duration song song.
     candidates = []
     for i, entry in enumerate(entries):
         if i >= len(audio_files):
@@ -137,13 +139,9 @@ def combine_tts_mp3(
     with ThreadPoolExecutor(max_workers=nw) as ex:
         probed = list(ex.map(_probe, candidates))
 
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-    tts_inputs = []
-    next_idx = 0
-
+    # Build items: (af, start, end, tempo_chain)
+    items: List[tuple] = []
     for i, entry, af, mp3_dur in probed:
-        cmd.extend(["-i", str(af)])
-
         srt_dur = entry.end - entry.start
         tempo = ""
         if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
@@ -161,33 +159,98 @@ def combine_tts_mp3(
             "  [%s] delay=%dms tempo=%s | %s",
             entry.startLabel, delay_ms, tempo_label, entry.text,
         )
+        items.append((af, entry.start, entry.end, tempo))
 
-        tts_inputs.append((next_idx, delay_ms, tempo))
-        next_idx += 1
-
-    if not tts_inputs:
+    if not items:
         raise RuntimeError("Không có file TTS nào để gộp")
 
-    parts = [
-        f"[{idx}:a]{tempo}adelay={d}|{d}[t{k}]"
-        for k, (idx, d, tempo) in enumerate(tts_inputs)
-    ]
-    mix_inputs = "".join(f"[t{k}]" for k in range(len(tts_inputs)))
-    parts.append(
-        f"{mix_inputs}amix=inputs={len(tts_inputs)}:duration=longest:"
-        f"dropout_transition=0:normalize=0[out]"
-    )
+    expected_end = max(end for _, _, end, _ in items)
 
-    cmd += [
-        "-filter_complex", ";".join(parts),
-        "-map", "[out]",
+    # Gom entry theo chunk.
+    chunk_size = int(CHUNK_SECONDS)
+    chunk_map: dict[int, List[tuple]] = {}
+    chunk_last_end: dict[int, float] = {}
+    for item in items:
+        af, start, end, tempo = item
+        c = int(start // chunk_size)
+        chunk_map.setdefault(c, []).append(item)
+        chunk_last_end[c] = max(chunk_last_end.get(c, 0.0), end)
+
+    min_chunk, max_chunk = min(chunk_map), max(chunk_map)
+    for c in range(min_chunk, max_chunk + 1):
+        chunk_start = c * chunk_size
+        chunk_path = chunk_dir / f".chunk_{c:04d}.wav"
+        chunk_items = sorted(chunk_map.get(c, []), key=lambda it: it[1])
+        is_last = c == max_chunk
+        if is_last:
+            dur = max(0.5, chunk_last_end[c] - chunk_start)
+            dur = min(dur, CHUNK_SECONDS * 2)
+        else:
+            dur = CHUNK_SECONDS
+
+        if not chunk_items:
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                "-t", f"{dur:.3f}",
+                str(chunk_path),
+            ])
+        else:
+            cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+            parts = []
+            for k, (af, start, end, tempo) in enumerate(chunk_items):
+                cmd.extend(["-i", str(af)])
+                delay_ms = int((start - chunk_start) * 1000)
+                if delay_ms < 0:
+                    delay_ms = 0
+                parts.append(f"[{k}:a]{tempo}adelay={delay_ms}|{delay_ms}[t{k}]")
+            mix_in = "".join(f"[t{k}]" for k in range(len(chunk_items)))
+            # amix=duration=longest chỉ xuất tới sample audible cuối cùng,
+            # phần im lặng cuối chunk bị bỏ → concat lệch sớm dồn lên.
+            # apad=whole_dur pad silence ĐÚNG dur giây (có giới hạn, khác apad∞ cũ).
+            parts.append(
+                f"{mix_in}amix=inputs={len(chunk_items)}:duration=longest:"
+                f"dropout_transition=0:normalize=0,apad=whole_dur={dur:.3f}[out]"
+            )
+            cmd += [
+                "-filter_complex", ";".join(parts),
+                "-map", "[out]",
+                "-t", f"{dur:.3f}",
+                str(chunk_path),
+            ]
+            _run_ffmpeg(cmd)
+        chunk_files.append(chunk_path)
+
+    # Concat WAV chunks → convert to MP3 (full_voice.mp3).
+    # WAV concat không có encoder delay → timing chính xác.
+    list_file = chunk_dir / ".chunk_list.txt"
+    list_file.write_text(
+        "".join(f"file '{p.name}'\n" for p in chunk_files),
+        encoding="utf-8",
+    )
+    _run_ffmpeg([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "concat", "-safe", "0", "-i", str(list_file),
         "-c:a", "libmp3lame", "-b:a", "192k",
         "-ar", "24000", "-ac", "1",
         str(out_path),
-    ]
+    ], timeout=3600)
 
-    logger.info("Running FFmpeg combine mp3 → %s (%d inputs)", out_path.name, len(tts_inputs))
-    _run_ffmpeg(cmd, timeout=7200)
+    # Validate
+    out_dur = _get_audio_duration(out_path)
+    tolerance = max(1.5, expected_end * 0.02)
+    if out_dur < expected_end - tolerance:
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Gộp giọng lỗi: full_voice.mp3 chỉ dài {out_dur:.1f}s, "
+            f"thiếu so với thời lượng phụ đề {expected_end:.1f}s"
+        )
+
+    # Cleanup
+    for p in chunk_files:
+        p.unlink(missing_ok=True)
+    list_file.unlink(missing_ok=True)
+
     return out_path
 
 
@@ -247,7 +310,7 @@ def build_full_audio(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Dọn rác từ lần chạy trước bị kill giữa chừng.
-    _stale_patterns = (".combine_*.mp3", ".tempo_*.mp3", ".combine_list.txt")
+    _stale_patterns = (".chunk_*.wav", ".chunk_list.txt")
     stale_count = 0
     for pat in _stale_patterns:
         for p in out_dir.glob(pat):
