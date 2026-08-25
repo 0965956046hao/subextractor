@@ -1410,53 +1410,6 @@ async def run_telegram_auto_job(
         line_count = srt_text.count("-->")
         await _tg_send(chat_id, f"✅ OCR xong: {line_count} dòng phụ đề")
 
-        # ── Step 3: Check subs (timeline review) via Mini App ──
-        if job.get("check_subs"):
-            job["phase"] = "timeline_check"
-            await _tg_send(chat_id, "📝 Đang kiểm tra timeline phụ đề...")
-
-            # Validate timeline để Mini App hiển thị issues (nếu có).
-            issues: list = []
-            try:
-                from app.services.srt_utils import parse_srt, validate_timeline
-                issues = validate_timeline(parse_srt(srt_text))
-            except Exception:
-                issues = []
-
-            # Mark waiting so the Mini App TimelineCheckTab sees the review popup.
-            _init_pipeline_wait(pipeline_states, video_id, "timeline_check", issues)
-
-            web_app_base = settings.annotation_web_app_url.rstrip("/")
-            video_url = await _tg_web_app_video_url(video_id)
-            await _tg_send_web_app_with_skip(
-                chat_id,
-                "📝 <b>Kiểm tra phụ đề</b> — bấm Mini App để rà soát thời gian từng dòng, "
-                "hoặc Bỏ qua để giữ nguyên.",
-                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=timeline",
-                "📝 Kiểm tra phụ đề",
-                f"tgcp:{video_id}:skip_timeline",
-            )
-            if issues:
-                await _tg_send(chat_id, f"⚠️ Phát hiện {len(issues)} lỗi timeline — chờ bạn duyệt.")
-
-            decision = await _tg_wait_pipeline_decision(pipeline_states, video_id, "timeline_check", f"{video_id}:skip_timeline")
-            if decision == "fix":
-                await _tg_send(chat_id, "🔧 Đang tự sửa timeline phụ đề...")
-                try:
-                    from app.services.srt_utils import parse_srt, fix_timeline, entries_to_srt
-                    fixed, _ = fix_timeline(parse_srt(srt_text))
-                    srt_content.write_text(entries_to_srt(fixed), encoding="utf-8")
-                    srt_text = entries_to_srt(fixed)
-                    await _tg_send(chat_id, "✅ Đã sửa timeline phụ đề.")
-                except Exception:
-                    await _tg_send(chat_id, "⚠️ Sửa timeline thất bại — giữ nguyên.")
-            elif decision == "skip":
-                await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra phụ đề.")
-                await _tg_next_step(chat_id)
-            else:
-                await _tg_send(chat_id, "✅ Đã xác nhận phụ đề.")
-                await _tg_next_step(chat_id)
-
         # ── Step 4: Context (needed for translate/dub quality) ──
         if job.get("translate_on") or job.get("auto_dub"):
             job["phase"] = "context"
@@ -1489,6 +1442,55 @@ async def run_telegram_auto_job(
                 await _tg_send(chat_id, "✅ Dịch xong!")
             else:
                 await _tg_send(chat_id, f"⚠️ Dịch thất bại: {jobs[tr_job_id].get('error', 'unknown')}")
+
+        # ── Step 5.5: Check subs (timeline review) via Mini App — chạy SAU khi dịch, ──
+        # ── kiểm tra file SRT đã dịch (nếu có), fallback bản gốc. ──
+        if job.get("check_subs"):
+            job["phase"] = "timeline_check"
+            await _tg_send(chat_id, "📝 Đang kiểm tra timeline phụ đề...")
+
+            # Ưu tiên file đã dịch (translated/{id}/subtitles_{lang}.srt), fallback bản gốc.
+            best_srt = _srt_best_path(video_id, job.get("translate_target", "vi"))
+            best_srt_text = best_srt.read_text(encoding="utf-8")
+
+            issues: list = []
+            try:
+                from app.services.srt_utils import parse_srt, validate_timeline
+                issues = validate_timeline(parse_srt(best_srt_text))
+            except Exception:
+                issues = []
+
+            _init_pipeline_wait(pipeline_states, video_id, "timeline_check", issues)
+
+            web_app_base = settings.annotation_web_app_url.rstrip("/")
+            video_url = await _tg_web_app_video_url(video_id)
+            await _tg_send_web_app_with_skip(
+                chat_id,
+                "📝 <b>Kiểm tra phụ đề</b> — bấm Mini App để rà soát thời gian từng dòng, "
+                "hoặc Bỏ qua để giữ nguyên.",
+                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=timeline",
+                "📝 Kiểm tra phụ đề",
+                f"tgcp:{video_id}:skip_timeline",
+            )
+            if issues:
+                await _tg_send(chat_id, f"⚠️ Phát hiện {len(issues)} lỗi timeline — chờ bạn duyệt.")
+
+            decision = await _tg_wait_pipeline_decision(pipeline_states, video_id, "timeline_check", f"{video_id}:skip_timeline")
+            if decision == "fix":
+                await _tg_send(chat_id, "🔧 Đang tự sửa timeline phụ đề...")
+                try:
+                    from app.services.srt_utils import parse_srt, fix_timeline, entries_to_srt
+                    fixed, _ = fix_timeline(parse_srt(best_srt_text))
+                    best_srt.write_text(entries_to_srt(fixed), encoding="utf-8")
+                    await _tg_send(chat_id, "✅ Đã sửa timeline phụ đề.")
+                except Exception:
+                    await _tg_send(chat_id, "⚠️ Sửa timeline thất bại — giữ nguyên.")
+            elif decision == "skip":
+                await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra phụ đề.")
+                await _tg_next_step(chat_id)
+            else:
+                await _tg_send(chat_id, "✅ Đã xác nhận phụ đề.")
+                await _tg_next_step(chat_id)
 
         # ── Step 6: Dub ──
         if job.get("dub_on") and job.get("auto_dub"):
