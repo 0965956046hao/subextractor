@@ -151,24 +151,40 @@ async def douyin_resolve(body: DouyinResolveRequest):
     thumbnail and context images. Backend just proxies that call so the
     Telegram pipeline can reuse the exact same FE flow (resolve → merge →
     import).
+
+    Douyin CDN URLs are only exposed to a logged-in session. When the resolver
+    reports "not logged in", we refresh the session (frontend login flow) and
+    retry once before giving up — mirrors the manual FE behavior.
     """
     url = (body.url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL không hợp lệ")
 
     frontend = settings.frontend_url.rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=90) as client:
-            resp = await client.post(f"{frontend}/api/video-download/resolve", json={"url": url})
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"Không kết nối được frontend resolve: {e}")
 
-    if resp.status_code != 200:
-        detail = ""
+    last_detail = ""
+    for attempt in (1, 2):
         try:
-            detail = resp.json().get("detail", resp.text[:200])
-        except Exception:
-            detail = resp.text[:200]
-        raise HTTPException(resp.status_code, detail)
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.post(f"{frontend}/api/video-download/resolve", json={"url": url})
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Không kết nối được frontend resolve: {e}")
 
-    return resp.json()
+        if resp.status_code == 200:
+            return resp.json()
+
+        try:
+            last_detail = resp.json().get("detail", resp.text[:200])
+        except Exception:
+            last_detail = resp.text[:200]
+
+        # Session expired / not logged in → refresh cookies and retry once.
+        if attempt == 1 and ("đăng nhập" in last_detail or "URL video" in last_detail):
+            logger.info("Douyin resolve needs login — refreshing session and retrying")
+            try:
+                async with httpx.AsyncClient(timeout=90) as client:
+                    await client.post(f"{frontend}/api/video-download/login")
+            except httpx.HTTPError as e:
+                logger.warning("Douyin login refresh failed: %s", e)
+
+    raise HTTPException(400, last_detail or "Không thể phân tích link Douyin")
