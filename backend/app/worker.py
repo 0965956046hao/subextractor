@@ -1362,7 +1362,7 @@ async def run_telegram_auto_job(
                 "tts_voice": job.get("dub_voice", "BV421_vivn_streaming"),
                 "tts_engine": dub_engine,
                 "mute_original": mute_original,
-                "original_gain_db": job.get("original_gain_db", -12.0),
+                "original_gain_db": job.get("original_gain_db", 0.0),
                 "multi_voice": multi_voice,
             }
             await run_dub_job(jobs, ws_clients, dub_job_id)

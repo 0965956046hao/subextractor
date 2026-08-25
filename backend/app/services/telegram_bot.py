@@ -3,14 +3,21 @@
 Manages the config state machine and InlineKeyboard UI for processing a
 Douyin video, then triggers the backend auto pipeline on confirmation.
 
+The config is a small state machine with sub-screens:
+- ``main``     — overview of all options + "Chọn giọng"/"Chọn preset"/"Chọn kênh" buttons
+- ``voices``   — paginated voice picker (CapCut/Google, per voice language)
+- ``presets``  — watermark preset picker
+- ``channels`` — YouTube channel picker
+
 Callback data conventions:
-- ``tgcfg:{field}:{value}``  — toggle a config field (handled here)
+- ``tgcfg:{field}:{value}``  — toggle/select a config field
 - ``tgcp:{video_id}:{action}`` — checkpoint response (resolved via worker)
 
 Callback handlers receive the full ``callback_query`` dict from
 ``TelegramService._handle_callback_query`` (single argument).
 """
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -19,16 +26,14 @@ logger = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s\u4e00-\u9fff]+")
 
-CAPCUT_VOICES = [
-    ("BV421_vivn_streaming", "Nhỏ Ngọt Ngào"),
-    ("BV422_tts_female", "Nữ dịu dàng"),
-    ("BV001_streaming", "Nam trầm"),
-    ("BV027_streaming", "Nữ trẻ trung"),
-]
+VOICES_PER_PAGE = 8
+
+# Giá trị giảm âm lượng giọng gốc (dB dương = giảm), như FE slider 0–30 dB.
+GAIN_OPTIONS = [0, 6, 12, 18, 24, 30]
 
 LANG_MAP = {"zh": "Trung", "en": "Anh", "vi": "Việt"}
 ENGINE_MAP = {"google": "Google TTS", "capcut": "CapCut"}
-VOICE_LABEL = {v: n for v, n in CAPCUT_VOICES}
+VOICE_LANG_MAP = {"vi-VN": "Việt", "en-US": "Anh"}
 
 
 @dataclass
@@ -40,8 +45,9 @@ class DouyinConfig:
     dub_on: bool = True
     dub_engine: str = "capcut"      # google | capcut
     dub_voice: str = "BV421_vivn_streaming"
+    voice_lang: str = "vi-VN"       # vi-VN | en-US
     original_voice: str = "mute"    # mute | keep
-    original_gain_db: float = -12.0
+    original_gain_db: float = 0.0   # 0..30 (dB giảm, chỉ khi keep)
     multi_voice: bool = False
     auto_fit: bool = True
     translate_on: bool = True
@@ -56,18 +62,162 @@ class DouyinConfig:
     auto_upload_youtube: bool = False
     youtube_channel: str = ""
     message_id: int | None = None
+    # ── UI state ──
+    screen: str = "main"            # main | voices | presets | channels
+    page: int = 0                   # pagination for list screens
 
 
 _configs: dict[int, DouyinConfig] = {}
 
+# Cached dynamic data (keyed by engine+lang for voices).
+_voice_cache: dict[tuple[str, str], list[dict]] = {}
+
+
+# ── Dynamic data fetching ──
+
+async def _fetch_capcut_voices(lang: str) -> list[dict]:
+    from app.services.capcut_tts_client import list_voices
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, list_voices, lang)
+    except Exception as e:
+        logger.warning("CapCut voices fetch failed: %s", e)
+        return []
+
+
+async def _fetch_google_voices(lang: str) -> list[dict]:
+    from app.services.tts_service import list_google_voices
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, list_google_voices, lang)
+    except Exception as e:
+        logger.warning("Google voices fetch failed: %s", e)
+        return []
+
+
+async def _get_voices(engine: str, lang: str) -> list[dict]:
+    key = (engine, lang)
+    if key not in _voice_cache:
+        if engine == "capcut":
+            _voice_cache[key] = await _fetch_capcut_voices(lang)
+        else:
+            _voice_cache[key] = await _fetch_google_voices(lang)
+    return _voice_cache[key]
+
+
+def _get_presets() -> list[dict]:
+    try:
+        from app.routers.config_router import _presets
+        return _presets()
+    except Exception as e:
+        logger.warning("Watermark presets fetch failed: %s", e)
+        return []
+
+
+def _get_channels() -> list[dict]:
+    try:
+        from app.routers.config_router import _yt_channels
+        return _yt_channels()
+    except Exception as e:
+        logger.warning("YouTube channels fetch failed: %s", e)
+        return []
+
+
+# ── Voice preview ──
+
+async def _generate_voice_preview(engine: str, voice: str, lang: str) -> str | None:
+    """Generate a preview MP3 for a voice; returns the file path or None."""
+    from app.config import settings
+    loop = asyncio.get_event_loop()
+    out_dir = settings.temp_dir / "tts_preview"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if engine == "capcut":
+        from app.services.capcut_tts_client import submit_job, poll_job, download_audio
+        text = "Xin chào, đây là giọng đọc CapCut. Bạn có thích giọng này không?"
+        try:
+            job_id = await loop.run_in_executor(
+                None, submit_job,
+                [{"text": text, "start": 0.0, "end": 0.0}], voice, "1.0", "preview",
+            )
+            job = await loop.run_in_executor(None, poll_job, job_id, 60)
+            if job.get("status") != "done":
+                return None
+            audio_files = job.get("audio_files") or []
+            if not audio_files:
+                return None
+            filename = audio_files[0].split("/")[-1]
+            out_path = out_dir / f"{voice.replace('/', '_')}.mp3"
+            await loop.run_in_executor(None, download_audio, job_id, filename, out_path)
+            return str(out_path)
+        except Exception as e:
+            logger.warning("CapCut preview failed for %s: %s", voice, e)
+            return None
+    else:
+        from app.services.tts_service import synthesize_preview
+        text = "Xin chào, đây là giọng đọc Google TTS. Bạn có thích giọng này không?"
+        out_path = out_dir / f"google_{voice.replace('/', '_')}.mp3"
+        try:
+            await loop.run_in_executor(None, synthesize_preview, voice, text, out_path)
+            return str(out_path)
+        except Exception as e:
+            logger.warning("Google preview failed for %s: %s", voice, e)
+            return None
+
 
 # ── Text rendering ──
 
-def _build_config_text(config: DouyinConfig) -> str:
+def _shorten(url: str, max_len: int) -> str:
+    return url if len(url) <= max_len else url[: max_len - 3] + "..."
+
+
+def _extract_url(text: str) -> str:
+    """Extract the first http(s) URL from a Douyin share message."""
+    m = _URL_RE.search(text or "")
+    if not m:
+        return ""
+    return m[0].rstrip("，。！？,;.!?")
+
+
+def _voice_label(engine: str, voices: list[dict], voice_type: str) -> str:
+    for v in voices:
+        if v.get("voice_type") == voice_type:
+            return v.get("display_name") or voice_type
+    return voice_type
+
+
+def _build_config_text(config: DouyinConfig, voices: list[dict]) -> str:
     def mark(current, value, label):
         return f"<b>{label} ✅</b>" if current == value else label
 
-    voice = VOICE_LABEL.get(config.dub_voice, config.dub_voice)
+    voice = _voice_label(config.dub_engine, voices, config.dub_voice)
+    preset_name = ""
+    if config.watermark == "preset" and config.watermark_preset:
+        preset_name = next(
+            (p.get("name", "") for p in _get_presets() if p.get("id") == config.watermark_preset),
+            "",
+        ) or "Bộ mặc định"
+    channel_name = ""
+    if config.auto_upload_youtube and config.youtube_channel:
+        channel_name = next(
+            (c.get("name", "") for c in _get_channels() if c.get("id") == config.youtube_channel),
+            "",
+        )
+
+    gain_line = ""
+    if config.original_voice == "keep":
+        gain_line = f"\nGiảm giọng gốc: <b>-{int(config.original_gain_db)} dB</b>"
+
+    yt_line = f"Đăng tự động: {'<b>Bật ✅</b>' if config.auto_upload_youtube else 'Tắt'}"
+    if config.auto_upload_youtube:
+        yt_line += f" · Kênh: <b>{channel_name or 'Mặc định'}</b>"
+
+    wm_line = (
+        f"{mark(config.watermark, 'none', 'Không')} · {mark(config.watermark, 'preset', 'Bộ mặc định')}"
+    )
+    if config.watermark == "preset":
+        wm_line += f" ({preset_name})"
+
     return (
         "🎬 <b>Cấu hình video Douyin</b>\n\n"
         f"🔗 <code>{_shorten(config.url, 55)}</code>\n\n"
@@ -77,8 +227,9 @@ def _build_config_text(config: DouyinConfig) -> str:
         f"{mark(config.region_mode, 'auto', 'Tự động')} · {mark(config.region_mode, 'manual', 'Thủ công')}\n\n"
         "━━━ <b>Lồng tiếng</b> ━━━\n"
         f"Engine: {mark(config.dub_engine, 'google', 'Google')} · {mark(config.dub_engine, 'capcut', 'CapCut')}\n"
+        f"Ngôn ngữ giọng: {mark(config.voice_lang, 'vi-VN', 'Việt')} · {mark(config.voice_lang, 'en-US', 'Anh')}\n"
         f"Giọng: <b>{voice}</b>\n"
-        f"Âm gốc: {mark(config.original_voice, 'mute', 'Tắt tiếng')} · {mark(config.original_voice, 'keep', 'Giữ')}\n"
+        f"Âm gốc: {mark(config.original_voice, 'mute', 'Tắt tiếng')} · {mark(config.original_voice, 'keep', 'Giữ')}{gain_line}\n"
         f"Nhiều giọng: {'<b>Bật ✅</b>' if config.multi_voice else 'Tắt'}\n\n"
         "━━━ <b>Tự động dịch</b> ━━━\n"
         f"{'<b>Bật ✅</b>' if config.translate_on else 'Tắt'} · Đích: "
@@ -86,7 +237,7 @@ def _build_config_text(config: DouyinConfig) -> str:
         "━━━ <b>Lồng tiếng tự động</b> ━━━\n"
         f"{'<b>Bật ✅</b>' if config.auto_dub else 'Tắt'}\n\n"
         "━━━ <b>Watermark</b> ━━━\n"
-        f"{mark(config.watermark, 'none', 'Không')} · {mark(config.watermark, 'preset', 'Bộ mặc định')}\n"
+        f"{wm_line}\n"
         f"Xoá WM: {'<b>Bật ✅</b>' if config.remove_watermark else 'Tắt'}\n\n"
         "━━━ <b>Kiểm tra</b> ━━━\n"
         f"Timeline: {'<b>Bật ✅</b>' if config.check_subs else 'Tắt'} · "
@@ -94,28 +245,10 @@ def _build_config_text(config: DouyinConfig) -> str:
         "━━━ <b>Thumbnail</b> ━━━\n"
         f"{mark(config.thumbnail, 'none', 'Không')} · {mark(config.thumbnail, 'fal', 'FAL')} · {mark(config.thumbnail, 'gpt', 'ChatGPT')}\n\n"
         "━━━ <b>YouTube</b> ━━━\n"
-        f"Đăng tự động: {'<b>Bật ✅</b>' if config.auto_upload_youtube else 'Tắt'}"
+        f"{yt_line}"
     )
 
 
-def _extract_url(text: str) -> str:
-    """Extract the first http(s) URL from a Douyin share message.
-
-    Douyin share text looks like::
-
-        ``... 幻龙到底有多离谱？ https://v.douyin.com/O6-krtmu1qQ/ 复制此链接...``
-
-    Matches the frontend ``extractUrl`` regex (stop at whitespace / CJK chars)
-    and strips trailing punctuation.
-    """
-    m = _URL_RE.search(text or "")
-    if not m:
-        return ""
-    return m[0].rstrip("，。！？,;.!?")
-
-
-def _shorten(url: str, max_len: int) -> str:
-    return url if len(url) <= max_len else url[: max_len - 3] + "..."
 # ── Keyboard rendering ──
 
 def _btn(label, data):
@@ -128,13 +261,12 @@ def _toggle_btn(label, field, value, current):
 
 
 def _flip_btn(label, field, current):
-    """Single toggle button: shows ✅ when on, sends flipped value."""
     mark = " ✅" if current else ""
     return _btn(f"{label}{mark}", f"tgcfg:{field}:{str(not current).lower()}")
 
 
-def _build_config_keyboard(config: DouyinConfig) -> list[list[dict]]:
-    return [
+def _build_main_keyboard(config: DouyinConfig) -> list[list[dict]]:
+    rows: list[list[dict]] = [
         [_toggle_btn("Trung", "src_lang", "zh", config.src_lang),
          _toggle_btn("Anh", "src_lang", "en", config.src_lang),
          _toggle_btn("Việt", "src_lang", "vi", config.src_lang)],
@@ -142,8 +274,17 @@ def _build_config_keyboard(config: DouyinConfig) -> list[list[dict]]:
          _toggle_btn("Vùng: Thủ công", "region_mode", "manual", config.region_mode)],
         [_toggle_btn("Google", "dub_engine", "google", config.dub_engine),
          _toggle_btn("CapCut", "dub_engine", "capcut", config.dub_engine)],
+        [_toggle_btn("Giọng Việt", "voice_lang", "vi-VN", config.voice_lang),
+         _toggle_btn("Giọng Anh", "voice_lang", "en-US", config.voice_lang)],
+        [_btn("🎤 Chọn giọng", "tgcfg:screen:voices"),
+         _btn("🔊 Nghe thử", "tgcfg:preview:current")],
         [_toggle_btn("Âm gốc: Tắt tiếng", "original_voice", "mute", config.original_voice),
          _toggle_btn("Âm gốc: Giữ", "original_voice", "keep", config.original_voice)],
+    ]
+    if config.original_voice == "keep":
+        gain_row = [_toggle_btn(f"-{g}dB", "original_gain_db", str(g), str(int(config.original_gain_db))) for g in GAIN_OPTIONS]
+        rows.append(gain_row)
+    rows += [
         [_flip_btn("Nhiều giọng", "multi_voice", config.multi_voice)],
         [_toggle_btn("Dịch: Bật", "translate_on", "true", str(config.translate_on).lower()),
          _toggle_btn("Dịch: Tắt", "translate_on", "false", str(config.translate_on).lower())],
@@ -154,6 +295,10 @@ def _build_config_keyboard(config: DouyinConfig) -> list[list[dict]]:
          _toggle_btn("Lồng tiếng: Tắt", "auto_dub", "false", str(config.auto_dub).lower())],
         [_toggle_btn("WM: Không", "watermark", "none", config.watermark),
          _toggle_btn("WM: Bộ mặc định", "watermark", "preset", config.watermark)],
+    ]
+    if config.watermark == "preset":
+        rows.append([_btn("📋 Chọn preset watermark", "tgcfg:screen:presets")])
+    rows += [
         [_flip_btn("Xoá WM", "remove_watermark", config.remove_watermark)],
         [_flip_btn("Check timeline", "check_subs", config.check_subs),
          _flip_btn("Check giọng", "check_voice", config.check_voice)],
@@ -162,8 +307,70 @@ def _build_config_keyboard(config: DouyinConfig) -> list[list[dict]]:
          _toggle_btn("Thumb: GPT", "thumbnail", "gpt", config.thumbnail)],
         [_toggle_btn("YouTube: Bật", "auto_upload_youtube", "true", str(config.auto_upload_youtube).lower()),
          _toggle_btn("YouTube: Tắt", "auto_upload_youtube", "false", str(config.auto_upload_youtube).lower())],
-        [_btn("🚀 Xác nhận và bắt đầu", "tgcfg:confirm:yes")],
     ]
+    if config.auto_upload_youtube:
+        rows.append([_btn("📺 Chọn kênh YouTube", "tgcfg:screen:channels")])
+    rows.append([_btn("🚀 Xác nhận và bắt đầu", "tgcfg:confirm:yes")])
+    return rows
+
+
+def _build_voices_keyboard(config: DouyinConfig, voices: list[dict]) -> list[list[dict]]:
+    total_pages = max(1, (len(voices) + VOICES_PER_PAGE - 1) // VOICES_PER_PAGE)
+    page = min(config.page, total_pages - 1)
+    start = page * VOICES_PER_PAGE
+    chunk = voices[start:start + VOICES_PER_PAGE]
+
+    rows: list[list[dict]] = []
+    for i in range(0, len(chunk), 2):
+        pair = chunk[i:i + 2]
+        row = []
+        for v in pair:
+            vt = v.get("voice_type", "")
+            mark = " ✅" if vt == config.dub_voice else ""
+            row.append(_btn(f"{v.get('display_name', vt)}{mark}", f"tgcfg:dub_voice:{vt}"))
+        rows.append(row)
+
+    nav = []
+    if page > 0:
+        nav.append(_btn("◀ Trước", f"tgcfg:page:{page - 1}"))
+    nav.append(_btn(f"Trang {page + 1}/{total_pages}", "tgcfg:noop"))
+    if page < total_pages - 1:
+        nav.append(_btn("Sau ▶", f"tgcfg:page:{page + 1}"))
+    rows.append(nav)
+    rows.append([_btn("🔊 Nghe thử giọng này", "tgcfg:preview:current"),
+                 _btn("⬅ Quay lại", "tgcfg:screen:main")])
+    return rows
+
+
+def _build_presets_keyboard(config: DouyinConfig, presets: list[dict]) -> list[list[dict]]:
+    rows: list[list[dict]] = []
+    for p in presets:
+        mark = " ✅" if p.get("id") == config.watermark_preset else ""
+        rows.append([_btn(f"{p.get('name', p.get('id', ''))}{mark}", f"tgcfg:watermark_preset:{p.get('id')}")])
+    if not rows:
+        rows.append([_btn("Không có preset", "tgcfg:noop")])
+    rows.append([_btn("⬅ Quay lại", "tgcfg:screen:main")])
+    return rows
+
+
+def _build_channels_keyboard(config: DouyinConfig, channels: list[dict]) -> list[list[dict]]:
+    rows: list[list[dict]] = []
+    rows.append([_btn("Mặc định", "tgcfg:youtube_channel:")])
+    for c in channels:
+        mark = " ✅" if c.get("id") == config.youtube_channel else ""
+        rows.append([_btn(f"{c.get('name', c.get('id', ''))}{mark}", f"tgcfg:youtube_channel:{c.get('id')}")])
+    rows.append([_btn("⬅ Quay lại", "tgcfg:screen:main")])
+    return rows
+
+
+def _build_config_keyboard(config: DouyinConfig, voices: list[dict]) -> list[list[dict]]:
+    if config.screen == "voices":
+        return _build_voices_keyboard(config, voices)
+    if config.screen == "presets":
+        return _build_presets_keyboard(config, _get_presets())
+    if config.screen == "channels":
+        return _build_channels_keyboard(config, _get_channels())
+    return _build_main_keyboard(config)
 
 
 # ── Field toggle mapping ──
@@ -175,7 +382,7 @@ _BOOL_FIELDS = {
 
 _STR_FIELDS = {
     "src_lang", "region_mode", "dub_engine", "translate_target",
-    "watermark", "thumbnail", "original_voice",
+    "watermark", "thumbnail", "original_voice", "voice_lang",
 }
 
 
@@ -186,7 +393,6 @@ class TelegramBot:
         self._started = False
 
     async def start(self):
-        """Register callback handlers with TelegramService."""
         if self._started:
             return
         from app.services.telegram_service import telegram_service
@@ -216,8 +422,9 @@ class TelegramBot:
         config = DouyinConfig(url=url)
         _configs[chat_id] = config
 
+        voices = await _get_voices(config.dub_engine, config.voice_lang)
         msg_id = await telegram_service.send_message_with_keyboard(
-            chat_id, _build_config_text(config), _build_config_keyboard(config)
+            chat_id, _build_config_text(config, voices), _build_config_keyboard(config, voices)
         )
         config.message_id = msg_id
 
@@ -247,23 +454,72 @@ class TelegramBot:
 
         _, field, value = parts
 
+        # ── Sub-screen navigation ──
         if field == "confirm" and value == "yes":
             await telegram_service.answer_callback_query(cb_id, "🚀 Đang bắt đầu...")
             await self._start_pipeline(chat_id, config)
             return
 
-        if field in _BOOL_FIELDS:
+        if field == "screen":
+            config.screen = value
+            config.page = 0
+            await telegram_service.answer_callback_query(cb_id)
+            await self._render_config(chat_id, config)
+            return
+
+        if field == "page":
+            try:
+                config.page = int(value)
+            except ValueError:
+                pass
+            await telegram_service.answer_callback_query(cb_id)
+            await self._render_config(chat_id, config)
+            return
+
+        if field == "noop":
+            await telegram_service.answer_callback_query(cb_id)
+            return
+
+        # ── Voice preview ──
+        if field == "preview" and value == "current":
+            await telegram_service.answer_callback_query(cb_id, "🔊 Đang tạo giọng đọc...")
+            path = await _generate_voice_preview(config.dub_engine, config.dub_voice, config.voice_lang)
+            if path:
+                await telegram_service.send_audio(
+                    chat_id, path,
+                    f"🔊 {_voice_label(config.dub_engine, await _get_voices(config.dub_engine, config.voice_lang), config.dub_voice)}",
+                )
+            else:
+                await telegram_service.send_message(chat_id, "⚠️ Không tạo được giọng đọc thử.")
+            return
+
+        # ── Field toggles ──
+        if field == "dub_voice":
+            setattr(config, field, value)
+        elif field == "original_gain_db":
+            try:
+                config.original_gain_db = float(value)
+            except ValueError:
+                pass
+        elif field == "watermark_preset":
+            config.watermark_preset = value
+        elif field == "youtube_channel":
+            config.youtube_channel = value
+        elif field in _BOOL_FIELDS:
             setattr(config, field, value == "true")
         elif field in _STR_FIELDS:
             setattr(config, field, value)
-        elif field == "dub_voice":
-            setattr(config, field, value)
 
         await telegram_service.answer_callback_query(cb_id)
+        await self._render_config(chat_id, config)
+
+    async def _render_config(self, chat_id: int, config: DouyinConfig):
+        from app.services.telegram_service import telegram_service
+        voices = await _get_voices(config.dub_engine, config.voice_lang)
         if config.message_id:
             await telegram_service.edit_message(
                 chat_id, config.message_id,
-                _build_config_text(config), _build_config_keyboard(config),
+                _build_config_text(config, voices), _build_config_keyboard(config, voices),
             )
 
     # ── Checkpoint callbacks ──

@@ -618,6 +618,37 @@ class TelegramService:
                 sent = sent or ok
         return sent
 
+    async def send_audio(self, chat_id: int, audio_path: str, caption: str = "") -> bool:
+        """Send an audio file (voice preview) to a specific chat. Returns True if sent."""
+        if not self._token:
+            return False
+        p = Path(audio_path)
+        if not (p.exists() and p.is_file()):
+            return False
+        try:
+            client = httpx.AsyncClient(timeout=300)
+            try:
+                with open(p, "rb") as f:
+                    resp = await client.post(
+                        f"{TELEGRAM_API}/bot{self._token}/sendAudio",
+                        data={
+                            "chat_id": str(chat_id),
+                            "caption": caption,
+                            "parse_mode": "HTML",
+                        },
+                        files={"audio": (p.name, f, "audio/mpeg")},
+                    )
+            finally:
+                await client.aclose()
+            result = resp.json()
+            if result.get("ok"):
+                return True
+            logger.warning("Telegram sendAudio failed: %s", result.get("description"))
+            return False
+        except Exception as e:
+            logger.warning("Telegram sendAudio to %s failed: %s", chat_id, e)
+            return False
+
     def has_connected_chats(self) -> bool:
         return bool(self._chat_ids)
 

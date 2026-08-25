@@ -76,7 +76,7 @@ class TelegramAutoRequest(BaseModel):
     dub_engine: str = "capcut"
     dub_voice: str = "BV421_vivn_streaming"
     original_voice: str = "mute"
-    original_gain_db: float = -12.0
+    original_gain_db: float = 0.0
     multi_voice: bool = False
     auto_fit: bool = True
     translate_on: bool = True
