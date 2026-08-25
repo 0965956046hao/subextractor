@@ -1019,6 +1019,14 @@ def tg_resolve_checkpoint(video_id: str, data: dict):
     event = _tg_checkpoint_events.get(video_id)
     if event:
         event.set()
+    # Skip checkpoints (region/style) use a compound key "{video_id}:skip_*".
+    action = data.get("action", "")
+    if isinstance(action, str) and action.startswith("skip_"):
+        key = f"{video_id}:{action}"
+        _tg_checkpoint_data[key] = data
+        ev = _tg_checkpoint_events.get(key)
+        if ev:
+            ev.set()
 
 
 async def _tg_send(chat_id: int, text: str):
@@ -1042,6 +1050,21 @@ async def _tg_send_web_app(chat_id: int, text: str, web_app_url: str, button_tex
     try:
         from app.services.telegram_service import telegram_service
         await telegram_service.send_web_app_button(chat_id, text, web_app_url, button_text)
+    except Exception:
+        pass
+
+
+async def _tg_send_web_app_with_skip(
+    chat_id: int, text: str, web_app_url: str, button_text: str, skip_data: str,
+) -> None:
+    """Send a Mini App button + a 'Bỏ qua' button (checkpoint) in one message."""
+    try:
+        from app.services.telegram_service import telegram_service
+        keyboard = [
+            [{"text": button_text, "web_app": {"url": web_app_url}}],
+            [{"text": "⏭️ Bỏ qua (dùng mặc định)", "callback_data": skip_data}],
+        ]
+        await telegram_service.send_message_with_keyboard(chat_id, text, keyboard)
     except Exception:
         pass
 
@@ -1074,6 +1097,31 @@ async def _tg_wait_annotation(video_id: str, field: str, timeout: float = 900) -
             return val
         if asyncio.get_event_loop().time() >= deadline:
             return None
+        await asyncio.sleep(2)
+
+
+async def _tg_wait_annotation_or_skip(
+    video_id: str, field: str, skip_key: str, timeout: float = 300,
+) -> tuple[dict | None, bool]:
+    """Poll meta.json for `field`; return early if user taps the skip checkpoint.
+
+    Returns ``(value, skipped)`` — value is None on timeout; skipped=True when
+    the user chose to bypass this step.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        meta = await asyncio.get_event_loop().run_in_executor(None, _read_annotation_meta, video_id)
+        val = meta.get(field)
+        if val:
+            return val, False
+        # Check skip checkpoint (non-blocking).
+        data = _tg_checkpoint_data.get(skip_key)
+        if data and data.get("action") == "skip":
+            _tg_checkpoint_data.pop(skip_key, None)
+            _tg_checkpoint_events.pop(skip_key, None)
+            return None, True
+        if asyncio.get_event_loop().time() >= deadline:
+            return None, False
         await asyncio.sleep(2)
 
 
@@ -1136,6 +1184,7 @@ async def run_telegram_auto_job(
         job["phase"] = "resolving"
 
         # ── Step 1: Resolve Douyin link (same flow as FE: resolve → merge → import) ──
+        job["phase"] = "resolving"
         await _tg_send(chat_id, "📥 Đang phân tích link Douyin...")
 
         # 1a. Resolve via frontend Chrome resolver → video_url + audio_url + thumbnail + big_thumbs
@@ -1156,6 +1205,7 @@ async def run_telegram_auto_job(
 
         # 1b. Merge (nếu có 2 file video + audio riêng), rồi import.
         if audio_url and video_url:
+            job["phase"] = "merging"
             await _tg_send(chat_id, "⬇️ Đang tải video + audio và gộp...")
             merge_result = merge_video_audio(MergeRequest(
                 video_url=video_url,
@@ -1177,16 +1227,21 @@ async def run_telegram_auto_job(
                 raise RuntimeError("Merge quá thời gian chờ")
             await _tg_send(chat_id, "✅ Đã tải và gộp video + audio xong.")
 
-            imp_result = import_video(ImportRequest(merge_id=merge_id, filename=imp_name))
+            imp_result = await loop.run_in_executor(
+                _executor, import_video, ImportRequest(merge_id=merge_id, filename=imp_name)
+            )
         else:
             # Chỉ 1 file video (đã có audio) → import trực tiếp theo URL.
+            job["phase"] = "merging"
             await _tg_send(chat_id, "⬇️ Đang tải video...")
-            imp_result = import_video(ImportRequest(
-                url=video_url,
-                filename=imp_name,
-                thumbnail_url=thumbnail or "",
-                big_thumbs=big_thumbs,
-            ))
+            imp_result = await loop.run_in_executor(
+                _executor, import_video, ImportRequest(
+                    url=video_url,
+                    filename=imp_name,
+                    thumbnail_url=thumbnail or "",
+                    big_thumbs=big_thumbs,
+                )
+            )
 
         video_id = imp_result["video_id"]
         job["video_id"] = video_id
@@ -1207,18 +1262,20 @@ async def run_telegram_auto_job(
         selected_style = None
 
         if job.get("region_mode") == "manual":
+            job["phase"] = "region"
             web_app_base = settings.annotation_web_app_url.rstrip("/")
             video_url = await _tg_web_app_video_url(video_id)
 
-            # 1) Chọn vùng OCR (mode=region)
-            await _tg_send(chat_id, "📐 <b>Chọn vùng quét phụ đề</b> — bấm nút để mở Mini App.")
-            await _tg_send_web_app(
+            # 1) Chọn vùng OCR (mode=region) — có nút Bỏ qua.
+            await _tg_send(chat_id, "📐 <b>Chọn vùng quét phụ đề</b> — bấm Mini App, hoặc Bỏ qua để dùng vùng mặc định.")
+            await _tg_send_web_app_with_skip(
                 chat_id,
                 f"📐 <b>Chọn vùng OCR</b>\nVideo: <code>{video_id}</code>",
                 f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=region",
                 "📐 Chọn vùng quét sub",
+                f"tgcp:{video_id}:skip_region",
             )
-            chosen_region = await _tg_wait_annotation(video_id, "region")
+            chosen_region, skipped = await _tg_wait_annotation_or_skip(video_id, "region", f"{video_id}:skip_region")
             if chosen_region and all(k in chosen_region for k in ("x1", "y1", "x2", "y2")):
                 region = {
                     "x1": float(chosen_region["x1"]),
@@ -1227,21 +1284,26 @@ async def run_telegram_auto_job(
                     "y2": float(chosen_region["y2"]),
                 }
                 await _tg_send(chat_id, f"✅ Đã chọn vùng: x {region['x1']:.2f}–{region['x2']:.2f} · y {region['y1']:.2f}–{region['y2']:.2f}")
+            elif skipped:
+                await _tg_send(chat_id, "⏭️ Bỏ qua — dùng vùng mặc định.")
             else:
                 await _tg_send(chat_id, "⚠️ Không nhận được vùng — dùng vùng mặc định.")
 
-            # 2) Chọn vị trí hiển thị sub (mode=style)
-            await _tg_send(chat_id, "🎨 <b>Chọn vị trí hiển thị phụ đề</b> — bấm nút để mở Mini App.")
-            await _tg_send_web_app(
+            # 2) Chọn vị trí hiển thị sub (mode=style) — có nút Bỏ qua.
+            await _tg_send(chat_id, "🎨 <b>Chọn vị trí hiển thị phụ đề</b> — bấm Mini App, hoặc Bỏ qua để tự căn.")
+            await _tg_send_web_app_with_skip(
                 chat_id,
                 f"🎨 <b>Chọn vị trí phụ đề</b>\nVideo: <code>{video_id}</code>",
                 f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=style",
                 "🎨 Chọn vị trí sub",
+                f"tgcp:{video_id}:skip_style",
             )
-            style_val = await _tg_wait_annotation(video_id, "style")
+            style_val, skipped_style = await _tg_wait_annotation_or_skip(video_id, "style", f"{video_id}:skip_style")
             if isinstance(style_val, dict) and style_val:
                 selected_style = style_val
                 await _tg_send(chat_id, "✅ Đã chọn vị trí phụ đề.")
+            elif skipped_style:
+                await _tg_send(chat_id, "⏭️ Bỏ qua — tự căn vị trí phụ đề.")
 
         # ── Step 2: OCR ──
         job["phase"] = "processing"
