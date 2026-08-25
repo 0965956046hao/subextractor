@@ -56,6 +56,7 @@ class TelegramService:
         self._registration_tokens: dict[str, float] = {}  # token → created_at
         self._started: bool = False
         self._http: httpx.AsyncClient | None = None
+        self._callback_handlers: dict[str, callable] = {}  # prefix → handler
 
     # ── Lifecycle ──
 
@@ -186,7 +187,18 @@ class TelegramService:
         logger.info("Telegram polling stopped")
 
     async def _handle_update(self, update: dict):
-        """Process a single Telegram update."""
+        """Process a single Telegram update.
+
+        Routes callback queries to registered handlers first,
+        then falls back to message-based command handling.
+        """
+        # Priority 1: callback_query (inline keyboard buttons)
+        callback_query = update.get("callback_query")
+        if callback_query:
+            await self._handle_callback_query(callback_query)
+            return
+
+        # Priority 2: message commands
         msg = update.get("message")
         if not msg:
             return
@@ -268,11 +280,79 @@ class TelegramService:
                     f"Thiết bị đã kết nối: {count}\n"
                     f"Bot: @{self._bot_name}",
                 )
+        elif text.startswith("/douyin"):
+            # Delegate to telegram_bot handler if registered
+            await self._handle_douyin_command(chat_id, text)
         elif text.startswith("/"):
             # Unknown command
             await self.send_message(
                 chat_id,
                 "🤖 Lệnh không xác nhận. Gõ /status để xem trạng thái.",
+            )
+
+    # ── Callback query routing ──
+
+    def register_callback_handler(self, prefix: str, handler: callable):
+        """Register a handler for callback data starting with *prefix*.
+
+        When a callback_query arrives whose ``data`` starts with *prefix*,
+        ``handler(callback_query)`` is awaited.  Prefixes are matched
+        longest-first so that ``douyin:config:`` beats ``douyin:``.
+        """
+        self._callback_handlers[prefix] = handler
+        logger.debug("Registered callback handler for prefix: %s", prefix)
+
+    async def _handle_callback_query(self, callback_query: dict):
+        """Route a callback_query to the best-matching registered handler.
+
+        Matches the longest prefix first.  If no prefix matches, the
+        query is answered with a no-op to stop the loading spinner.
+        """
+        data = callback_query.get("data", "")
+        cb_id = callback_query.get("id", "")
+
+        # Find longest matching prefix
+        matched_prefix: str | None = None
+        for prefix in self._callback_handlers:
+            if data.startswith(prefix):
+                if matched_prefix is None or len(prefix) > len(matched_prefix):
+                    matched_prefix = prefix
+
+        if matched_prefix and matched_prefix in self._callback_handlers:
+            try:
+                await self._callback_handlers[matched_prefix](callback_query)
+            except Exception as e:
+                logger.warning(
+                    "Callback handler error (prefix=%s, data=%s): %s",
+                    matched_prefix, data, e, exc_info=True,
+                )
+                await self.answer_callback_query(cb_id, "❌ Có lỗi xảy ra.", show_alert=False)
+        else:
+            # No handler — just acknowledge the click to stop the spinner
+            if cb_id:
+                await self.answer_callback_query(cb_id)
+
+    async def _handle_douyin_command(self, chat_id: int, text: str):
+        """Handle /douyin command.
+
+        Delegates to ``telegram_bot._handle_douyin()`` if the external
+        Douyin bot service is available; otherwise sends a fallback message.
+        """
+        try:
+            from app.services.telegram_bot import telegram_bot  # noqa: F811
+
+            await telegram_bot._handle_douyin(chat_id, text)
+        except ImportError:
+            logger.warning("/douyin command received but telegram_bot module not available")
+            await self.send_message(
+                chat_id,
+                "⚠️ Tính năng Douyin chưa sẵn sàng.",
+            )
+        except Exception as e:
+            logger.warning("/douyin handler error: %s", e, exc_info=True)
+            await self.send_message(
+                chat_id,
+                "❌ Có lỗi xảy ra khi xử lý lệnh Douyin.",
             )
 
     # ── Messaging ──
@@ -300,6 +380,133 @@ class TelegramService:
                 logger.warning("Telegram sendMessage failed: %s", result.get("description"))
         except Exception as e:
             logger.warning("Telegram send to %s failed: %s", chat_id, e)
+
+    async def send_message_with_keyboard(
+        self,
+        chat_id: int,
+        text: str,
+        keyboard: list[list[dict]],
+        parse_mode: str = "HTML",
+    ) -> int | None:
+        """Send a message with an InlineKeyboard.
+
+        Args:
+            chat_id: Target chat ID.
+            text: Message text (HTML by default).
+            keyboard: 2D list of button dicts, each with ``text`` and
+                ``callback_data`` keys.  Each inner list is one row.
+            parse_mode: Telegram parse mode.
+
+        Returns:
+            The ``message_id`` of the sent message on success, or ``None``
+            on failure.
+        """
+        if not self._token:
+            logger.warning("send_message_with_keyboard called but no bot token")
+            return None
+        try:
+            client = self._get_http()
+            resp = await client.post(
+                f"{TELEGRAM_API}/bot{self._token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                    "reply_markup": {"inline_keyboard": keyboard},
+                },
+            )
+            result = resp.json()
+            if result.get("ok"):
+                return result["result"].get("message_id")
+            logger.warning("Telegram sendMessageWithKeyboard failed: %s", result.get("description"))
+            return None
+        except Exception as e:
+            logger.warning("Telegram send_message_with_keyboard to %s failed: %s", chat_id, e)
+            return None
+
+    async def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        keyboard: list[list[dict]] | None = None,
+        parse_mode: str = "HTML",
+    ) -> bool:
+        """Edit an existing message and optionally update its InlineKeyboard.
+
+        Args:
+            chat_id: Chat where the message lives.
+            message_id: ID of the message to edit.
+            text: New message text.
+            keyboard: New inline keyboard (omit to keep current).
+            parse_mode: Telegram parse mode.
+
+        Returns:
+            ``True`` if the edit succeeded.
+        """
+        if not self._token:
+            logger.warning("edit_message called but no bot token")
+            return False
+        payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        }
+        if keyboard is not None:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        try:
+            client = self._get_http()
+            resp = await client.post(
+                f"{TELEGRAM_API}/bot{self._token}/editMessageText",
+                json=payload,
+            )
+            result = resp.json()
+            if result.get("ok"):
+                return True
+            logger.warning("Telegram editMessage failed: %s", result.get("description"))
+            return False
+        except Exception as e:
+            logger.warning("Telegram editMessage for %s/%s failed: %s", chat_id, message_id, e)
+            return False
+
+    async def answer_callback_query(
+        self,
+        callback_query_id: str,
+        text: str = "",
+        show_alert: bool = False,
+    ) -> bool:
+        """Acknowledge an inline keyboard callback to stop the loading spinner.
+
+        Args:
+            callback_query_id: The ``id`` field from the callback_query update.
+            text: Optional toast notification text.
+            show_alert: If ``True``, show an alert dialog instead of a toast.
+
+        Returns:
+            ``True`` if the answer was accepted.
+        """
+        if not self._token:
+            logger.warning("answer_callback_query called but no bot token")
+            return False
+        try:
+            client = self._get_http()
+            payload: dict = {
+                "callback_query_id": callback_query_id,
+                "show_alert": show_alert,
+            }
+            if text:
+                payload["text"] = text
+            resp = await client.post(
+                f"{TELEGRAM_API}/bot{self._token}/answerCallbackQuery",
+                json=payload,
+            )
+            result = resp.json()
+            return result.get("ok", False)
+        except Exception as e:
+            logger.warning("Telegram answerCallbackQuery failed: %s", e)
+            return False
 
     async def broadcast(self, text: str):
         """Send a message to all connected chats."""
