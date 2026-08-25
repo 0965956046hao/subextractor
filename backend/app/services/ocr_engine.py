@@ -92,11 +92,13 @@ class BaseOCREngine:
 class OCREngine(BaseOCREngine):
     name = "rapid"
 
-    def __init__(self):
+    def __init__(self, intra_threads: int | None = None):
         logger.info(
-            "  RapidOCR lang=%s box_thresh=%.2f text_score=%.2f",
+            "  RapidOCR lang=%s box_thresh=%.2f text_score=%.2f intra_threads=%s",
             settings.ocr_lang, settings.det_db_thresh, settings.text_score,
+            intra_threads or "auto",
         )
+        self._intra_threads = intra_threads
         self._engines: dict[str, RapidOCR] = {}
         self._lang = settings.ocr_lang if settings.ocr_lang in SUPPORTED_LANGS else "ch"
         self._engine = self._get_engine(self._lang)
@@ -107,14 +109,17 @@ class OCREngine(BaseOCREngine):
     def _get_engine(self, lang: str) -> RapidOCR:
         if lang not in self._engines:
             logger.info("  Loading RapidOCR engine for lang=%s …", lang)
-            engine = RapidOCR(
-                params={
-                    "Det.lang_type": lang,
-                    "Rec.lang_type": lang,
-                    "Det.box_thresh": settings.det_db_thresh,
-                    "Global.text_score": settings.text_score,
-                }
-            )
+            params = {
+                "Det.lang_type": lang,
+                "Rec.lang_type": lang,
+                "Det.box_thresh": settings.det_db_thresh,
+                "Global.text_score": settings.text_score,
+            }
+            if self._intra_threads:
+                # Chống oversubscription khi chạy pool song song: mỗi engine
+                # chỉ dùng số core bằng phần của mình thay vì toàn bộ CPU.
+                params["EngineConfig.onnxruntime.intra_op_num_threads"] = self._intra_threads
+            engine = RapidOCR(params=params)
             self._engines[lang] = engine
         return self._engines[lang]
 

@@ -36,7 +36,11 @@ async def lifespan(app: FastAPI):
     logger.info("")
     logger.info("Initializing OCR engines...")
     pool_size = max(1, settings.ocr_parallel_parts)
-    rapid_engines = [OCREngine() for _ in range(pool_size)]
+    # Chia đều cores cho các engine trong pool để 4 engine song song không
+    # giành CPU nhau (ONNX mặc định mỗi engine dùng hết mọi core).
+    import os
+    per_engine_threads = max(1, (os.cpu_count() or 4) // pool_size)
+    rapid_engines = [OCREngine(intra_threads=per_engine_threads) for _ in range(pool_size)]
     ocr_engine = rapid_engines[0]
     app.state.ocr_engine = ocr_engine
     ocr_engines: dict = {"rapid": rapid_engines}

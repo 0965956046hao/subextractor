@@ -112,8 +112,13 @@ def stream_frames_generator(
     )
 
     idx = 0
+    if start_frame > 0:
+        # Seek thay vì decode tuần tự từ đầu — khi OCR parallel, mỗi segment
+        # decode lại prefix của mình sẽ tốn tổng cộng ~2.5x thời gian decode.
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        idx = start_frame
     extracted = 0
-    pbar = tqdm(total=total_frames, desc="  frames", unit="fr", leave=False)
+    pbar = tqdm(total=max(1, end_frame - idx), desc="  frames", unit="fr", leave=False)
     try:
         while True:
             ret, frame = cap.read()
