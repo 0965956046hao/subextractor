@@ -44,9 +44,9 @@ class RegionPayload(BaseModel):
 
 
 class StylePayload(BaseModel):
-    font_size: int | None = None
-    margin_v: int | None = None
-    margin_h: int | None = None
+    font_size: float | None = None
+    margin_v: float | None = None
+    margin_h: float | None = None
 
 
 @router.post("/api/region/{video_id}")
@@ -84,7 +84,11 @@ async def save_subtitle_style(video_id: str, body: StylePayload):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
 
-    style = {k: v for k, v in body.model_dump().items() if v is not None}
+    style = {
+        k: (int(round(v)) if v is not None else None)
+        for k, v in body.model_dump().items()
+        if v is not None
+    }
 
     meta = _read_meta(video_id)
     existing = meta.get("style") or {}
