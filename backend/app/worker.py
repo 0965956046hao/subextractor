@@ -105,6 +105,19 @@ def _notify_sync(loop: asyncio.AbstractEventLoop, ws_clients: dict, job_id: str,
     asyncio.run_coroutine_threadsafe(coro, loop)
 
 
+def _tg_notify_sync(loop: asyncio.AbstractEventLoop, chat_id, text: str):
+    """Send a Telegram message from a worker thread (thread-safe bridge)."""
+    try:
+        from app.services.telegram_service import telegram_service
+
+        async def _send():
+            await telegram_service.send_message(chat_id, text)
+
+        asyncio.run_coroutine_threadsafe(_send(), loop)
+    except Exception:
+        pass
+
+
 def job_log(
     job: dict,
     ws_clients: dict,
@@ -213,6 +226,7 @@ def process_job_sync(
     # ── Sequential (parts == 1) ────────────────────────────────────────────
     if parts <= 1 or (eff_end - eff_start) <= overlap * 2 + 1e-6:
         last_pct_log = 0
+        tg_chat_id = job.get("chat_id")
 
         def progress_cb(idx: int, total: int):
             nonlocal last_pct_log
@@ -230,6 +244,8 @@ def process_job_sync(
                     f"Đã nhận dạng được khoảng {pct}% của video…",
                     "info",
                 )
+                if tg_chat_id:
+                    _tg_notify_sync(loop, tg_chat_id, f"🔍 OCR: {pct}%")
             _notify_sync(loop, ws_clients, job_id, {
                 "type": "progress", "progress": pct, "phase": "ocr",
             })
@@ -267,6 +283,7 @@ def process_job_sync(
 
         progress_lock = threading.Lock()
         state = {"done": 0, "last_pct": 0, "last_log": 0}
+        tg_chat_id = job.get("chat_id")
 
         def make_progress_cb():
             def cb(idx: int, total: int):
@@ -291,6 +308,8 @@ def process_job_sync(
                         f"Đã nhận dạng được khoảng {pct}% của video…",
                         "info",
                     )
+                    if tg_chat_id:
+                        _tg_notify_sync(loop, tg_chat_id, f"🔍 OCR: {pct}%")
                 _notify_sync(loop, ws_clients, job_id, {
                     "type": "progress", "progress": pct, "phase": "ocr",
                 })
@@ -1379,6 +1398,7 @@ async def run_telegram_auto_job(
             "phase": "",
             "progress": 0,
             "error": None,
+            "chat_id": chat_id,
         }
         jobs[ocr_job_id] = ocr_job
         await run_job(jobs, ws_clients, ocr_engines, ocr_job_id)
