@@ -31,6 +31,19 @@ async def _tg_notify(text: str):
             await telegram_service.broadcast(text)
     except Exception:
         pass
+
+
+async def _tg_notify_video(video_path, caption: str) -> bool:
+    """Try to send the video file itself so it plays inline in Telegram chat.
+
+    Returns True if at least one chat received it."""
+    try:
+        from app.services.telegram_service import telegram_service
+        if telegram_service.has_connected_chats():
+            return await telegram_service.broadcast_video(str(video_path), caption)
+    except Exception:
+        pass
+    return False
 from app.services.media_utils import _srt_path, _srt_best_path, _duration_covers, _get_duration
 
 logger = logging.getLogger(__name__)
@@ -552,14 +565,22 @@ async def run_hardcode_job(
             "type": "done", "video_id": video_id, "filename": final_path.name,
         })
 
-        # Telegram notification
+        # Telegram notification — gửi kèm video để xem ngay trong chat.
         now_str = datetime.now().strftime("%H:%M:%S")
-        await _tg_notify(
+        caption = (
             f"✅ <b>Video đã xử lý xong!</b>\n"
             f"🎬 {final_path.name}\n"
             f"📦 {size_mb:.1f} MB\n"
             f"🕐 {now_str}"
         )
+        sent_inline = await _tg_notify_video(final_path, caption)
+        if not sent_inline:
+            # File quá lớn (>49MB) hoặc upload lỗi → gửi link xem/tải thay thế.
+            if settings.public_url:
+                base = settings.public_url.rstrip("/")
+                caption += f'\n▶️ <a href="{base}/api/preview/hardcoded/{video_id}">Xem video</a>'
+                caption += f'\n⬇️ <a href="{base}/api/download/hardcoded/{video_id}">Tải video</a>'
+            await _tg_notify(caption)
 
     except JobCancelled:
         logger.info("hardcode job %s: cancelled", job_id)

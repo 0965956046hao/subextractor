@@ -22,6 +22,7 @@ import {
   getDownloadUrl,
   getDubbedDownloadUrl,
   listYoutubeChannels,
+  setActiveWatermarkPreset,
   chatgptLogin,
   type PipelineHealth,
   type HealthCheckResult,
@@ -2762,7 +2763,19 @@ function DetailView({
                           </span>
                           <select
                             value={p.watermarkPreset || ""}
-                            onChange={(e) => updatePipeline(p.id, { watermarkPreset: e.target.value })}
+                            onChange={async (e) => {
+                              const presetId = e.target.value;
+                              // Lưu active preset về backend trước (giống Settings),
+                              // rồi mới cập nhật pipeline + tiếp tục luồng.
+                              if (presetId) {
+                                try {
+                                  await setActiveWatermarkPreset(presetId);
+                                } catch {
+                                  // ignore — vẫn áp cho lần chạy hiện tại
+                                }
+                              }
+                              updatePipeline(p.id, { watermarkPreset: presetId });
+                            }}
                             className="rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
                           >
                             <option value="">{tr("pipeline.watermarkNone")}</option>

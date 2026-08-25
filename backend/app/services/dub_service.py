@@ -94,13 +94,18 @@ def combine_tts_mp3(
     """
     CHUNK_SECONDS = 600.0
 
-    # Thu thập các file TTS hợp lệ. File dài hơn khung phụ đề (mp3 > 1.02× khung)
-    # được ép tốc độ (atempo) RIÊNG trước khi đưa vào amix — vì đặt atempo TRƯỚC
-    # adelay ngay trong filter graph amix làm ffmpeg tính sai duration=longest,
-    # khiến full_voice.mp3 bị cụt (chỉ ~0.2s).
+    chunk_dir = out_path.parent
+
+    # PHASE 1: dọn rác — xoá .combine_*.mp3 / .tempo_*.mp3 còn sót từ lần chạy
+    # trước (vd lần trước bị crash giữa chừng), tránh trùng tên + file cụt.
+    for stale in list(chunk_dir.glob(".combine_*.mp3")) + list(chunk_dir.glob(".tempo_*.mp3")):
+        stale.unlink(missing_ok=True)
+
+    # File dài hơn khung phụ đề (mp3 > 1.02× khung) được ép tốc độ (atempo) RIÊNG
+    # trước khi đưa vào amix — vì đặt atempo TRƯỚC adelay ngay trong filter graph
+    # amix làm ffmpeg tính sai duration=longest, khiến full_voice.mp3 bị cụt.
     items: List[tuple[Path, float, float]] = []  # (af, start, end)
     tempo_files: List[Path] = []
-    chunk_dir = out_path.parent
     chunk_files: List[Path] = []
     try:
         # Pass 1 — thu thập file TTS hợp lệ (không gọi subprocess).
@@ -113,19 +118,25 @@ def combine_tts_mp3(
                 continue
             valid.append((i, entry, af))
 
-        # Pass 2 — ffprobe (đo duration) + atempo SONG SONG: mỗi file là 1
-        # subprocess riêng nên chạy tuần tự rất chậm với hàng trăm dòng.
+        # PHASE 2: ffprobe (đo duration) SONG SONG — 16 workers. ffprobe nhẹ nên
+        # chạy song song rất nhanh so với tuần tự hàng trăm file.
         from concurrent.futures import ThreadPoolExecutor
 
-        def _prepare(vi: tuple[int, object, Path]):
+        def _probe(vi: tuple[int, object, Path]):
             i, entry, af = vi
+            return i, af, entry, _get_audio_duration(af)
+
+        probed: list[tuple[int, Path, object, float]] = []
+        if valid:
+            with ThreadPoolExecutor(max_workers=min(16, len(valid))) as executor:
+                probed = list(executor.map(_probe, valid))
+
+        # PHASE 3: tempo check TUẦN TỰ — atempo nếu mp3 > 1.02× khung (atempo là
+        # re-encode nặng, giữ tuần tự để không quá tải CPU).
+        for i, af, entry, mp3_dur in probed:
             srt_dur = entry.end - entry.start
-            mp3_dur = _get_audio_duration(af)
             tempo = "-"
-            adj_path: Path | None = None
-            # Tolerance 10%: skip auto-atempo if audio already close to SRT timing
-            # (user may have manually adjusted speed via the alignment panel).
-            if srt_dur > 0 and mp3_dur > srt_dur * 1.10:
+            if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
                 speed = min(mp3_dur / srt_dur, MAX_TEMPO)
                 adj = chunk_dir / f".tempo_{af.stem}_{i}.mp3"
                 _run_ffmpeg([
@@ -137,21 +148,13 @@ def combine_tts_mp3(
                     str(adj),
                 ])
                 af = adj
-                adj_path = adj
+                tempo_files.append(adj)
                 tempo = f"{speed:.4f}"
-            return af, entry, tempo, adj_path
-
-        if valid:
-            with ThreadPoolExecutor(max_workers=min(8, len(valid))) as executor:
-                prepared = list(executor.map(_prepare, valid))
-            for af, entry, tempo, adj_path in prepared:
-                if adj_path:
-                    tempo_files.append(adj_path)
-                items.append((af, entry.start, entry.end))
-                logger.info(
-                    "  [%s] delay=%dms tempo=%s | %s",
-                    entry.startLabel, int(entry.start * 1000), tempo, entry.text,
-                )
+            items.append((af, entry.start, entry.end))
+            logger.info(
+                "  [%s] delay=%dms tempo=%s | %s",
+                entry.startLabel, int(entry.start * 1000), tempo, entry.text,
+            )
 
         if not items:
             raise RuntimeError("Không có file TTS nào để gộp")

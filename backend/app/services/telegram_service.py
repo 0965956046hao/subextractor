@@ -311,6 +311,106 @@ class TelegramService:
             if chat_id:
                 await self.send_message(chat_id, text)
 
+    async def send_web_app_button(
+        self, chat_id: int, text: str, web_app_url: str, button_text: str = "Mở Mini App"
+    ):
+        """Send a message with an inline keyboard button that opens a Telegram Mini App."""
+        if not self._token:
+            logger.warning("send_web_app_button called but no bot token")
+            return
+        try:
+            client = self._get_http()
+            resp = await client.post(
+                f"{TELEGRAM_API}/bot{self._token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "reply_markup": {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": button_text,
+                                    "web_app": {"url": web_app_url},
+                                }
+                            ]
+                        ]
+                    },
+                },
+            )
+            result = resp.json()
+            if not result.get("ok"):
+                logger.warning("Telegram sendWebAppButton failed: %s", result.get("description"))
+        except Exception as e:
+            logger.warning("Telegram send web app button to %s failed: %s", chat_id, e)
+
+    async def broadcast_web_app_button(self, text: str, web_app_url: str, button_text: str = "Mở Mini App"):
+        """Send a message with Mini App button to all connected chats."""
+        if not self._token or not self._chat_ids:
+            return
+        logger.info("Telegram broadcast web app to %d chat(s)", len(self._chat_ids))
+        for ch in self._chat_ids[:]:
+            chat_id = ch.get("chat_id")
+            if chat_id:
+                await self.send_web_app_button(chat_id, text, web_app_url, button_text)
+
+    async def send_video(self, chat_id: int, video_path: str, caption: str = "") -> bool:
+        """Send a video file so it plays inline in the Telegram chat.
+
+        Returns True if sent. False if too large (>49MB, Telegram bot limit)
+        or the upload failed.
+        """
+        if not self._token:
+            logger.warning("send_video called but no bot token")
+            return False
+        p = Path(video_path)
+        if not (p.exists() and p.is_file()):
+            return False
+        # Telegram Bot API upload limit is 50 MB — stay safely under it.
+        if p.stat().st_size > 49 * 1024 * 1024:
+            logger.info("Telegram sendVideo skipped (%s > 49MB)", p.name)
+            return False
+        try:
+            # Dedicated client with a long timeout — uploading video can take minutes.
+            client = httpx.AsyncClient(timeout=600)
+            try:
+                with open(p, "rb") as f:
+                    resp = await client.post(
+                        f"{TELEGRAM_API}/bot{self._token}/sendVideo",
+                        data={
+                            "chat_id": str(chat_id),
+                            "caption": caption,
+                            "parse_mode": "HTML",
+                            "supports_streaming": "true",
+                        },
+                        files={"video": (p.name, f, "video/mp4")},
+                    )
+            finally:
+                await client.aclose()
+            result = resp.json()
+            if result.get("ok"):
+                return True
+            logger.warning("Telegram sendVideo failed: %s", result.get("description"))
+            return False
+        except Exception as e:
+            logger.warning("Telegram sendVideo to %s failed: %s", chat_id, e)
+            return False
+
+    async def broadcast_video(self, video_path: str, caption: str = "") -> bool:
+        """Send a video file to all connected chats.
+
+        Returns True if at least one chat received the video.
+        """
+        if not self._token or not self._chat_ids:
+            return False
+        sent = False
+        for ch in self._chat_ids[:]:
+            chat_id = ch.get("chat_id")
+            if chat_id:
+                ok = await self.send_video(chat_id, video_path, caption)
+                sent = sent or ok
+        return sent
+
     def has_connected_chats(self) -> bool:
         return bool(self._chat_ids)
 

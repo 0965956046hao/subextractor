@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     parallel_download_min_size: int = 0  # 0 = luôn tách 4 luồng khi CDN hỗ trợ Range
     parallel_download_connections: int = 4
 
+    # URL public của backend (vd: Cloudflare Tunnel) — dùng để tạo link
+    # xem/tải video trong thông báo Telegram. Rỗng = không kèm link.
+    public_url: str = ""
+
     model_config = {"env_prefix": "STE_", "env_file": ".env"}
 
 

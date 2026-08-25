@@ -1181,6 +1181,32 @@ function rejectSubtitleStyle(id: string) {
 function waitForWatermarkRegion(id: string): Promise<Region[]> {
   return new Promise<Region[]>((resolve, reject) => {
     watermarkRegionWaiters.set(id, { resolve, reject });
+
+    // Also poll backend for confirmation from Mini App
+    const poll = async () => {
+      while (watermarkRegionWaiters.has(id)) {
+        await sleep(2000);
+        try {
+          const res = await fetch(`/api/pipeline/${videoId}`);
+          if (res.ok) {
+            const ps = await res.json();
+            const confirm = ps?.watermark_confirm;
+            if (confirm?.confirmed && confirm.regions) {
+              // Mini App confirmed — resolve with regions
+              watermarkRegionWaiters.delete(id);
+              resolve(confirm.regions as Region[]);
+              return;
+            }
+          }
+        } catch {
+          // ignore transient
+        }
+      }
+    };
+    // Get videoId from pipeline
+    const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+    const videoId = cur?.videoId;
+    if (videoId) poll();
   });
 }
 
@@ -1938,6 +1964,27 @@ async function runPipeline(id: string, startStep = 4) {
       patch(id, { stage: "watermark_region", resumeStep: 4 });
       markStepStart(id, 4);
       appendLog(id, "Kéo vùng watermark cần xoá trên video...");
+
+      // Send Telegram Mini App button for watermark selection
+      if (videoId) {
+        try {
+          const videoUrl = `https://aaron-qualifying-tiny-extends.trycloudflare.com/api/video/${videoId}/video.mp4?duration=10`;
+          const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({
+              video_url: videoUrl,
+              button_text: "🖼️ Chọn vùng watermark",
+            }),
+          });
+          if (tgRes.ok) {
+            appendLog(id, "Đã gửi Telegram Mini App để chọn vùng watermark.");
+          }
+        } catch {
+          // ignore — Telegram not configured or failed
+        }
+      }
+
       const wmRegions = await waitForWatermarkRegion(id);
       patch(id, { removeWatermarkRegions: wmRegions });
       appendLog(

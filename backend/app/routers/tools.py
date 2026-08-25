@@ -641,44 +641,71 @@ async def delogo_status(video_id: str):
     return {"exists": exists, "valid": valid, "path": str(delogo_path) if exists else None}
 
 
+# ── POST /api/telegram/web-app/{video_id} ──
+
+@router.post("/api/telegram/web-app/{video_id}")
+async def send_telegram_web_app(video_id: str, request: Request):
+    """
+    Send a Telegram message with Mini App button for watermark region selection.
+
+    The Mini App URL will be: {web_app_url}?url={video_url}&videoid={video_id}
+    """
+    from app.services.telegram_service import telegram_service
+    from app.services.video_processor import resolve_video_path
+
+    if not telegram_service.has_connected_chats():
+        raise HTTPException(400, "No Telegram devices connected")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    # Get video URL - use the new endpoint format
+    video_url = body.get("video_url")
+    if not video_url:
+        # Build default URL using the tunnel/base URL
+        base_url = body.get("base_url", "")
+        if not base_url:
+            # Try to get from config or use default
+            from app.config import settings
+            base_url = getattr(settings, "public_url", "http://localhost:8000")
+        video_url = f"{base_url}/api/video/{video_id}/video.mp4?duration=10"
+
+    # Mini App URL
+    mini_app_url = f"https://subtitlewatermark.vercel.app/?url={video_url}&videoid={video_id}"
+
+    # Message text
+    text = (
+        f"🖼️ <b>Chọn vùng watermark</b>\n\n"
+        f"Video: <code>{video_id}</code>\n"
+        f"Bấm nút bên dưới để mở Mini App và chọn vùng watermark cần xoá."
+    )
+
+    button_text = body.get("button_text", "🖼️ Chọn vùng watermark")
+
+    # Send to all connected chats
+    await telegram_service.broadcast_web_app_button(text, mini_app_url, button_text)
+
+    return {
+        "status": "ok",
+        "mini_app_url": mini_app_url,
+        "sent_to": len(telegram_service._chat_ids),
+    }
+
+
 # ── POST /api/delogo/{video_id} ──
 
 @router.post("/api/delogo/{video_id}")
-async def delogo_video(video_id: str, request: Request):
+async def delogo_video(
+    video_id: str,
+    request: Request,
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
     """
     Apply FFmpeg delogo filter to remove watermark(s).
-
-    Request body:
-
-    Single region:
-    {
-        "region": {
-            "x1": 0.75,
-            "y1": 0.85,
-            "x2": 0.95,
-            "y2": 0.95
-        }
-    }
-
-    Multiple regions:
-    {
-        "regions": [
-            {
-                "x1": 0.75,
-                "y1": 0.85,
-                "x2": 0.95,
-                "y2": 0.95
-            },
-            {
-                "x1": 0.10,
-                "y1": 0.10,
-                "x2": 0.30,
-                "y2": 0.20
-            }
-        ]
-    }
-
-    Coordinates are normalized 0..1.
+    After success, updates pipeline state so frontend continues automatically.
     """
 
     video_path = _video_path(video_id)
@@ -888,6 +915,46 @@ async def delogo_video(video_id: str, request: Request):
     )
 
     # ============================================================
+    # 4.5 Mini App (pixel format) → confirm regions only, no FFmpeg.
+    # The frontend picks up the regions and runs delogo itself (so the
+    # log shows "Đang xoá watermark" like clicking "Xác Nhận Vùng" on FE).
+    # ============================================================
+
+    is_miniapp = any(
+        isinstance(r, dict)
+        and all(k in r for k in ("x", "y", "width", "height"))
+        and not all(k in r for k in ("x1", "y1", "x2", "y2"))
+        for r in raw_regions
+    )
+
+    if is_miniapp:
+        normalized_regions = []
+        for r in raw_regions:
+            px_x = float(r["x"])
+            px_y = float(r["y"])
+            px_w = float(r["width"])
+            px_h = float(r["height"])
+            normalized_regions.append({
+                "x1": round(px_x / width, 6),
+                "y1": round(px_y / height, 6),
+                "x2": round((px_x + px_w) / width, 6),
+                "y2": round((px_y + px_h) / height, 6),
+            })
+
+        ps = pipeline_states.get(video_id) or {}
+        ps["watermark_confirm"] = {
+            "regions": normalized_regions,
+            "confirmed": True,
+        }
+        pipeline_states[video_id] = ps
+
+        logger.info(
+            f"[delogo] Mini App confirmed {len(normalized_regions)} region(s) "
+            f"-> normalized {normalized_regions}"
+        )
+        return {"status": "confirmed", "regions": normalized_regions}
+
+    # ============================================================
     # 5. Convert normalized coordinates -> pixels
     # ============================================================
 
@@ -907,46 +974,46 @@ async def delogo_video(video_id: str, request: Request):
             )
 
         # --------------------------------------------------------
-        # Check keys
+        # Support both formats:
+        #   1. Normalized: {x1, y1, x2, y2} (0..1)
+        #   2. Pixel: {x, y, width, height} (from Mini App)
         # --------------------------------------------------------
 
-        required_keys = (
-            "x1",
-            "y1",
-            "x2",
-            "y2",
-        )
+        has_normalized = all(key in region for key in ("x1", "y1", "x2", "y2"))
+        has_pixel = all(key in region for key in ("x", "y", "width", "height"))
 
-        if not all(
-            key in region
-            for key in required_keys
-        ):
+        if has_pixel and not has_normalized:
+            # Convert pixel coordinates to normalized (0..1)
+            px_x = float(region["x"])
+            px_y = float(region["y"])
+            px_w = float(region["width"])
+            px_h = float(region["height"])
+            x1 = px_x / width
+            y1 = px_y / height
+            x2 = (px_x + px_w) / width
+            y2 = (px_y + px_h) / height
+            logger.info(
+                f"[delogo] Region {index + 1}: pixel ({px_x}, {px_y}, {px_w}, {px_h}) "
+                f"-> normalized ({x1:.4f}, {y1:.4f}, {x2:.4f}, {y2:.4f})"
+            )
+        elif has_normalized:
+            # Already normalized
+            try:
+                x1 = float(region["x1"])
+                y1 = float(region["y1"])
+                x2 = float(region["x2"])
+                y2 = float(region["y2"])
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Region {index + 1}: x1/y1/x2/y2 must be numbers"
+                )
+        else:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"Region {index + 1} must contain "
-                    "x1, y1, x2, y2"
-                )
-            )
-
-        # --------------------------------------------------------
-        # Parse float
-        # --------------------------------------------------------
-
-        try:
-
-            x1 = float(region["x1"])
-            y1 = float(region["y1"])
-            x2 = float(region["x2"])
-            y2 = float(region["y2"])
-
-        except (TypeError, ValueError):
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Region {index + 1} "
-                    "coordinates must be numbers"
+                    "x1, y1, x2, y2 (normalized) or x, y, width, height (pixels)"
                 )
             )
 
@@ -1389,6 +1456,15 @@ async def delogo_video(video_id: str, request: Request):
             logger.warning(f"[delogo] ffprobe output failed: {e}")
 
         elapsed = _time.time() - start_time
+
+        # Update pipeline state so frontend continues automatically
+        ps = pipeline_states.get(video_id) or {}
+        ps["watermark_confirm"] = {
+            "regions": raw_regions,
+            "confirmed": True,
+        }
+        pipeline_states[video_id] = ps
+
         yield f"data: {json.dumps({'type': 'done', 'video_id': video_id, 'path': str(output), 'width': width, 'height': height, 'regions': len(delogo_filters), 'filters': delogo_filters, 'output_size': output_size, 'elapsed': round(elapsed, 1)})}\n\n"
 
     return StreamingResponse(
@@ -2459,10 +2535,14 @@ async def update_pipeline_state(
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
     new_state = body.model_dump()
-    # Generic progress reports don't carry timeline_check — preserve whatever the
-    # dedicated timeline endpoint stored so remote tabs keep seeing the popup.
+    # Generic progress reports don't carry timeline_check / watermark_confirm —
+    # preserve whatever the dedicated endpoints stored so remote tabs keep
+    # seeing the popup / the pipeline resumes after remote watermark selection.
+    prev = pipeline_states.get(video_id) or {}
     if body.timeline_check is None:
-        new_state["timeline_check"] = (pipeline_states.get(video_id) or {}).get("timeline_check")
+        new_state["timeline_check"] = prev.get("timeline_check")
+    if prev.get("watermark_confirm"):
+        new_state["watermark_confirm"] = prev["watermark_confirm"]
     pipeline_states[video_id] = new_state
     return {"ok": True, "video_id": video_id}
 
