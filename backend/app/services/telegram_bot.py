@@ -12,9 +12,12 @@ Callback handlers receive the full ``callback_query`` dict from
 """
 
 import logging
+import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+_URL_RE = re.compile(r"https?://[^\s\u4e00-\u9fff]+")
 
 CAPCUT_VOICES = [
     ("BV421_vivn_streaming", "Nhỏ Ngọt Ngào"),
@@ -95,10 +98,24 @@ def _build_config_text(config: DouyinConfig) -> str:
     )
 
 
+def _extract_url(text: str) -> str:
+    """Extract the first http(s) URL from a Douyin share message.
+
+    Douyin share text looks like::
+
+        ``... 幻龙到底有多离谱？ https://v.douyin.com/O6-krtmu1qQ/ 复制此链接...``
+
+    Matches the frontend ``extractUrl`` regex (stop at whitespace / CJK chars)
+    and strips trailing punctuation.
+    """
+    m = _URL_RE.search(text or "")
+    if not m:
+        return ""
+    return m[0].rstrip("，。！？,;.!?")
+
+
 def _shorten(url: str, max_len: int) -> str:
     return url if len(url) <= max_len else url[: max_len - 3] + "..."
-
-
 # ── Keyboard rendering ──
 
 def _btn(label, data):
@@ -183,14 +200,16 @@ class TelegramBot:
     async def _handle_douyin(self, chat_id: int, text: str):
         from app.services.telegram_service import telegram_service
 
-        parts = text.split(maxsplit=1)
-        url = parts[1].strip() if len(parts) > 1 else ""
+        raw = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
+        url = _extract_url(raw)
 
-        if not url.startswith(("http://", "https://")):
+        if not url:
             await telegram_service.send_message(
                 chat_id,
-                "❌ <b>Cú pháp:</b> /douyin &lt;URL&gt;\n\n"
-                "Ví dụ:\n<code>/douyin https://v.douyin.com/xxx</code>",
+                "❌ <b>Không tìm thấy link.</b>\n\n"
+                "Gửi lệnh kèm link Douyin, ví dụ:\n"
+                "<code>/douyin https://v.douyin.com/xxx</code>\n\n"
+                "Bạn cũng có thể dán nguyên đoạn chia sẻ của Douyin.",
             )
             return
 
