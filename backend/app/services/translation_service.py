@@ -1,5 +1,6 @@
 import logging
 import json
+from pathlib import Path
 
 from app.config import settings
 from app.models import SrtEntry
@@ -12,9 +13,10 @@ from app.services.context_service import (
     _load_capcut_voice_catalog,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.gemini_array import build_numbered_payload, gemini_map_texts
 from app.services.retry_utils import (
-    gemini_call_rotating,
     configured_gemini_keys,
+    gemini_call_rotating,
     genai_generate_content_factory,
 )
 
@@ -47,82 +49,56 @@ def _read_user_config() -> dict:
     return {}
 
 
-CHINESE_TRANSLATE_PROMPT = """You are a professional translator. Your ONLY job is to translate Chinese to {target_lang_name}.
+# Array protocol: Gemini only ever sees numbered TEXT lines ("0|nội dung") —
+# never indexes/timestamps — so it cannot touch the SRT timeline at all.
+CHINESE_TRANSLATE_PROMPT = """You are a professional subtitle translator. Your ONLY job is to translate Chinese subtitle lines to {target_lang_name}.
 
-Translate EVERY subtitle line from Chinese to {target_lang_name}. NEVER keep any Chinese text in your output.
-IMPORTANT: You MUST replace ALL Chinese characters with {target_lang_name} translation. Do NOT output the original Chinese text under any circumstances.
+Input: numbered lines in the form "position|chinese text".
+Output: EXACTLY the same positions, one line each, in the form "position|{target_lang_name} translation".
 
 Rules:
-1. Read the full context of all lines first
-2. Use natural {target_lang_name}, not word-for-word
-3. Adapt cultural terms ({culture_examples})
-4. Keep the SRT format: index, timestamps, translated {target_lang_name} text
-5. Keep lines similar length for subtitle timing
-6. Remove all dash "-" characters from the translated text (e.g. "-", "--", "---")
-7. {politeness_rule}
-8. Remove extra/unrelated characters that are not part of the subtitle content: stray punctuation, repeated symbols (e.g. "。。", "。。。", "!!!", "~"), noise markers, or filler characters
-9. TIMELINE MUST STAY EXACTLY THE SAME: translate ONLY the text of each line. Keep the exact same number of lines, the same order, the same index number, the same start time and the same end time for every line. NEVER merge two lines into one, NEVER split one line into two, NEVER drop any line, NEVER reorder lines, NEVER change any timestamp.
-10. Output ONLY the translated SRT — no explanations, no markdown, no code fences
-
-SRT to translate from Chinese to {target_lang_name}:
-
+1. Read the full context of all lines first, then translate each one.
+2. Use natural {target_lang_name}, not word-for-word. Adapt cultural terms ({culture_examples}).
+3. Keep each translation similar in length to its source line so subtitle timing works.
+4. Replace ALL Chinese characters with {target_lang_name} — never echo Chinese text back.
+5. Strip dashes ("-", "--"), stray punctuation, repeated symbols ("。。", "。。。", "!!!", "~") and noise markers from the result.
+6. Output one line PER input position, same order, same count ({line_hint}). NEVER merge two lines, NEVER split one line, NEVER skip a position.
+7. Output ONLY the "position|translation" lines — no explanations, no markdown, no code fences.
+8. {politeness_rule}
 """
 
-GENERIC_TRANSLATE_PROMPT = """You are a professional subtitle translator. Translate the following SRT subtitles from {source_lang_name} to {target_lang_name}.
+GENERIC_TRANSLATE_PROMPT = """You are a professional subtitle translator. Translate the following subtitle lines from {source_lang_name} to {target_lang_name}.
+
+Input: numbered lines in the form "position|text".
+Output: EXACTLY the same positions, one line each, in the form "position|{target_lang_name} translation".
 
 Rules:
-1. Read the full context of all lines before translating.
+1. Read the full context of all lines first, then translate each one.
 2. Use natural {target_lang_name}; avoid mechanical, word-for-word translation.
 3. Adapt cultural terms appropriately (e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency").
-4. Maintain the SRT format: sequence number, timestamps, and translated {target_lang_name} content.
-5. Keep line lengths balanced to ensure proper subtitle display timing.
-6. Remove all hyphens/dashes ("-", "--", "---") from the translated text.
-7. {politeness_rule}
-8. Remove extraneous or irrelevant characters that are not part of the subtitle content: redundant punctuation, repeated symbols (e.g., "。。", "。。。", "!!!", "~"), noise indicators, or filler characters.
-9. TIMELINE MUST STAY EXACTLY THE SAME: translate ONLY the text of each line. Keep the exact same number of lines, the same order, the same index number, the same start time and the same end time for every line. NEVER merge lines, NEVER split lines, NEVER drop any line, NEVER reorder lines, NEVER change any timestamp.
-10. Output only the translated SRT content—no explanations, no Markdown formatting, and no code blocks.
-Here is the SRT to translate:
-
+4. Keep each translation similar in length to its source line so subtitle timing works.
+5. Strip dashes ("-", "--"), stray punctuation, repeated symbols ("。。", "。。。", "!!!", "~") and noise markers from the result.
+6. Output one line PER input position, same order, same count ({line_hint}). NEVER merge two lines, NEVER split one line, NEVER skip a position.
+7. Output ONLY the "position|translation" lines — no explanations, no markdown, no code fences.
+8. {politeness_rule}
 """
 
 # After each patch is translated, ask Gemini to summarize the patch so the NEXT
 # patch can keep names, honorifics, tone and terminology consistent.
 PATCH_CONTEXT_PROMPT = """You are a subtitle-translation consistency assistant.
 
-The following is a patch of subtitles that was JUST translated from {source_lang_name} to {target_lang_name}.
+The following numbered lines were JUST translated from {source_lang_name} to {target_lang_name}.
 Write a SHORT (max ~5 sentences) context note in {target_lang_name} capturing what an upcoming patch must know to stay consistent:
 - Character names, titles, honorifics and how they address each other
 - Repeated terminology or idioms and the translation chosen for them
 - The tone/register being used
 - Any plot facts established in this patch that matter later
 
-Do NOT include timestamps or SRT indexes. Output ONLY the context note, no preamble.
+Do NOT include line numbers or timestamps. Output ONLY the context note, no preamble.
 
-Translated patch:
+Translated lines:
 
 """
-
-
-def _build_patch_context_note(translated_batch, source_lang: str, target_lang: str) -> str:
-    """Ask Gemini to summarize a translated patch into a reusable context note."""
-    sn = LANG_NAMES.get(source_lang, source_lang)
-    tn = LANG_NAMES.get(target_lang, target_lang)
-    prompt = PATCH_CONTEXT_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
-    patch_srt = entries_to_srt(translated_batch)
-    try:
-        response = gemini_call_rotating(
-            genai_generate_content_factory,
-            model=settings.gemini_model,
-            contents=prompt + patch_srt,
-            config={
-                "system_instruction": "You build concise translation-consistency notes.",
-                "temperature": 0.2,
-            },
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.warning("Patch context note failed: %s", e)
-        return ""
 
 
 LANG_NAMES = {
@@ -392,7 +368,7 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
                     if not voice:
                         continue
                     # Gemini có thể trả index batch-relative (1..50) hoặc global
-                    # (51..100) — chấp nhận cả hai như _reconcile_batch.
+                    # (51..100) — chấp nhận cả hai.
                     if batch_start + 1 <= idx <= batch_start + len(batch):
                         voice_map[idx] = voice
                     elif 1 <= idx <= len(batch):
@@ -416,73 +392,46 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
     return voice_map
 
 
-def _extract_indices(srt_text: str) -> list[int | None]:
-    """Read the raw index number of every SRT block in Gemini's output."""
-    idx: list[int | None] = []
-    for block in srt_text.strip().split("\n\n"):
-        lines = [l.strip() for l in block.split("\n") if l.strip()]
-        first = lines[0] if lines else ""
-        idx.append(int(first) if first.isdigit() else None)
-    return idx
-
-
-def _reconcile_batch(batch: list, translated: list, translated_text: str) -> list:
-    """Force translated text back onto the batch's exact timeline (1:1).
-
-    Gemini may drop, merge, split or renumber lines. This guarantees every
-    original line survives with its exact index/timestamps: translated text is
-    matched by the index Gemini echoed (batch-relative or global), and any
-    unmatched original line falls back to its original text so no subtitle is
-    ever lost and the timeline is never altered.
-    """
-    by_raw: dict[int, object] = {}
-    positional: list = []
-    for te, ridx in zip(translated, _extract_indices(translated_text)):
-        if ridx is not None and ridx not in by_raw:
-            by_raw[ridx] = te
-        else:
-            positional.append(te)
-
-    def matched(key_for) -> dict:
-        m: dict = {}
-        for p, b in enumerate(batch):
-            te = by_raw.get(key_for(b, p))
-            if te is not None:
-                m[p] = te
-        return m
-
-    rel = matched(lambda b, p: p + 1)
-    glob = matched(lambda b, p: b.index)
-    chosen = rel if len(rel) >= len(glob) else glob
-
-    out: list = []
-    pool = positional
-    pool_i = 0
-    for p, b in enumerate(batch):
-        te = chosen.get(p)
-        if te is None and pool_i < len(pool):
-            te = pool[pool_i]
-            pool_i += 1
-        text = te.text.strip() if te is not None else ""
-        out.append(SrtEntry(
-            index=b.index,
-            start=b.start,
-            end=b.end,
-            startLabel=b.startLabel,
-            endLabel=b.endLabel,
-            text=text or b.text.strip(),
-        ))
-    return out
-
-
-def _build_base_prompt(source_lang: str, target_lang: str, video_id: str) -> str:
-    """Build the shared Gemini prompt prefix for a language pair (+video context)."""
+def _build_patch_context_note(translated_texts: list[str], source_lang: str, target_lang: str) -> str:
+    """Ask Gemini to summarize a translated patch into a reusable context note."""
     sn = LANG_NAMES.get(source_lang, source_lang)
     tn = LANG_NAMES.get(target_lang, target_lang)
+    prompt = PATCH_CONTEXT_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
+    payload = "\n".join(f"{i}|{t}" for i, t in enumerate(translated_texts))
+    try:
+        response = gemini_map_texts_call_note(prompt, payload)
+        return response.strip()
+    except Exception as e:
+        logger.warning("Patch context note failed: %s", e)
+        return ""
+
+
+def gemini_map_texts_call_note(prompt: str, payload: str) -> str:
+    """One-shot Gemini call for the patch context note (numbered lines in, prose out)."""
+    from app.services.retry_utils import gemini_call_rotating, genai_generate_content_factory
+
+    response = gemini_call_rotating(
+        genai_generate_content_factory,
+        model=settings.gemini_model,
+        contents=f"{prompt}\n\n{payload}",
+        config={
+            "system_instruction": "You build concise translation-consistency notes.",
+            "temperature": 0.2,
+        },
+    )
+    return response.text.strip()
+
+
+def _build_base_prompt(source_lang: str, target_lang: str, video_id: str, n_lines: int) -> str:
+    """Build the shared Gemini instruction for a language pair (+video context)."""
+    sn = LANG_NAMES.get(source_lang, source_lang)
+    tn = LANG_NAMES.get(target_lang, target_lang)
+    line_hint = f"you receive {n_lines} lines, you output exactly {n_lines} lines"
+    politeness_rule_vi = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
+                          'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
     if target_lang == "vi":
         culture_examples = '将军→"tướng quân", 陛下→"bệ hạ", 大人→"đại nhân"'
-        politeness_rule = ('Never use "mày" / "tao" (informal disrespectful pronouns). '
-                           'Use polite alternatives like "ta", "ngươi", "anh", "cô", "tôi" depending on context')
+        politeness_rule = politeness_rule_vi
     else:
         culture_examples = 'e.g., 将军 → "General", 陛下 → "Your Majesty", 大人 → "My Lord/Excellency"'
         politeness_rule = (f'Use an appropriate polite register for {tn}; avoid rude or overly informal '
@@ -492,12 +441,14 @@ def _build_base_prompt(source_lang: str, target_lang: str, video_id: str) -> str
             target_lang_name=tn,
             culture_examples=culture_examples,
             politeness_rule=politeness_rule,
+            line_hint=line_hint,
         )
     else:
         base_prompt = GENERIC_TRANSLATE_PROMPT.format(
             source_lang_name=sn,
             target_lang_name=tn,
             politeness_rule=politeness_rule,
+            line_hint=line_hint,
         )
 
     # Load video context if available (generated from OCR snapshots)
@@ -523,7 +474,7 @@ def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", 
     if not configured_gemini_keys():
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
-    base_prompt = _build_base_prompt(source_lang, target_lang, video_id)
+    base_prompt = _build_base_prompt(source_lang, target_lang, video_id, n_lines=1)
 
     patch_context = load_translation_context(video_id)
     if patch_context:
@@ -598,46 +549,37 @@ def retranslate_untranslated(
     if log_fn:
         log_fn(f"Phát hiện {len(untranslated_idx)} dòng chưa dịch, gửi lại Gemini: {untranslated_idx[:20]}{'...' if len(untranslated_idx) > 20 else ''}", level="warning")
 
-    # Build a mini-SRT from the ORIGINAL untranslated lines so Gemini translates
-    # the source text (not the echoed copy inside the translated content).
+    # Array protocol: only the SOURCE texts travel to Gemini — no timeline.
     batch = [orig_by_idx[i] for i in untranslated_idx]
-    batch_srt = entries_to_srt(batch)
+    texts = [b.text for b in batch]
 
-    base_prompt = _build_base_prompt(source_lang, target_lang, video_id)
+    base_prompt = _build_base_prompt(source_lang, target_lang, video_id, len(texts))
     patch_context = load_translation_context(video_id)
     if patch_context:
         base_prompt = (
             "PREVIOUS PATCH CONTEXT (keep character names, honorifics, terminology and tone "
             f"CONSISTENT with these):\n{patch_context}\n\n{base_prompt}"
         )
-    prompt = base_prompt + "\nTranslate ONLY these lines (keep the exact index/timestamps):\n\n" + batch_srt
 
-    try:
-        response = _call_gemini(prompt, {
-            "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
-            "temperature": 0.3,
-        })
-        response_text = _clean_gemini_response(response.text.strip())
-    except Exception as e:
-        raise RuntimeError(f"Retranslation failed: {e}")
+    results = gemini_map_texts(
+        texts,
+        instruction=(
+            base_prompt
+            + "\nIMPORTANT: translate EVERY line below; replace all source-language text."
+        ),
+        system_instruction="You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+        temperature=0.7,
+        log_fn=log_fn,
+    )
 
-    translated_batch = parse_srt(response_text)
-    if not translated_batch:
-        if log_fn:
-            log_fn("Gemini không trả về bản dịch cho các dòng chưa dịch — giữ nguyên.", level="warning")
-        return translated_content
-
-    reconciled = _reconcile_batch(batch, translated_batch, response_text)
-    fixed_by_idx = {r.index: r for r in reconciled}
+    fixed_by_idx = dict(zip(untranslated_idx, results))
 
     out: list = []
     retranslated: list[int] = []
     for te in translated:
-        fixed = fixed_by_idx.get(te.index)
-        if fixed is not None and fixed.text.strip():
-            new_text = fixed.text.strip()
-            if new_text != te.text.strip():
-                retranslated.append(te.index)
+        new_text = fixed_by_idx.get(te.index)
+        if new_text is not None and new_text.strip() and new_text != te.text.strip():
+            retranslated.append(te.index)
             te = SrtEntry(
                 index=te.index, start=te.start, end=te.end,
                 startLabel=te.startLabel, endLabel=te.endLabel,
@@ -677,131 +619,80 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     if not configured_gemini_keys():
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
-    # Build prompt based on language pair (target language injected, not hardcoded)
-    base_prompt = _build_base_prompt(source_lang, target_lang, video_id)
-
-    # Load accumulated translation context built from previously translated patches
+    # Accumulated translation context keeps names/honorifics/terminology consistent
     patch_context = load_translation_context(video_id)
     if patch_context:
         logger.info("Using accumulated translation context (%d chars)", len(patch_context))
 
-    # Send in batches of 50 entries to stay within context limits
+    SYSTEM_INSTRUCTION = (
+        "You are a professional subtitle translator. Always answer with numbered "
+        "'position|translation' lines covering EVERY input position."
+    )
+
+    # Send in batches of 50 entries to stay within context limits.
+    # Array protocol: only texts leave the backend; timestamps never do.
     batch_size = 50
     translated_entries = []
     total_batches = (len(entries) + batch_size - 1) // batch_size
 
     for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
         batch = entries[batch_start:batch_start + batch_size]
-        batch_srt = entries_to_srt(batch)
+        texts = [e.text for e in batch]
 
         if progress_callback:
             progress_callback(bi + 1, total_batches)
 
-        # Prepend accumulated patch context so names/honorifics/terminology stay consistent
+        instruction = _build_base_prompt(source_lang, target_lang, video_id, len(texts))
         if patch_context:
-            patch_prefix = (
+            instruction = (
                 "PREVIOUS PATCH CONTEXT (already-translated subtitles; keep character names, "
                 "honorifics, terminology and tone CONSISTENT with these):\n"
-                f"{patch_context}\n\n"
+                f"{patch_context}\n\n{instruction}"
             )
-            prompt = patch_prefix + base_prompt + batch_srt
-        else:
-            prompt = base_prompt + batch_srt
+
         logger.info("Sending batch %d-%d to Gemini", batch_start + 1, min(batch_start + batch_size, len(entries)))
         if log_fn:
             log_fn(f"Dịch batch {bi + 1}/{total_batches} ({len(batch)} dòng: {batch_start + 1}–{min(batch_start + batch_size, len(entries))})...")
 
-        # Gemini occasionally returns an empty/None response for a batch (safety
-        # filter, transient hiccup). Retry a few times; if it still fails, keep the
-        # original text for that batch instead of aborting the whole translation.
-        response_text = None
-        last_err: Exception | str | None = None
-        for attempt in range(3):
-            try:
-                response = _call_gemini(prompt, {
-                    "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
-                    "temperature": 0.3,
-                })
-                if response is not None and (response.text or "").strip():
-                    response_text = response.text.strip()
-                    break
-                last_err = "Gemini trả về phản hồi rỗng"
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-                logger.warning("Gemini batch %d attempt %d failed: %s", bi + 1, attempt + 1, e)
-            if attempt < 2:
-                import time as _t
-                _t.sleep(2 + attempt * 2)
-        if not response_text:
-            logger.warning("Gemini batch %d failed after retries (%s); giữ nguyên bản gốc.", bi + 1, last_err)
+        results = gemini_map_texts(
+            texts,
+            instruction=instruction,
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.3,
+            log_fn=log_fn,
+        )
+
+        # Zip 1:1 back onto the ORIGINAL entries — timeline untouched by design.
+        out_batch: list[SrtEntry] = []
+        changed = 0
+        for b, r in zip(batch, results):
+            new_text = (r or "").strip()
+            if new_text != b.text.strip():
+                changed += 1
+            out_batch.append(SrtEntry(
+                index=b.index,
+                start=b.start,
+                end=b.end,
+                startLabel=b.startLabel,
+                endLabel=b.endLabel,
+                text=new_text or b.text.strip(),
+            ))
+        translated_entries.extend(out_batch)
+
+        if changed == 0 and len(texts) > 0:
+            logger.warning("Batch %d-%d: Gemini echoed input without translating", bi + 1, bi + len(batch))
             if log_fn:
-                log_fn(f"  Batch {bi + 1}: dịch thất bại, giữ nguyên bản gốc.", level="warning")
-            translated_entries.extend(batch)
-            continue
-
-        # Strip markdown code fences that Gemini sometimes wraps around SRT
-        response_text = _clean_gemini_response(response_text)
-        logger.debug("Gemini response (first 200 chars): %s", response_text[:200])
-
-        # Parse translated SRT back
-        translated_batch = parse_srt(response_text)
-        if not translated_batch:
-            logger.warning("Gemini returned empty translation for batch %d-%d, response: %s",
-                           batch_start + 1, min(batch_start + batch_size, len(entries)),
-                           response_text[:300])
-            # fallback: keep original
-            translated_entries.extend(batch)
-            if log_fn:
-                log_fn(f"  Batch {bi + 1}: Gemini trả về trống, giữ nguyên bản gốc.", level="warning")
-            continue
-
-        # Detect if Gemini echoed back the input (no translation)
-        if len(translated_batch) == len(batch) and translated_batch[0].text.strip() == batch[0].text.strip():
-            logger.warning("Gemini echoed input without translating batch %d-%d, retrying with per-line prompt",
-                           batch_start + 1, min(batch_start + batch_size, len(entries)))
-            if log_fn:
-                log_fn(f"  Batch {bi + 1}: Gemini lặp lại bản gốc, thử lại với yêu cầu dịch rõ hơn...")
-            # Retry with explicit per-line instruction
-            retry_prompt = (
-                base_prompt
-                + "\nIMPORTANT: Translate EVERY line below from Chinese to Vietnamese. "
-                + "Replace each Chinese text with its Vietnamese equivalent. "
-                + "Do NOT output any Chinese characters.\n\n"
-                + batch_srt
-            )
-            try:
-                response2 = _call_gemini(retry_prompt, {
-                    "system_instruction": "You are a subtitle translator. You must translate ALL text. Never echo the input.",
-                    "temperature": 0.7,
-                })
-                response_text2 = _clean_gemini_response(response2.text.strip())
-                translated_batch = parse_srt(response_text2)
-                response_text = response_text2
-            except Exception:
-                pass
-
-        if not translated_batch:
-            logger.warning("Gemini retry also failed for batch %d-%d, keeping original",
-                           batch_start + 1, min(batch_start + batch_size, len(entries)))
-            translated_entries.extend(batch)
-            if log_fn:
-                log_fn(f"  Batch {bi + 1}: thử lại vẫn lỗi, giữ nguyên bản gốc.", level="warning")
-            continue
-
-        # Force translated text back onto the original timeline so no line is
-        # ever dropped and timestamps stay exactly as in the source SRT.
-        reconciled = _reconcile_batch(batch, translated_batch, response_text)
-        translated_entries.extend(reconciled)
-        if log_fn:
-            log_fn(f"  Batch {bi + 1}: dịch xong {len(reconciled)} dòng:")
-            for te in reconciled:
-                log_fn(f"    {te.index}. {te.text}")
+                log_fn(f"  Batch {bi + 1}: bản dịch trùng bản gốc, có thể chưa được dịch.", level="warning")
         else:
-            logger.info("Batch %d translated %d lines", bi + 1, len(reconciled))
+            logger.info("Batch %d translated (%d/%d lines changed)", bi + 1, changed, len(batch))
+            if log_fn:
+                log_fn(f"  Batch {bi + 1}: dịch xong {len(out_batch)} dòng ({changed} dòng thay đổi).")
 
         # Build a context note from this patch and append it so the NEXT patch
         # keeps names, honorifics, terminology and tone consistent.
-        note = _build_patch_context_note(translated_batch, source_lang, target_lang)
+        note = _build_patch_context_note(
+            [e.text for e in out_batch], source_lang, target_lang,
+        )
         if note:
             patch_context = (patch_context + "\n\n" + note) if patch_context else note
             append_translation_context(video_id, note)

@@ -39,6 +39,14 @@ const HANDLE_CURSOR: Record<HandleId, string> = {
 type DragState =
   | { type: "idle" }
   | { type: "draw"; startX: number; startY: number }
+  | { type: "move"; startX: number; startY: number; rect: Region }
+  | {
+      type: "moveRegion";
+      index: number;
+      startX: number;
+      startY: number;
+      rect: Region;
+    }
   | { type: "resize"; handle: HandleId; startX: number; startY: number; rect: Region };
 
 export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
@@ -168,6 +176,28 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
     return px >= p.x1 && px <= p.x2 && py >= p.y1 && py <= p.y2;
   };
 
+  // Tìm vùng đã commit chứa điểm (ưu tiên vùng vẽ sau — topmost).
+  const hitRegionAt = (px: number, py: number): number => {
+    const c = canvasRef.current;
+    if (!c) return -1;
+    for (let i = regions.length - 1; i >= 0; i--) {
+      const p = denorm(regions[i], c.width, c.height);
+      if (px >= p.x1 && px <= p.x2 && py >= p.y1 && py <= p.y2) return i;
+    }
+    return -1;
+  };
+
+  // Dịch chuyển rect theo delta pixel, giữ nguyên kích thước, kẹp trong [0,1].
+  const translateRect = (rect: Region, dxPx: number, dyPx: number): Region => {
+    const w = rect.x2 - rect.x1;
+    const h = rect.y2 - rect.y1;
+    let x1 = rect.x1 + dxPx;
+    let y1 = rect.y1 + dyPx;
+    x1 = clamp(x1, 0, 1 - w);
+    y1 = clamp(y1, 0, 1 - h);
+    return { x1, y1, x2: x1 + w, y2: y1 + h };
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const pos = getPos(e.clientX, e.clientY);
@@ -178,7 +208,20 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
       return;
     }
     if (rectRef.current && hitRect(pos.x, pos.y)) {
-      // Don't start new draw if clicking inside existing rect
+      // Kéo di chuyển vùng đang vẽ (chưa Add)
+      dragRef.current = { type: "move", startX: pos.x, startY: pos.y, rect: { ...rectRef.current } };
+      return;
+    }
+    const committedIdx = hitRegionAt(pos.x, pos.y);
+    if (committedIdx >= 0 && !hasRect) {
+      // Kéo di chuyển vùng đã Add
+      dragRef.current = {
+        type: "moveRegion",
+        index: committedIdx,
+        startX: pos.x,
+        startY: pos.y,
+        rect: { ...regions[committedIdx] },
+      };
       return;
     }
     const n = { x: pos.x / size.w, y: pos.y / size.h };
@@ -197,7 +240,14 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
     const d = dragRef.current;
     if (d.type === "idle") {
       const c = canvasRef.current;
-      if (c) { const h = hitHandle(pos.x, pos.y); c.style.cursor = h ? HANDLE_CURSOR[h] : hitRect(pos.x, pos.y) ? "move" : "crosshair"; }
+      if (c) {
+        const h = hitHandle(pos.x, pos.y);
+        c.style.cursor = h
+          ? HANDLE_CURSOR[h]
+          : hitRect(pos.x, pos.y) || hitRegionAt(pos.x, pos.y) >= 0
+            ? "move"
+            : "crosshair";
+      }
       return;
     }
     if (d.type === "draw") {
@@ -205,6 +255,21 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
       const s = { x: d.startX / size.w, y: d.startY / size.h };
       rectRef.current = { x1: clamp(Math.min(s.x, n.x)), y1: clamp(Math.min(s.y, n.y)), x2: clamp(Math.max(s.x, n.x)), y2: clamp(Math.max(s.y, n.y)) };
       setHasRect(true); syncRect(); scheduleRedraw(); return;
+    }
+    if (d.type === "move") {
+      // Dịch chuyển vùng đang vẽ
+      const dx = (pos.x - d.startX) / size.w;
+      const dy = (pos.y - d.startY) / size.h;
+      rectRef.current = translateRect(d.rect, dx, dy);
+      setHasRect(true); syncRect(); scheduleRedraw(); return;
+    }
+    if (d.type === "moveRegion") {
+      // Dịch chuyển vùng đã Add trong danh sách
+      const dx = (pos.x - d.startX) / size.w;
+      const dy = (pos.y - d.startY) / size.h;
+      const moved = translateRect(d.rect, dx, dy);
+      setRegions((prev) => prev.map((r, i) => (i === d.index ? moved : r)));
+      scheduleRedraw(); return;
     }
     const c = canvasRef.current;
     if (!c) return;

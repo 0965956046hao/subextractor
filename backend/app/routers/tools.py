@@ -263,8 +263,11 @@ async def retranslate_srt(video_id: str, request: Request):
 
 @router.put("/api/srt/{video_id}")
 async def update_srt(video_id: str, body: UpdateSrtRequest):
-    srt_path = _srt_path(video_id)
-    # Preserve the original OCR SRT on first overwrite so it can be inspected
+    # Ghi về đúng file mà GET /entries đã đọc (_srt_best_path: ưu tiên bản dịch).
+    # Trước đây ghi vào _srt_path (SRT gốc OCR) trong khi modal/transcript đọc
+    # bản dịch → chỉnh sửa bị "mất" và risk-check vẫn thấy nội dung cũ.
+    srt_path = _srt_best_path(video_id)
+    # Preserve the pre-edit SRT on first overwrite so it can be inspected
     # later (e.g. comparing timings after translation/hardcode).
     if srt_path.exists():
         current = srt_path.read_text(encoding="utf-8")
@@ -378,8 +381,9 @@ async def rewrite_srt_line(video_id: str, request: Request):
     else:
         raise HTTPException(400, f"Unknown mode: {mode}")
 
-    # Update the SRT file
-    srt_path = _srt_path(video_id)
+    # Update the SRT file — cùng file mà modal đang hiển thị (_srt_best_path),
+    # không phải SRT gốc OCR, nếu không chỉnh sửa sẽ không bao giờ được thấy.
+    srt_path = _srt_best_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     from app.services.srt_utils import parse_srt, entries_to_srt

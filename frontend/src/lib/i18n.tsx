@@ -549,6 +549,7 @@ const dictionaries = {
     "pipeline.step.label.region": "Select subtitle region",
     "pipeline.step.label.style": "Adjust subtitle size & position",
     "pipeline.step.label.ocr": "OCR subtitles",
+    "pipeline.step.label.watermark": "Remove watermark",
     "pipeline.step.label.context": "Analyze context",
     "pipeline.step.label.translate": "Gemini translate",
     "pipeline.step.label.dub": "Vietnamese dubbing",
@@ -564,6 +565,8 @@ const dictionaries = {
       "Drag a region on the video to capture subtitles",
     "pipeline.step.detail.style": "Preview, adjust font size and position",
     "pipeline.step.detail.ocr": "Recognize text in the selected region",
+    "pipeline.step.detail.watermark":
+      "Select regions & FFmpeg delogo removes the watermark",
     "pipeline.step.detail.context": "Gemini Vision analyzes the video context",
     "pipeline.step.detail.translate":
       "Auto translate to Chinese / English / Vietnamese (can be disabled)",
@@ -702,7 +705,7 @@ const dictionaries = {
     "pipeline.removeWatermarkWillPrompt":
       "You will be prompted to select the watermark region before OCR.",
     "pipeline.removeWatermarkDrawHint":
-      "Draw a rectangle over the watermark area",
+      "Draw a rectangle over the watermark area — drag inside a region to move it",
     "pipeline.removeWatermarkUploadFirst":
       "Upload video first to select watermark region",
     "pipeline.removeWatermarkOn": "Active",
@@ -1389,6 +1392,7 @@ const dictionaries = {
     "pipeline.step.label.region": "Chọn vùng quét sub",
     "pipeline.step.label.style": "Chỉnh kích thước & vị trí sub",
     "pipeline.step.label.ocr": "OCR trích phụ đề",
+    "pipeline.step.label.watermark": "Xoá watermark",
     "pipeline.step.label.context": "Phân tích ngữ cảnh",
     "pipeline.step.label.translate": "Dịch Gemini",
     "pipeline.step.label.dub": "Lồng tiếng Việt",
@@ -1402,6 +1406,8 @@ const dictionaries = {
     "pipeline.step.detail.region": "Kéo vùng trên video để lấy phụ đề",
     "pipeline.step.detail.style": "Xem trước, chỉnh cỡ chữ và vị trí",
     "pipeline.step.detail.ocr": "Nhận dạng chữ trong vùng đã chọn",
+    "pipeline.step.detail.watermark":
+      "Chọn vùng & FFmpeg delogo xoá watermark khỏi video",
     "pipeline.step.detail.context": "Gemini Vision phân tích video",
     "pipeline.step.detail.translate":
       "Dịch tự động sang Trung / Anh / Việt (có thể tắt)",
@@ -1531,7 +1537,7 @@ const dictionaries = {
       "Chọn vùng để xoá watermark có sẵn trên video nguồn bằng FFmpeg delogo.",
     "pipeline.removeWatermarkWillPrompt":
       "Bạn sẽ được nhắc chọn vùng watermark trước khi OCR.",
-    "pipeline.removeWatermarkDrawHint": "Kéo vùng chứa watermark cần xoá",
+    "pipeline.removeWatermarkDrawHint": "Kéo vùng chứa watermark cần xoá — kéo bên trong vùng để di chuyển",
     "pipeline.removeWatermarkUploadFirst":
       "Upload video trước để chọn vùng xoá watermark",
     "pipeline.removeWatermarkOn": "Đang áp dụng",

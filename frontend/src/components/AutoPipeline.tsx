@@ -61,6 +61,7 @@ const STEP_LABEL_KEYS = [
   "pipeline.step.label.region",
   "pipeline.step.label.style",
   "pipeline.step.label.ocr",
+  "pipeline.step.label.watermark",
   "pipeline.step.label.context",
   "pipeline.step.label.translate",
   "pipeline.step.label.dub",
@@ -76,6 +77,7 @@ const STEP_DETAIL_KEYS = [
   "pipeline.step.detail.region",
   "pipeline.step.detail.style",
   "pipeline.step.detail.ocr",
+  "pipeline.step.detail.watermark",
   "pipeline.step.detail.context",
   "pipeline.step.detail.translate",
   "pipeline.step.detail.dub",
@@ -2601,14 +2603,14 @@ function DetailView({
               <button
                 onClick={() => {
                   updatePipeline(p.id, { needChatgptLogin: false, status: "running", stage: "done" });
-                  rerunPipeline(p.id, 11);
+                  rerunPipeline(p.id, 12);
                 }}
                 className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
               >
                 {tr("pipeline.skipStep")}
               </button>
               <button
-                onClick={() => rerunPipeline(p.id, 10)}
+                onClick={() => rerunPipeline(p.id, 11)}
                 className="px-3 py-1.5 text-[11px] font-medium bg-warn text-white rounded-full hover:bg-warn transition-colors cursor-pointer"
               >
                 {tr("pipeline.retryStep")}
@@ -2823,9 +2825,9 @@ function DetailView({
                   )}
                   {canRerun && (i >= 4 || Boolean(p.url)) && (
                     <button
-                      onClick={() => rerunPipeline(p.id, i === 11 ? 8 : i)}
+                      onClick={() => rerunPipeline(p.id, i === 12 ? 9 : i)}
                       title={
-                        i === 11
+                        i === 12
                           ? tr("pipeline.rerunFrom", {
                               label: tr("pipeline.step.label.mux"),
                             })
