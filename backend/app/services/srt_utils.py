@@ -6,6 +6,10 @@ from app.models import SrtEntry
 
 MERGE_THRESHOLD = 0.8
 
+# Timestamp không thể vượt quá giới hạn này (48h). Giá trị lớn hơn là SRT hỏng
+# (vd "999:59:59") — từng khiến combine ghi file .combine_* 70-80GB.
+_MAX_SRT_TIME = 48 * 3600.0
+
 
 def _texts_similar(a: str, b: str) -> bool:
     if not a or not b:
@@ -50,6 +54,11 @@ def parse_srt(content: str) -> list[SrtEntry]:
             start = _parse_time(start_label)
             end = _parse_time(end_label)
         except Exception:
+            continue
+        # Bỏ qua entry có timestamp bất thường (SRT hỏng) — nếu không, một end
+        # hàng trăm giờ sẽ khiến bước gộp giọng ghi file .combine_* khổng lồ.
+        if (start < 0 or end <= start
+                or start > _MAX_SRT_TIME or end > _MAX_SRT_TIME):
             continue
         text_lines = [l for l in lines if l.strip() and "-->" not in l and not l.strip().isdigit()]
         text = " ".join(text_lines)

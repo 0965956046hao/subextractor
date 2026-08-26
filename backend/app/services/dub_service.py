@@ -2,10 +2,12 @@
 
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 from typing import List
+from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
 from app.services.srt_utils import entries_to_srt, merge_similar_adjacent, parse_srt
@@ -26,15 +28,28 @@ logger = logging.getLogger(__name__)
 MAX_TEMPO = 1.6
 
 
+def _dur_timeout(dur: float, per_sec: float, floor: int) -> int:
+    """Timeout tỷ lệ với độ dài media, có sàn tối thiểu `floor`.
+
+    Các bước ffmpeg/demucs trên video dài 2-4h sẽ bị kill giữa chừng nếu dùng
+    timeout cố định (vd 3600s). Scale theo duration để xử lý dài không bao giờ
+    timeout oan, nhưng vẫn có trần để phát hiện treo thật sự.
+    """
+    if dur and dur > 0:
+        return max(floor, int(dur * per_sec))
+    return floor
+
+
 def extract_audio(video_path: Path, out_dir: Path) -> Path:
     """Extract mono audio from the video to a wav file."""
     wav_path = out_dir / "audio.wav"
+    dur = _get_audio_duration(str(video_path))
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", str(video_path),
             "-vn", "-ac", "1", "-ar", "44100", str(wav_path),
         ],
-        check=True, capture_output=True, timeout=300,
+        check=True, capture_output=True, timeout=_dur_timeout(dur, 1.5, 300),
     )
     return wav_path
 
@@ -49,12 +64,13 @@ def separate_instrumental(video_path: Path, out_dir: Path) -> Path:
         )
 
     wav_path = extract_audio(video_path, out_dir)
+    audio_dur = _get_audio_duration(wav_path)
 
     sep_root = out_dir / "separated"
     sep_root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["demucs", "--two-stems=vocals", "-o", str(sep_root), str(wav_path)],
-        check=True, capture_output=True, timeout=3600,
+        check=True, capture_output=True, timeout=_dur_timeout(audio_dur, 8, 3600),
     )
 
     no_vocals = sep_root / "htdemucs" / "audio" / "no_vocals.wav"
@@ -79,6 +95,21 @@ def _run_ffmpeg(cmd: list, timeout: int = 3600) -> None:
         raise RuntimeError(f"FFmpeg failed: {result.stderr[-500:]}")
 
 
+def _ensure_free_space(need_gb: float, label: str = "bước xử lý"):
+    """Dừng sớm (RuntimeError) nếu ổ đĩa chứa temp sắp đầy, thay vì ghi đến khi
+    đầy rồi bị OS kill (từng gây vòng lặp tử thần sinh file 70-80GB trên clip dài)."""
+    try:
+        st = os.statvfs(settings.temp_dir)
+    except OSError:
+        return
+    free_gb = st.f_bavail * st.f_frsize / (1024 ** 3)
+    if free_gb < need_gb:
+        raise RuntimeError(
+            f"Ổ đĩa sắp đầy ({free_gb:.1f}GB trống) — không đủ {need_gb:.0f}GB cho {label}. "
+            f"Hãy dọn backend/temp trước khi chạy clip dài."
+        )
+
+
 def combine_tts_mp3(
     audio_files: List[Path],
     entries,
@@ -86,163 +117,147 @@ def combine_tts_mp3(
 ) -> Path:
     """Gộp các file mp3 TTS thành 1 file full voice mp3 (đặt theo timestamp SRT).
 
-    Gộp theo từng cửa sổ thời gian (mỗi chunk 600s): mỗi lệnh ffmpeg chỉ mix vài
-    chục/trăm input thay vì toàn bộ — tránh lệnh ffmpeg duy nhất với hàng nghìn
-    input bị quá chậm và bị timeout giữa chừng (hậu quả trước đây: full_voice.mp3
-    bị cụt, dài bằng đúng phần ffmpeg kịp xử lý). Sau khi concat sẽ kiểm tra
-    duration đầu ra phải đạt đủ thời lượng dòng phụ đề cuối.
+    Chunking 300s: mỗi lệnh ffmpeg xử lý 1 chunk.
+    Dùng WAV cho file chunk trung gian → KHÔNG CÓ encoder delay → không drift.
+    Tempo inline trong filter graph → KHÔNG tạo file tempo riêng.
     """
-    CHUNK_SECONDS = 600.0
-
+    CHUNK_SECONDS = 300.0
     chunk_dir = out_path.parent
-
-    # PHASE 1: dọn rác — xoá .combine_*.mp3 / .tempo_*.mp3 còn sót từ lần chạy
-    # trước (vd lần trước bị crash giữa chừng), tránh trùng tên + file cụt.
-    for stale in list(chunk_dir.glob(".combine_*.mp3")) + list(chunk_dir.glob(".tempo_*.mp3")):
-        stale.unlink(missing_ok=True)
-
-    # File dài hơn khung phụ đề (mp3 > 1.02× khung) được ép tốc độ (atempo) RIÊNG
-    # trước khi đưa vào amix — vì đặt atempo TRƯỚC adelay ngay trong filter graph
-    # amix làm ffmpeg tính sai duration=longest, khiến full_voice.mp3 bị cụt.
-    items: List[tuple[Path, float, float]] = []  # (af, start, end)
-    tempo_files: List[Path] = []
     chunk_files: List[Path] = []
-    try:
-        # Pass 1 — thu thập file TTS hợp lệ (không gọi subprocess).
-        valid: list[tuple[int, object, Path]] = []
-        for i, entry in enumerate(entries):
-            if i >= len(audio_files):
-                break
-            af = audio_files[i]
-            if not af or not af.exists() or af.stat().st_size == 0:
-                continue
-            valid.append((i, entry, af))
 
-        # PHASE 2: ffprobe (đo duration) SONG SONG — 16 workers. ffprobe nhẹ nên
-        # chạy song song rất nhanh so với tuần tự hàng trăm file.
-        from concurrent.futures import ThreadPoolExecutor
+    # Thu thập candidate, đo duration song song.
+    candidates = []
+    for i, entry in enumerate(entries):
+        if i >= len(audio_files):
+            break
+        af = audio_files[i]
+        if not af or not af.exists() or af.stat().st_size == 0:
+            continue
+        candidates.append((i, entry, af))
 
-        def _probe(vi: tuple[int, object, Path]):
-            i, entry, af = vi
-            return i, af, entry, _get_audio_duration(af)
+    def _probe(cand):
+        i, entry, af = cand
+        try:
+            return (i, entry, af, _get_audio_duration(af))
+        except Exception:
+            return (i, entry, af, 0.0)
 
-        probed: list[tuple[int, Path, object, float]] = []
-        if valid:
-            with ThreadPoolExecutor(max_workers=min(16, len(valid))) as executor:
-                probed = list(executor.map(_probe, valid))
+    nw = min(32, max(8, (os.cpu_count() or 4) * 2))
+    with ThreadPoolExecutor(max_workers=nw) as ex:
+        probed = list(ex.map(_probe, candidates))
 
-        # PHASE 3: tempo check TUẦN TỰ — atempo nếu mp3 > 1.02× khung (atempo là
-        # re-encode nặng, giữ tuần tự để không quá tải CPU).
-        for i, af, entry, mp3_dur in probed:
-            srt_dur = entry.end - entry.start
-            tempo = "-"
-            if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
-                speed = min(mp3_dur / srt_dur, MAX_TEMPO)
-                adj = chunk_dir / f".tempo_{af.stem}_{i}.mp3"
-                _run_ffmpeg([
-                    "ffmpeg", "-y", "-loglevel", "error",
-                    "-i", str(af),
-                    "-af", f"atempo={speed:.4f}",
-                    "-ac", "1", "-ar", "24000",
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    str(adj),
-                ])
-                af = adj
-                tempo_files.append(adj)
-                tempo = f"{speed:.4f}"
-            items.append((af, entry.start, entry.end))
-            logger.info(
-                "  [%s] delay=%dms tempo=%s | %s",
-                entry.startLabel, int(entry.start * 1000), tempo, entry.text,
-            )
+    # Build items: (af, start, end, tempo_chain)
+    items: List[tuple] = []
+    for i, entry, af, mp3_dur in probed:
+        srt_dur = entry.end - entry.start
+        tempo = ""
+        if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
+            speed = min(mp3_dur / srt_dur, MAX_TEMPO)
+            chain = []
+            while speed > 2.0:
+                chain.append("atempo=2.0")
+                speed /= 2.0
+            chain.append(f"atempo={speed:.4f}")
+            tempo = ",".join(chain) + ","
 
-        if not items:
-            raise RuntimeError("Không có file TTS nào để gộp")
-
-        expected_end = max(end for _, _, end in items)
-
-        # Gom entry theo chunk (entry thuộc chunk chứa thời điểm bắt đầu của nó).
-        chunk_size = int(CHUNK_SECONDS)
-        chunk_map: dict[int, List[tuple[Path, float]]] = {}
-        chunk_last_end: dict[int, float] = {}
-        for af, start, end in items:
-            c = int(start // chunk_size)
-            chunk_map.setdefault(c, []).append((af, start))
-            chunk_last_end[c] = max(chunk_last_end.get(c, 0.0), end)
-
-        min_chunk, max_chunk = min(chunk_map), max(chunk_map)
-        for c in range(min_chunk, max_chunk + 1):
-            chunk_start = c * chunk_size
-            chunk_path = chunk_dir / f".combine_{c:04d}.mp3"
-            chunk_items = sorted(chunk_map.get(c, []), key=lambda it: it[1])
-            is_last = c == max_chunk
-            if is_last:
-                dur = max(0.5, chunk_last_end[c] - chunk_start)
-            else:
-                dur = CHUNK_SECONDS
-
-            if not chunk_items:
-                # Khoảng trống không có phụ đề → chèn silence đúng độ dài chunk.
-                _run_ffmpeg([
-                    "ffmpeg", "-y", "-loglevel", "error",
-                    "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
-                    "-t", f"{dur:.3f}",
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    str(chunk_path),
-                ])
-            else:
-                cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-                parts = []
-                for k, (af, start) in enumerate(chunk_items):
-                    cmd.extend(["-i", str(af)])
-                    delay_ms = int((start - chunk_start) * 1000)
-                    if delay_ms < 0:
-                        delay_ms = 0
-                    parts.append(f"[{k}:a]adelay={delay_ms}|{delay_ms}[t{k}]")
-                mix_in = "".join(f"[t{k}]" for k in range(len(chunk_items)))
-                parts.append(
-                    f"{mix_in}amix=inputs={len(chunk_items)}:duration=longest:"
-                    f"dropout_transition=0:normalize=0,apad[out]"
-                )
-                cmd += [
-                    "-filter_complex", ";".join(parts),
-                    "-map", "[out]",
-                    "-t", f"{dur:.3f}",
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    "-ar", "24000", "-ac", "1",
-                    str(chunk_path),
-                ]
-                _run_ffmpeg(cmd)
-            chunk_files.append(chunk_path)
-
-        # Concat các chunk (cùng codec/rate/sample format) → full_voice.mp3
-        list_file = chunk_dir / ".combine_list.txt"
-        list_file.write_text(
-            "".join(f"file '{p.name}'\n" for p in chunk_files),
-            encoding="utf-8",
+        delay_ms = int(entry.start * 1000)
+        tempo_label = tempo.rstrip(",") if tempo else "-"
+        logger.info(
+            "  [%s] delay=%dms tempo=%s | %s",
+            entry.startLabel, delay_ms, tempo_label, entry.text,
         )
-        _run_ffmpeg([
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "concat", "-safe", "0", "-i", str(list_file),
-            "-c", "copy", str(out_path),
-        ], timeout=3600)
+        items.append((af, entry.start, entry.end, tempo))
 
-        # Validate: full_voice phải đủ dài tới cuối dòng phụ đề cuối (nếu không,
-        # xoá luôn file cụt để không bị tái sử dụng ở lần chạy sau).
-        out_dur = _get_audio_duration(out_path)
-        tolerance = max(1.5, expected_end * 0.02)
-        if out_dur < expected_end - tolerance:
-            out_path.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"Gộp giọng lỗi: full_voice.mp3 chỉ dài {out_dur:.1f}s, "
-                f"thiếu so với thời lượng phụ đề {expected_end:.1f}s"
+    if not items:
+        raise RuntimeError("Không có file TTS nào để gộp")
+
+    expected_end = max(end for _, _, end, _ in items)
+
+    # Gom entry theo chunk.
+    chunk_size = int(CHUNK_SECONDS)
+    chunk_map: dict[int, List[tuple]] = {}
+    chunk_last_end: dict[int, float] = {}
+    for item in items:
+        af, start, end, tempo = item
+        c = int(start // chunk_size)
+        chunk_map.setdefault(c, []).append(item)
+        chunk_last_end[c] = max(chunk_last_end.get(c, 0.0), end)
+
+    min_chunk, max_chunk = min(chunk_map), max(chunk_map)
+    for c in range(min_chunk, max_chunk + 1):
+        chunk_start = c * chunk_size
+        chunk_path = chunk_dir / f".chunk_{c:04d}.wav"
+        chunk_items = sorted(chunk_map.get(c, []), key=lambda it: it[1])
+        is_last = c == max_chunk
+        if is_last:
+            dur = max(0.5, chunk_last_end[c] - chunk_start)
+            dur = min(dur, CHUNK_SECONDS * 2)
+        else:
+            dur = CHUNK_SECONDS
+
+        if not chunk_items:
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                "-t", f"{dur:.3f}",
+                str(chunk_path),
+            ])
+        else:
+            cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+            parts = []
+            for k, (af, start, end, tempo) in enumerate(chunk_items):
+                cmd.extend(["-i", str(af)])
+                delay_ms = int((start - chunk_start) * 1000)
+                if delay_ms < 0:
+                    delay_ms = 0
+                parts.append(f"[{k}:a]{tempo}adelay={delay_ms}|{delay_ms}[t{k}]")
+            mix_in = "".join(f"[t{k}]" for k in range(len(chunk_items)))
+            # amix=duration=longest chỉ xuất tới sample audible cuối cùng,
+            # phần im lặng cuối chunk bị bỏ → concat lệch sớm dồn lên.
+            # apad=whole_dur pad silence ĐÚNG dur giây (có giới hạn, khác apad∞ cũ).
+            parts.append(
+                f"{mix_in}amix=inputs={len(chunk_items)}:duration=longest:"
+                f"dropout_transition=0:normalize=0,apad=whole_dur={dur:.3f}[out]"
             )
-    finally:
-        for p in chunk_files:
-            p.unlink(missing_ok=True)
-        for p in tempo_files:
-            p.unlink(missing_ok=True)
-        (chunk_dir / ".combine_list.txt").unlink(missing_ok=True)
+            cmd += [
+                "-filter_complex", ";".join(parts),
+                "-map", "[out]",
+                "-t", f"{dur:.3f}",
+                str(chunk_path),
+            ]
+            _run_ffmpeg(cmd)
+        chunk_files.append(chunk_path)
+
+    # Concat WAV chunks → convert to MP3 (full_voice.mp3).
+    # WAV concat không có encoder delay → timing chính xác.
+    list_file = chunk_dir / ".chunk_list.txt"
+    list_file.write_text(
+        "".join(f"file '{p.name}'\n" for p in chunk_files),
+        encoding="utf-8",
+    )
+    _run_ffmpeg([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "concat", "-safe", "0", "-i", str(list_file),
+        "-c:a", "libmp3lame", "-b:a", "192k",
+        "-ar", "24000", "-ac", "1",
+        str(out_path),
+    ], timeout=3600)
+
+    # Validate
+    out_dur = _get_audio_duration(out_path)
+    tolerance = max(1.5, expected_end * 0.02)
+    if out_dur < expected_end - tolerance:
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Gộp giọng lỗi: full_voice.mp3 chỉ dài {out_dur:.1f}s, "
+            f"thiếu so với thời lượng phụ đề {expected_end:.1f}s"
+        )
+
+    # Cleanup
+    for p in chunk_files:
+        p.unlink(missing_ok=True)
+    list_file.unlink(missing_ok=True)
+
     return out_path
 
 
@@ -251,6 +266,7 @@ def _mix_background_with_voice(
     voice_path: Path,
     background_volume: float,
     out_path: Path,
+    dur: float = 0.0,
 ) -> Path:
     """Mix background (instrumental/gốc) + full voice mp3 → single audio m4a."""
     if background_volume < 1.0:
@@ -270,7 +286,7 @@ def _mix_background_with_voice(
         "-c:a", "aac", "-b:a", "192k",
         str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=_dur_timeout(dur, 2, 600))
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg background mix failed: {result.stderr[-500:]}")
     return out_path
@@ -315,6 +331,20 @@ def build_full_audio(
     video_path = _video_path(video_id)
     out_dir = settings.temp_dir / "tts" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dọn rác từ lần chạy trước bị kill giữa chừng (kể cả file .combine_*.mp3 /
+    # .tempo_*.mp3 của cơ chế chunk cũ trước khi chuyển sang WAV chunking).
+    _stale_patterns = (".chunk_*.wav", ".chunk_list.txt", ".combine_*.mp3", ".tempo_*.mp3")
+    stale_count = 0
+    for pat in _stale_patterns:
+        for p in out_dir.glob(pat):
+            try:
+                p.unlink()
+                stale_count += 1
+            except OSError:
+                pass
+    if stale_count:
+        logger.info("Dọn %d file rác combine/tempo từ lần chạy trước.", stale_count)
 
     # Ưu tiên dùng file audio gốc tải về trong bước merge (merged/{merge_id}_audio.mp4)
     # để tách voice/instrument thay vì trích audio từ video đã merge.
@@ -368,6 +398,7 @@ def build_full_audio(
                 log_fn("Đã có nhạc nền từ lần chạy trước — tái sử dụng (bỏ qua Demucs).")
         else:
             try:
+                _ensure_free_space(12.0, "tách giọng (Demucs)")
                 instrumental = separate_instrumental(audio_source, out_dir)
                 background_volume = 1.0
                 if log_fn:
@@ -501,6 +532,7 @@ def build_full_audio(
                 log_fn=log_fn,
             )
         cb(75)
+        _ensure_free_space(8.0, "gộp giọng (dub)")
         if log_fn:
             log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
         combine_tts_mp3(audio_files, entries, full_voice)
@@ -529,7 +561,10 @@ def build_full_audio(
     else:
         if log_fn:
             log_fn("Trộn nhạc nền + giọng nói → full_audio.m4a...")
-        _mix_background_with_voice(instrumental, full_voice, background_volume, full_audio)
+        _mix_background_with_voice(
+            instrumental, full_voice, background_volume, full_audio,
+            dur=max(_get_audio_duration(instrumental), _get_audio_duration(full_voice)),
+        )
         if log_fn:
             log_fn("Đã trộn xong audio lồng tiếng.")
     cb(100)
