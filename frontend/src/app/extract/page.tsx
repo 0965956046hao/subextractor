@@ -112,7 +112,7 @@ function LangSelector({
             onClick={() => onChange(l.value)}
             className={`px-3.5 py-1.5 rounded-md text-[12px] font-medium tracking-tight transition-all duration-200 cursor-pointer active:scale-95 ${
               value === l.value
-                ? "bg-accent text-white shadow-[0_4px_12px_-4px_rgba(59,130,246,0.5)]"
+                ? "bg-accent text-white"
                 : "text-ink-muted hover:text-ink"
             }`}
           >
@@ -145,7 +145,7 @@ function EngineSelector({
             title={t(opt.hint)}
             className={`px-3.5 py-1.5 rounded-md text-[12px] font-medium tracking-tight transition-all duration-200 cursor-pointer active:scale-95 ${
               value === opt.value
-                ? "bg-violet-600 text-white shadow-[0_4px_12px_-4px_rgba(139,92,246,0.5)]"
+                ? "bg-violet-600 text-white"
                 : "text-ink-muted hover:text-ink"
             }`}
           >

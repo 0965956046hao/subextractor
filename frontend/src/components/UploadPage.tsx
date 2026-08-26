@@ -138,7 +138,7 @@ export default function UploadPage({ onUploaded }: Props) {
                   </p>
                 </div>
                 {error && (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-danger-muted ring-1 ring-danger/15 text-xs text-danger/80">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-danger-muted ring-1 ring-danger/20 text-xs text-danger">
                     <svg
                       className="w-3.5 h-3.5"
                       viewBox="0 0 24 24"
@@ -171,7 +171,7 @@ export default function UploadPage({ onUploaded }: Props) {
                   </p>
                 </div>
                 {error && (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-danger-muted ring-1 ring-danger/15 text-xs text-danger/80">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-danger-muted ring-1 ring-danger/20 text-xs text-danger">
                     <svg
                       className="w-3.5 h-3.5"
                       viewBox="0 0 24 24"

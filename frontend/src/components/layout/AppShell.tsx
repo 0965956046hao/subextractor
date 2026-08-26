@@ -65,7 +65,7 @@ function isActive(pathname: string, href: string): boolean {
 function BrandMark({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`w-8 h-8 rounded-lg bg-accent flex items-center justify-center flex-shrink-0 shadow-[0_0_16px_-4px_rgba(59,130,246,0.6)] ${className}`}
+      className={`w-8 h-8 rounded-lg bg-accent flex items-center justify-center flex-shrink-0 ${className}`}
     >
       <svg
         className="w-4 h-4 text-white"

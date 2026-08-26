@@ -890,7 +890,7 @@ export default function SettingsPage() {
                 value={geminiKeyInput}
                 onChange={(e) => setGeminiKeyInput(e.target.value)}
                 placeholder={t("settings.gemini.paste")}
-                className="w-full rounded-xl input-field"
+                className="w-full input-field"
               />
               <button
                 type="button"
@@ -997,7 +997,7 @@ export default function SettingsPage() {
                 placeholder={
                   hasFal ? t("settings.fal.pasteNew") : t("settings.fal.paste")
                 }
-                className="w-full rounded-xl input-field"
+                className="w-full input-field"
               />
               <button
                 type="button"
@@ -1177,13 +1177,13 @@ export default function SettingsPage() {
                           <>
                             <button
                               onClick={() => handleStartEditChannel(ch.id)}
-                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
+                              className="btn-island-secondary btn-xs"
                             >
                               {t("settings.youtube.edit")}
                             </button>
                             <button
                               onClick={() => handleDeleteChannel(ch.id)}
-                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-danger/15 text-danger hover:bg-danger/5 transition-colors cursor-pointer"
+                              className="btn-ghost-danger"
                             >
                               {t("settings.youtube.delete")}
                             </button>
@@ -1192,7 +1192,7 @@ export default function SettingsPage() {
                         {isEditing && (
                           <button
                             onClick={() => setYtEditingChannel(null)}
-                            className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
+                            className="btn-island-secondary btn-xs"
                           >
                             {t("settings.youtube.close")}
                           </button>
@@ -1211,7 +1211,7 @@ export default function SettingsPage() {
                             value={ytEditName}
                             onChange={(e) => setYtEditName(e.target.value)}
                             placeholder={t("settings.youtube.channelNamePh")}
-                            className="w-full rounded-xl input-field text-[12px]"
+                            className="w-full input-field text-[12px]"
                           />
                         </div>
                         <div>
@@ -1266,7 +1266,7 @@ export default function SettingsPage() {
                     value={ytNewName}
                     onChange={(e) => setYtNewName(e.target.value)}
                     placeholder={t("settings.youtube.channelNamePh")}
-                    className="w-full rounded-xl input-field text-[12px]"
+                    className="w-full input-field text-[12px]"
                   />
                 </div>
                 <div>
@@ -1353,7 +1353,7 @@ export default function SettingsPage() {
                     value={tgToken}
                     onChange={(e) => setTgToken(e.target.value)}
                     placeholder={t("settings.telegram.tokenPh")}
-                    className="w-full rounded-xl input-field"
+                    className="w-full input-field"
                   />
                   <button
                     type="button"
@@ -1564,7 +1564,7 @@ export default function SettingsPage() {
                 <select
                   value={style.font_family}
                   onChange={(e) => set({ font_family: e.target.value })}
-                  className="rounded-xl input-field text-[12px] w-auto"
+                  className="input-field text-[12px] w-auto"
                 >
                   {FONT_OPTIONS.map((f) => (
                     <option key={f} value={f}>
@@ -1705,7 +1705,7 @@ export default function SettingsPage() {
                         onClick={() =>
                           setEditingPreset(editingPreset === p.id ? null : p.id)
                         }
-                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
+                        className="btn-island-secondary btn-xs"
                       >
                         {editingPreset === p.id
                           ? t("settings.wm.close")
@@ -1714,7 +1714,7 @@ export default function SettingsPage() {
                       {!isActive && (
                         <button
                           onClick={() => handleSetActive(p.id)}
-                          className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
+                          className="btn-island-secondary btn-xs"
                         >
                           {t("settings.wm.useThis")}
                         </button>
@@ -1722,7 +1722,7 @@ export default function SettingsPage() {
                       <button
                         onClick={() => handleRemovePreset(p.id)}
                         disabled={presets.length <= 1}
-                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-danger/15 text-danger hover:bg-danger/5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="btn-ghost-danger disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {t("settings.wm.delete")}
                       </button>
@@ -1740,7 +1740,7 @@ export default function SettingsPage() {
                           defaultValue={p.name}
                           id={`preset-name-${p.id}`}
                           placeholder={t("settings.wm.namePh")}
-                          className="w-full rounded-xl input-field text-[12px]"
+                          className="w-full input-field text-[12px]"
                         />
                       </div>
                       <div>
@@ -1752,7 +1752,7 @@ export default function SettingsPage() {
                           defaultValue={p.text}
                           id={`preset-text-${p.id}`}
                           placeholder={t("settings.wm.textPh")}
-                          className="w-full rounded-xl input-field text-[12px]"
+                          className="w-full input-field text-[12px]"
                         />
                       </div>
                     </div>
@@ -1838,14 +1838,14 @@ export default function SettingsPage() {
                   value={newPresetName}
                   onChange={(e) => setNewPresetName(e.target.value)}
                   placeholder={t("settings.wm.nameExample")}
-                  className="w-full rounded-xl input-field text-[12px]"
+                  className="w-full input-field text-[12px]"
                 />
                 <input
                   type="text"
                   value={newPresetText}
                   onChange={(e) => setNewPresetText(e.target.value)}
                   placeholder={t("settings.wm.textExample")}
-                  className="w-full rounded-xl input-field text-[12px]"
+                  className="w-full input-field text-[12px]"
                 />
               </div>
               <button

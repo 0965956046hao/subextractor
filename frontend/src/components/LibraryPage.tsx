@@ -738,7 +738,7 @@ function VideoRow({
               className={`flex items-center justify-center rounded-full transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-95
                 ${
                   confirming
-                    ? "bg-danger text-white w-10 h-10 shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]"
+                    ? "bg-danger text-white w-10 h-10"
                     : "w-10 h-10 bg-white/[0.06] text-ink-muted hover:bg-danger hover:text-white shadow-sm ring-1 ring-white/[0.09]"
                 }`}
             >
@@ -893,7 +893,7 @@ function VideoCard({
               className={`absolute top-2 right-2 z-10 flex items-center justify-center rounded-full backdrop-blur-sm transition-all duration-300 cursor-pointer active:scale-95
                 ${
                   confirming
-                    ? "bg-danger text-white w-auto px-2 h-6 gap-1 shadow-[0_6px_16px_-6px_rgba(239,68,68,0.5)]"
+                    ? "bg-danger text-white w-auto px-2 h-6 gap-1"
                     : "w-6 h-6 bg-black/50 text-white/90 hover:bg-danger opacity-0 group-hover:opacity-100"
                 }`}
             >

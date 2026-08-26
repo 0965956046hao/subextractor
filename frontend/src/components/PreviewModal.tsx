@@ -49,7 +49,7 @@ export default function PreviewModal({
                 </p>
                 <button
                   onClick={onClose}
-                  className="w-8 h-8 rounded-lg bg-white/[0.05] text-ink-muted flex items-center justify-center hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+                  className="icon-btn"
                 >
                   <svg
                     className="w-4 h-4"

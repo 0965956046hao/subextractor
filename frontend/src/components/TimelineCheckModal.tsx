@@ -524,7 +524,7 @@ export default function TimelineCheckModal({
               <button
                 onClick={onClose}
                 title={t("timeline.minimize" as string)}
-                className="w-9 h-9 rounded-full bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                className="icon-btn"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M18 6L6 18" /><path d="M6 6l12 12" />
@@ -720,7 +720,7 @@ export default function TimelineCheckModal({
                             onClick={(e) => e.stopPropagation()}
                             autoFocus
                             rows={2}
-                            className="w-full rounded-lg bg-white ring-1 ring-accent/30 focus:ring-2 focus:ring-accent px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none resize-y"
+                            className="textarea-field !text-[12px] leading-snug"
                             placeholder={t("timeline.enterSubtitle" as string)}
                           />
                           <div className="flex items-center justify-end gap-1.5 mt-1">
@@ -912,7 +912,7 @@ export default function TimelineCheckModal({
             <button
               onClick={() => onResolve("continue")}
               disabled={saving || checking}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer disabled:opacity-50"
+              className="btn-island-secondary btn-sm disabled:opacity-50"
             >
               {t("timeline.keepAsIs" as string)}
             </button>

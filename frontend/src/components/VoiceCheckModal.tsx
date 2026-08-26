@@ -501,7 +501,7 @@ export default function VoiceCheckModal({
               </button>
               <button
                 onClick={onClose}
-                className="w-9 h-9 rounded-full bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                className="icon-btn"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M18 6L6 18" /><path d="M6 6l12 12" />
@@ -1012,7 +1012,7 @@ export default function VoiceCheckModal({
           <div className="flex items-center gap-2 pt-1">
             <button
               onClick={onClose}
-              className="mr-auto px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+              className="mr-auto btn-island-secondary btn-sm"
             >
               {t("voice.close" as string)}
             </button>

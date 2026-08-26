@@ -817,7 +817,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </p>
                     <button
                       onClick={checkHealth}
-                      className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-warn/15 text-warn/80 ring-1 ring-warn/15 hover:bg-warn/25 transition-colors cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-warn-muted text-warn ring-1 ring-warn/25 hover:bg-warn/25 transition-colors cursor-pointer"
                     >
                       {tr("pipeline.retry")}
                     </button>
@@ -862,7 +862,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </span>
                   <button
                     onClick={checkHealth}
-                    className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-success/15 text-success/80 ring-1 ring-success/15 hover:bg-success/25 transition-colors cursor-pointer"
+                    className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium bg-success-muted text-success ring-1 ring-success/25 hover:bg-success/25 transition-colors cursor-pointer"
                   >
                     {tr("pipeline.retry")}
                   </button>
@@ -873,7 +873,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   <button
                     key={t}
                     onClick={() => setSourceType(t)}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                       sourceType === t
                         ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
@@ -963,7 +963,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         </button>
                         <button
                           onClick={() => fileInputRef.current?.click()}
-                          className="px-4 py-2 rounded-full text-[11px] font-medium bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:text-ink transition-colors cursor-pointer"
+                          className="btn-island-secondary btn-xs"
                         >
                           {tr("pipeline.changeVideo")}
                     </button>
@@ -979,7 +979,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </p>
                       <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="mt-3 px-4 py-2 rounded-full text-[11px] font-medium bg-danger/15 text-danger ring-1 ring-danger/15 hover:bg-danger/25 transition-colors cursor-pointer"
+                        className="mt-3 btn-ghost-danger bg-danger-muted"
                       >
                         {tr("pipeline.retry")}
                       </button>
@@ -1017,7 +1017,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     <button
                       key={l}
                       onClick={() => setSrcLang(l)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                         srcLang === l
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1044,7 +1044,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 >
                   <button
                     onClick={() => setRegionMode("auto")}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                       regionMode === "auto"
                         ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
@@ -1054,7 +1054,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </button>
                   <button
                     onClick={() => setRegionMode("manual")}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                       regionMode === "manual"
                         ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
@@ -1087,7 +1087,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             l === "vi-VN" ? "BV421_vivn_streaming" : "",
                           );
                         }}
-                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                        className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                           voiceLang === l
                             ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                             : "text-ink-light hover:text-ink"
@@ -1104,7 +1104,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   >
                     <button
                       onClick={() => switchDubEngine("google")}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         dubEngine === "google"
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1114,7 +1114,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </button>
                     <button
                       onClick={() => switchDubEngine("capcut")}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         dubEngine === "capcut"
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1148,7 +1148,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <button
                         onClick={handlePreviewVoice}
                         disabled={previewing}
-                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-accent-muted ring-1 ring-accent/15 text-accent hover:bg-accent/15 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="btn-island-secondary btn-xs chip-active disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {previewing
                           ? tr("pipeline.creatingAudio")
@@ -1211,7 +1211,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   >
                     <button
                       onClick={() => setMuteOriginal(true)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         muteOriginal
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1221,7 +1221,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </button>
                     <button
                       onClick={() => setMuteOriginal(false)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         !muteOriginal
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1300,7 +1300,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   >
                     <button
                       onClick={() => setAutoFitSubs(true)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         autoFitSubs
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1310,7 +1310,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </button>
                     <button
                       onClick={() => setAutoFitSubs(false)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         !autoFitSubs
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1360,7 +1360,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           <button
                             key={l}
                             onClick={() => setTranslateTarget(l)}
-                            className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                            className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                               translateTarget === l
                                 ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                                 : "text-ink-light hover:text-ink"
@@ -1863,13 +1863,13 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingClear(false)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.no")}
                 </button>
                 <button
                   onClick={handleClearTemp}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                  className="btn-island-danger btn-sm"
                 >
                   {tr("pipeline.confirmClear")}
                 </button>
@@ -2089,7 +2089,7 @@ function PipelineRow({
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmingRemove(false)}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                      className="btn-island-secondary btn-sm"
                     >
                       {tr("pipeline.noContinue")}
                     </button>
@@ -2098,7 +2098,7 @@ function PipelineRow({
                         setConfirmingRemove(false);
                         onRemove();
                       }}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                      className="btn-island-danger btn-sm"
                     >
                       {tr("pipeline.confirmCancel")}
                     </button>
@@ -2115,7 +2115,7 @@ function PipelineRow({
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmingRemove(false)}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                      className="btn-island-secondary btn-sm"
                     >
                       {tr("pipeline.noKeep")}
                     </button>
@@ -2124,7 +2124,7 @@ function PipelineRow({
                         setConfirmingRemove(false);
                         onRemove();
                       }}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                      className="btn-island-danger btn-sm"
                     >
                       {tr("pipeline.delete")}
                     </button>
@@ -2254,7 +2254,7 @@ function HistoryRow({
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingDelete(false)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.noKeep")}
                 </button>
@@ -2263,7 +2263,7 @@ function HistoryRow({
                     setConfirmingDelete(false);
                     onDelete();
                   }}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                  className="btn-island-danger btn-sm"
                 >
                   {tr("pipeline.deleteVideoConfirm")}
                 </button>
@@ -2292,19 +2292,19 @@ function ThumbnailReviewActions({
     <>
       <button
         onClick={onAccept}
-        className="px-4 py-2 text-[12px] font-medium bg-accent text-white rounded-full hover:opacity-90 transition-colors cursor-pointer"
+        className="btn-island-primary btn-sm"
       >
         Chấp nhận
       </button>
       <button
         onClick={() => setShowRegen(!showRegen)}
-        className="px-4 py-2 text-[12px] font-medium bg-amber-500 text-white rounded-full hover:opacity-90 transition-colors cursor-pointer"
+        className="btn-warn"
       >
         Tạo lại
       </button>
       <button
         onClick={onSkip}
-        className="px-4 py-2 text-[12px] font-medium bg-stone-200 text-ink rounded-full hover:bg-stone-300 transition-colors cursor-pointer"
+        className="btn-island-secondary btn-sm"
       >
         Bỏ qua
       </button>
@@ -2740,7 +2740,7 @@ function DetailView({
                       <select
                         value={p.youtubeChannel || ""}
                         onChange={(e) => updatePipeline(p.id, { youtubeChannel: e.target.value })}
-                        className="rounded-lg border border-white/[0.09] bg-black/25 px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                        className="input-field max-w-[200px] !py-1 !text-[12px]"
                       >
                         <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
                         {ytChannels.map((ch) => (
@@ -2769,7 +2769,7 @@ function DetailView({
                               }
                               updatePipeline(p.id, { watermarkPreset: presetId });
                             }}
-                            className="rounded-lg border border-white/[0.09] bg-black/25 px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                            className="input-field max-w-[200px] !py-1 !text-[12px]"
                           >
                             <option value="">{tr("pipeline.watermarkNone")}</option>
                             {presets.map((pr) => (
@@ -3069,7 +3069,7 @@ function DetailView({
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingCancel(false)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.noContinue2")}
                 </button>
@@ -3078,7 +3078,7 @@ function DetailView({
                     setConfirmingCancel(false);
                     cancelPipeline(p.id);
                   }}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                  className="btn-island-danger btn-sm"
                 >
                   {tr("pipeline.confirmCancelDelete")}
                 </button>
@@ -3129,13 +3129,13 @@ function DetailView({
               <div className="flex items-center justify-end gap-2 mt-5">
                 <button
                   onClick={() => resolveTimelineCheck(p.id, "continue")}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.timelineCheckContinue")}
                 </button>
                 <button
                   onClick={() => openTimelineCheck(p.id)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-warn text-white hover:bg-warn transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  className="btn-warn"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -3186,13 +3186,13 @@ function DetailView({
               <div className="flex items-center justify-end gap-2 mt-5">
                 <button
                   onClick={() => resolveVoiceCheck(p.id, "continue")}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.voiceCheckSkip")}
                 </button>
                 <button
                   onClick={() => openVoiceCheck(p.id)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  className="btn-island-primary btn-sm"
                 >
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M11 5L6 9H2v6h4l5 4V5z" />

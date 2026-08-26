@@ -274,7 +274,7 @@ export default function ChannelsPage() {
                   type="date"
                   value={scanDate}
                   onChange={(e) => setScanDate(e.target.value)}
-                  className="rounded-lg border border-white/[0.09] bg-black/25 px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/30"
+                  className="input-field font-mono cursor-pointer"
                 />
               </div>
             </div>
@@ -358,7 +358,7 @@ export default function ChannelsPage() {
                       <button
                         onClick={() => handleDelete(ch.id)}
                         disabled={scanning === ch.id}
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-danger hover:bg-red-500/10 transition-colors disabled:opacity-40 cursor-pointer"
+                        className="icon-btn-ghost text-danger disabled:opacity-40 cursor-pointer"
                       >
                         <svg
                           className="w-4 h-4"
@@ -496,7 +496,7 @@ export default function ChannelsPage() {
                               {v.video?.play_addr?.url_list?.[0] && (
                                 <button
                                   onClick={() => setPlayingVideo(v)}
-                                  className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-success hover:bg-emerald-50 transition-colors cursor-pointer"
+                                  className="icon-btn-ghost text-success cursor-pointer"
                                   title={t("channel.colWatch")}
                                 >
                                   <svg
@@ -558,7 +558,7 @@ export default function ChannelsPage() {
                             <td className="py-4 text-center">
                               <Link
                                 href={`/auto?url=${encodeURIComponent(shareText)}`}
-                                className="w-8 h-8 rounded-full inline-flex items-center justify-center text-ink-light hover:text-accent hover:bg-blue-50 transition-colors"
+                                className="icon-btn-ghost text-accent-light"
                                 title="Auto Pipeline"
                               >
                                 <svg
