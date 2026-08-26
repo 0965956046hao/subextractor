@@ -2023,14 +2023,15 @@ async function runPipeline(id: string, startStep = 4) {
       appendLog(id, "Kéo vùng watermark cần xoá trên video...");
 
       // Send Telegram Mini App button for watermark selection.
-      // Không gửi video_url — backend tự build từ STE_public_url (.env),
-      // nên đổi tunnel chỉ cần sửa backend/.env + restart uvicorn.
+      // Domain lấy từ NEXT_PUBLIC_TUNNEL_URL (frontend/.env.local).
       if (videoId) {
         try {
+          const videoUrl = `${process.env.NEXT_PUBLIC_TUNNEL_URL ?? ""}/api/video/${videoId}/video.mp4?duration=10`;
           const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
             method: "POST",
             headers: JSON_HEADERS,
             body: JSON.stringify({
+              video_url: videoUrl,
               button_text: "🖼️ Chọn vùng watermark",
               mode: "watermark",
             }),
