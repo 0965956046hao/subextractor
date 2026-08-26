@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # URL public của backend (vd: Cloudflare Tunnel) — dùng để tạo link
     # xem/tải video trong thông báo Telegram. Rỗng = không kèm link.
-    public_url: str = ""
+    public_url: str = "https://freight-loved-institutions-lance.trycloudflare.com"
 
     # URL frontend Next.js (resolve Douyin bằng Chrome/Puppeteer). Backend gọi
     # endpoint này để lấy video_url + audio_url cho link Douyin (giống luồng FE).
