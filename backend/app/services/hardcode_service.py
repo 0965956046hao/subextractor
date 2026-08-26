@@ -143,64 +143,159 @@ def _hex_to_rgba(hex_color: str, opacity: int = 255) -> tuple:
     return (r, g, b, max(0, min(255, opacity)))
 
 
+_SUB_PAD_X = 24
+_SUB_PAD_Y = 16
+
+
 def srt_to_ass_blackbox(
     srt_content: str,
     vw: int = 1920,
     vh: int = 1080,
     style: dict | None = None,
 ) -> str:
-    """Convert SRT → ASS using the configured subtitle style."""
-    s = style or get_subtitle_style()
-    font = s.get("font_family", "Arial")
-    size = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
-    primary = _hex_to_ass_color(s.get("text_color", "#FFFFFF"))
-    outline_col = _hex_to_ass_color(s.get("outline_color", "#000000"))
-    bold = 1 if s.get("bold") else 0
-    italic = 1 if s.get("italic") else 0
+    """Convert SRT → ASS sao cho khung hình CHÍNH XÁC như preview Pillow.
+
+    Mỗi entry phát 2 lớp sự kiện cùng thời điểm:
+      Layer 0: nền hộp bo tròn vẽ bằng vector drawing (\\p1) — đúng
+        box_color/box_opacity/box_radius/box_border như ``_render_subtitle``.
+      Layer 1: text với \\pos đặt tại toạ độ pixel y hệt preview, kèm
+        {\\fs<fit>} co giãn từng dòng giống logic shrink-to-fit của PIL.
+
+    Không dùng BorderStyle=3 nữa vì libass không bo góc được, dùng nhầm
+    OutlineColour làm màu nền và làm mất viền chữ khi bật nền.
+    """
+    from PIL import ImageFont
+
+    s = dict(style or get_subtitle_style())
+    # Chuẩn hoá về pixel thật của frame xuất (style lưu ở tham chiếu 1080p).
+    font_size_ref = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
+    margin_v = max(0, int(int(s.get("margin_v", 40)) * vh / 1080))
+    margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
     outline_w = max(0, int(s.get("outline_width", 0)))
     box_on = bool(s.get("box_enabled", True))
-    back_col = _hex_to_ass_color(s.get("box_color", "#000000"))
-    border_style = 3 if box_on else 1
-    if box_on:
-        # BorderStyle=3 → Outline chính là viền nền (box border). Ưu tiên
-        # box_border_width/color, fallback về outline_* (viền chữ) cho tương
-        # thích ngược khi người dùng chưa đặt box_border.
-        border_w = max(0, int(s.get("box_border_width", 0)))
-        if border_w > 0:
-            outline_w = border_w
-        elif outline_w < 1:
-            outline_w = 1
-        border_col = s.get("box_border_color", "")
-        if border_col:
-            outline_col = _hex_to_ass_color(border_col)
-    back_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
-    if box_on:
-        # ASS BackColour dạng &HAABBGGRR (AA = alpha) — áp độ mờ nền (box_opacity)
-        # thay vì bỏ lọt như trước (back_alpha tính ra nhưng không dùng).
-        back_col = f"&H{back_alpha:02X}{back_col[4:]}"
-    margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
-    margin_l = max(0, 50 + margin_h)
-    margin_r = max(0, 50 - margin_h)
+    box_radius = max(0, int(s.get("box_radius", 12)))
+    box_border_w = max(0, int(s.get("box_border_width", 0)))
+    pad_x, pad_y = _SUB_PAD_X, _SUB_PAD_Y
+
+    font_path = _find_font(
+        s.get("font_family", "Arial"), s.get("bold"), s.get("italic")
+    )
+    font_cache: dict[int, object] = {}
+
+    def _font(size: int):
+        if size not in font_cache:
+            try:
+                font_cache[size] = (
+                    ImageFont.truetype(font_path, size)
+                    if font_path and size >= 8
+                    else ImageFont.load_default()
+                )
+            except OSError:
+                font_cache[size] = ImageFont.load_default()
+        return font_cache[size]
+
+    def _hex_rgba(hex_color: str, alpha255: int) -> str:
+        """&HAABBGGRR cho override tag \\1c\\alpha (ASS dùng BGR)."""
+        h = (hex_color or "#FFFFFF").lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        r, gg, b = h[0:2], h[2:4], h[4:6]
+        a = max(0, min(255, alpha255))
+        return f"&H{a:02X}{b}{gg}{r}".upper()
+
+    outline_col = _hex_rgba(s.get("outline_color", "#000000"), 0)
+    box_fill_alpha = 255 - max(0, min(255, int(s.get("box_opacity", 210))))
+    box_col = _hex_rgba(s.get("box_color", "#000000"), box_fill_alpha)
+    border_col = _hex_rgba(s.get("box_border_color", "#000000"), 0)
 
     header = f"""[Script Info]
-Title: Subtitle Black Box
+Title: SubTitle Pixel-Matched
 ScriptType: v4.00+
-WrapStyle: 0
+WrapStyle: 2
 ScaledBorderAndShadow: yes
 PlayResX: {vw}
 PlayResY: {vh}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: SubStyle,{font},{size},{primary},&H000000FF,{outline_col},{back_col},{bold},{italic},0,0,100,100,0,0,{border_style},{outline_w},0,2,{margin_l},{margin_r},{max(0, int(int(s.get('margin_v', 40)) * vh / 1080))},1
+Style: SubStyle,{s.get('font_family', 'Arial')},{font_size_ref},{_hex_to_ass_color(s.get('text_color', '#FFFFFF'))},&H000000FF,{outline_col},{_hex_to_ass_color('#000000')},{1 if s.get('bold') else 0},{1 if s.get('italic') else 0},0,0,100,100,0,0,1,{outline_w},0,7,0,0,0,1
+Style: BoxStyle,Arial,{font_size_ref},{box_col},&H000000FF,{box_col},&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: BoxBorder,Arial,{font_size_ref},{border_col},&H000000FF,{border_col},&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 """
-    lines = [header.rstrip("\n")]
+
+    events: list[str] = []
     for e in _resolve_overlaps(parse_srt(srt_content)):
-        text = e.text.replace("{", "\\{").replace("}", "\\}")
-        lines.append(
-            f"Dialogue: 0,{_ass_time(e.start)},{_ass_time(e.end)},SubStyle,,0,0,0,,{text}"
+        raw_text = " ".join((e.text or "").split())
+        if not raw_text:
+            continue
+        t0, t1 = _ass_time(e.start), _ass_time(e.end)
+
+        # ── Shrink-to-fit ĐO THẬT bằng font thật, y hệt _render_subtitle ──
+        fs = font_size_ref
+        max_w = max(200, vw - 160)
+        bbox = _font(fs).getbbox(raw_text)
+        while fs > 16 and (bbox[2] - bbox[0]) > max_w:
+            fs -= 2
+            bbox = _font(fs).getbbox(raw_text)
+        tw_px, th_px = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        top_off = bbox[1]
+
+        box_w = tw_px + pad_x * 2 + outline_w * 2
+        box_h = th_px + pad_y * 2 + outline_w * 2
+        bx = (vw - box_w) // 2 + margin_h
+        by = vh - box_h - margin_v
+
+        esc = raw_text.replace("{", "\\{").replace("}", "\\}")
+
+        # Layer 0 — viền hộp (rect to hơn nằm sau) rồi nền hộp bo tròn
+        if box_on:
+            if box_border_w > 0:
+                path_b = _ass_rounded_rect_path(
+                    box_w + box_border_w * 2,
+                    box_h + box_border_w * 2,
+                    min(box_radius + box_border_w, (box_h + box_border_w) // 2),
+                )
+                events.append(
+                    f"Dialogue: 0,{t0},{t1},BoxBorder,,0,0,0,,"
+                    f"{{\\an7\\pos({bx - box_border_w},{by - box_border_w})\\p1}}"
+                    f"{path_b}{{\\p0}}"
+                )
+            r = min(box_radius, box_h // 2, box_w // 2)
+            path = _ass_rounded_rect_path(box_w, box_h, r)
+            events.append(
+                f"Dialogue: 1,{t0},{t1},BoxStyle,,0,0,0,,"
+                f"{{\\an7\\pos({bx},{by})\\p1}}{path}{{\\p0}}"
+            )
+
+        # Layer 2 — text neo top-left đúng toạ độ preview
+        tx = bx + pad_x + outline_w
+        ty = by + pad_y + outline_w - top_off
+        events.append(
+            f"Dialogue: 2,{t0},{t1},SubStyle,,0,0,0,,"
+            f"{{\\an7\\pos({tx},{ty})\\fs{fs}}}"
+            f"{esc}"
         )
-    return "\n".join(lines) + "\n"
+
+    return header + "\n".join(["[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"] + events) + "\n"
+
+
+def _ass_rounded_rect_path(w: int, h: int, r: int) -> str:
+    """ASS drawing path: hình chữ nhật bo tròn w×h bán kính r, gốc (0,0).
+
+    Vẽ theo chiều kim đồng hồ bằng 'm' + 'l' + 'b' (bezier cung tròn 90°,
+    hệ số ~0.5523 chuẩn cho arc xấp xỉ đường tròn).
+    """
+    if r <= 0:
+        return f"m 0 0 l {w} 0 {w} {h} 0 {h}"
+    k = 0.5523
+    kr = r * k
+    return (
+        f"m {r} 0 "
+        f"l {w - r} 0 b {int(w - r + kr)} 0 {w} {int(kr)} {w} {r} "
+        f"l {w} {h - r} b {w} {int(h - r + kr)} {int(w - r + kr)} {h} {w - r} {h} "
+        f"l {r} {h} b {int(r - kr)} {h} 0 {int(h - r + kr)} 0 {h - r} "
+        f"l 0 {r} b 0 {int(r - kr)} {int(r - kr)} 0 {r} 0"
+    )
 
 
 def _resolve_overlaps(entries):
@@ -378,11 +473,14 @@ def _render_subtitle(
     th = bbox[3] - bbox[1]
     top = bbox[1]
 
-    pad_x, pad_y = 24, 16
+    pad_x, pad_y = _SUB_PAD_X, _SUB_PAD_Y
     box_w = tw + pad_x * 2 + outline_w * 2
     box_h = th + pad_y * 2 + outline_w * 2
     bx = (vw - box_w) // 2 + margin_h
-    by = vh - box_h - margin_v - 40
+    # Anchor GIỐNG hệ libass ở bước hardcode: đáy box cách mép dưới đúng
+    # margin_v (ASS Alignment=2 MarginV). Trước đây trừ thêm 40px làm vị trí
+    # preview lệch hẳn so với video cuối (sub cuối cùng cao hơn chỗ đã kéo).
+    by = vh - box_h - margin_v
 
     # draw rounded background box
     if box_on:
@@ -606,31 +704,40 @@ def run_hardcode_sync(
             dur = total_dur if total_dur and total_dur > 0 else 1.0
             text_raw = watermark.get("text", "")
 
-            # FFmpeg drawtext expression for scrolling text around the border.
-            # ``mod(t/{dur},1)`` cycles [0,1) each revolution.
-            # ``text_w(text)`` gives pixel width of the drawn text.
-            # Perimeter total = 2*w + 2*h + 2*tw.
-            #
-            # Position mapping (d = progress * total):
-            #   d ≤ w          → top    (x = d-tw,     y = gap)
-            #   d ≤ w+h        → right  (x = w-tw-gap, y = d-w)
-            #   d ≤ 2w+h       → bottom (x = w-d+h,    y = h-th-gap)
-            #   else           → left   (x = gap,       y = 2h+2w-d)
-            #
-            # The text naturally wraps off-screen when coordinates go negative
-            # (FFmpeg clips automatically), so no ``enable`` condition is needed.
+            # FFmpeg drawtext expression cho chữ chạy vòng quanh viền video.
+            # ``mod(t/{dur},1)`` chu kỳ [0,1) mỗi vòng; quãng đường 1 vòng:
+            #   L = 2*w + 2*h + 2*text_w  (w/h = kích thước frame sau scale)
+            # D = tiến độ * L. 4 đoạn liên tiếp (TW=text_w, TH=text_h, g=gap):
+            #   1. TRÊN  (L→R): D ≤ w       → x = D-TW,           y = g
+            #   2. PHẢI  (T→B): D ≤ w+h     → x = w-TW-g,         y = D-w
+            #   3. DƯỚI  (R→L): D ≤ 2w+h    → x = w-TW-g-(D-w-h), y = h-TH-g
+            #   4. TRÁI  (B→T): còn lại     → x = g,              y = h-TH-g-(D-2w-h)
+            # Toán tử so sánh dùng w/h runtime của drawtext (= tw/th sau scale).
             esc_text = _escape_drawtext(text_raw)
-            # text_w là HẰNG (không phải hàm) trong drawtext → trả độ rộng chữ.
-            d_expr = f"mod(t/{dur},1)*(2*w+2*h+2*text_w)"
+            W, H, g = tw, th, gap
+            # Quãng đường mỗi cạnh tính theo kích thước TEXT thật để không bao
+            # giờ tràn ra ngoài / nhảy cóc tại góc:
+            #   trên:  x chạy -TW → w-TW           (dài w)
+            #   phải:  y chạy g → h-TH-g           (dài h-TH-2g)
+            #   dưới:  x chạy w-TW-g → g           (dài w-TW-2g)
+            #   trái:  y chạy h-TH-g → -TH         (dài h-g: trôi hẳn khỏi
+            #     mép trên rồi mới vòng lại → điểm wrap nằm ngoài màn hình)
+            d_expr = (
+                f"mod(t/{dur},1)*("
+                f"{W}+({H}-text_h-2*{g})+({W}-text_w-2*{g})+({H}-{g}))"
+            )
+            b1 = f"{W}"
+            b2 = f"({W}+({H}-text_h-2*{g}))"
+            b3 = f"({W}+({H}-text_h-2*{g})+({W}-text_w-2*{g}))"
             x_expr = (
-                f"if(lte({d_expr},{tw}),{d_expr}-{tw},"
-                f"if(lte({d_expr},{tw + th}),{tw}-{tw}-{gap},"
-                f"if(lte({d_expr},{2 * tw + th}),{tw}-{d_expr}+{th},{gap})))"
+                f"if(lte({d_expr},{b1}),{d_expr}-text_w,"
+                f"if(lte({d_expr},{b2}),{W}-text_w-{g},"
+                f"if(lte({d_expr},{b3}),{W}-text_w-{g}-({d_expr}-{b2}),{g})))"
             )
             y_expr = (
-                f"if(lte({d_expr},{tw}),{gap},"
-                f"if(lte({d_expr},{tw + th}),{d_expr}-{tw},"
-                f"if(lte({d_expr},{2 * tw + th}),{th}-{tw}-{gap},{th}-{d_expr}+{2 * tw + th})))"
+                f"if(lte({d_expr},{b1}),{g},"
+                f"if(lte({d_expr},{b2}),{g}+({d_expr}-{b1}),"
+                f"if(lte({d_expr},{b3}),{H}-text_h-{g},{H}-text_h-{g}-({d_expr}-{b3}))))"
             )
             fc_parts.append(
                 f"[{last_out}]drawtext="

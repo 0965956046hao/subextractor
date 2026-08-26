@@ -64,6 +64,7 @@ export type Stage =
   | "merging"
   | "region"
   | "watermark_region"
+  | "wm_delogo"
   | "subtitle_preview"
   | "processing"
   | "context"
@@ -85,6 +86,7 @@ export const STEP_STAGE: Record<string, number> = {
   subtitle_preview: 3,
   processing: 4,
   watermark_region: 5,
+  wm_delogo: 5,
   context: 6,
   translating: 7,
   saving: 7,
@@ -653,7 +655,7 @@ export const usePipelineStore = create<PipelineState>()(
               ? {
                   ...p,
                   removeWatermarkRegions: regions,
-                  stage: "watermark_region",
+                  stage: "wm_delogo",
                 }
               : p,
           ),
@@ -2083,6 +2085,8 @@ async function runPipeline(id: string, startStep = 4) {
         appendLog(id, "[wm] Không có vùng nào được chọn — bỏ qua delogo.");
         markStepSkipped(id, 5);
       } else {
+        // Rời màn chọn vùng — selector chỉ render ở stage "watermark_region".
+        patch(id, { stage: "wm_delogo" });
         // Check if delogo.mp4 already exists and is valid
         let skipDelogo = false;
         try {
@@ -2106,7 +2110,6 @@ async function runPipeline(id: string, startStep = 4) {
         }
 
         if (!skipDelogo) {
-          patch(id, { stage: "watermark_region" });
           appendLog(
             id,
             `[wm] Đang xoá ${wmRegionsNow.length} vùng watermark (FFmpeg delogo)...`,
@@ -2646,7 +2649,10 @@ async function runPipeline(id: string, startStep = 4) {
           body: JSON.stringify({
             auto_fit: cur.autoFit,
             region: cur.region ?? DEFAULT_REGION,
-            style: cur.autoFit ? null : (cur.subtitleStyle ?? null),
+            // Luôn gửi style người dùng đã kéo (nếu có): backend áp auto-fit
+            // TRƯỚC rồi override sau → điều chỉnh tay luôn thắng, không bị mất
+            // khi bật auto-fit (trước đây gửi null là mất vị trí đã kéo).
+            style: cur.subtitleStyle ?? null,
             watermark: cur.watermark,
             watermark_preset: cur.watermark
               ? cur.watermarkPreset || null

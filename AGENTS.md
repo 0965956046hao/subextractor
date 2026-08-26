@@ -226,3 +226,6 @@ Custom Tailwind tokens defined in `tailwind.config.js` and `globals.css`:
 - **Animations:** `fade-in`, `fade-up`, `scale-in`, `shimmer`, `pulse-glow` — use via Tailwind `animate-*` or `<AnimatedBlock>` from `lib/animation.tsx`
 - **Font:** Plus Jakarta Sans (Google Fonts, loaded via `next/font` in layout.tsx)
 - All bespoke UI should use these classes, not ad-hoc styling.
+
+## Workflow Preferences
+- **KHÔNG tự động commit** sau khi sửa/xử lý code. Chỉ commit khi người dùng yêu cầu rõ ràng (vd "commit", "merge", "push"). Mặc định: sửa file + verify xong là dừng, để user tự review và commit.
