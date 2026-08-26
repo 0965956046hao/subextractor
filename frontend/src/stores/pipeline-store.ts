@@ -835,7 +835,10 @@ export const usePipelineStore = create<PipelineState>()(
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const JSON_HEADERS = { "Content-Type": "application/json" };
+const JSON_HEADERS = {
+  "Content-Type": "application/json",
+  "User-Agent": "SubtitleExtractor/1.0",
+};
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -2021,16 +2024,18 @@ async function runPipeline(id: string, startStep = 4) {
       markStepStart(id, 4);
       appendLog(id, "Kéo vùng watermark cần xoá trên video...");
 
-      // Send Telegram Mini App button for watermark selection
+      // Send Telegram Mini App button for watermark selection.
+      // Domain lấy từ NEXT_PUBLIC_TUNNEL_URL (frontend/.env.local).
       if (videoId) {
         try {
-          const videoUrl = `https://zjzmt-203-205-28-227.free.pinggy.net/api/video/${videoId}/video.mp4?duration=10`;
+          const videoUrl = `${process.env.NEXT_PUBLIC_TUNNEL_URL ?? ""}/api/video/${videoId}/video.mp4?duration=10`;
           const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
             method: "POST",
             headers: JSON_HEADERS,
             body: JSON.stringify({
               video_url: videoUrl,
               button_text: "🖼️ Chọn vùng watermark",
+              mode: "watermark",
             }),
           });
           if (tgRes.ok) {
