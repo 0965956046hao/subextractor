@@ -1266,6 +1266,15 @@ async def run_telegram_auto_job(
         original_name = _sanitize_filename(title) or "video"
         imp_name = f"{original_name}.mp4"
 
+        # Báo chi tiết từng thành phần đã resolve được.
+        await _tg_send(chat_id, (
+            "📥 <b>Đã phân tích link xong:</b>\n"
+            f"🎞 Video: {'<code>có</code>' if video_url else '❌ không'}\n"
+            f"🔊 Audio: {'<code>có</code>' if audio_url else '❌ không'}\n"
+            f"🖼 Thumbnail: {'<code>có</code>' if thumbnail else '❌ không'}\n"
+            f"🖼 Ảnh ngữ cảnh: <code>{len(big_thumbs)} ảnh</code>"
+        ))
+
         # 1b. Merge (nếu có 2 file video + audio riêng), rồi import.
         if audio_url and video_url:
             job["phase"] = "merging"
@@ -1278,9 +1287,16 @@ async def run_telegram_auto_job(
             ))
             merge_id = merge_result["job_id"]
 
-            # Poll merge status until done (mirrors FE pollMerge).
+            # Poll merge status và forward từng log (video/audio/thumbnail/big_thumbs) lên Telegram.
+            sent_logs = 0
             for _ in range(360):
                 ms = await get_merge_status(merge_id)
+                logs = ms.get("logs") or []
+                for entry in logs[sent_logs:]:
+                    sent_logs += 1
+                    msg = entry.get("message", "").strip()
+                    if msg:
+                        await _tg_send(chat_id, f"⬇️ {msg}")
                 if ms.get("status") == "done":
                     break
                 if ms.get("status") == "error":
