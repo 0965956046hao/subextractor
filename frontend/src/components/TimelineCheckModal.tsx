@@ -657,8 +657,14 @@ export default function TimelineCheckModal({
                         }
                       }}
                       className={`group w-full text-left px-3 py-2 cursor-pointer transition-colors relative ${
-                        active ? "bg-accent-muted" : isIssue ? "bg-danger-muted" : isRisk ? "bg-warn-muted" : "hover:bg-white/[0.03]"
-                      } ${(isIssue || isRisk || active) ? "" : ""}`}
+                        active
+                          ? "bg-accent-muted ring-1 ring-inset ring-accent/40"
+                          : isIssue
+                            ? "bg-danger-muted"
+                            : isRisk
+                              ? "bg-warn-muted"
+                              : "hover:bg-white/[0.03]"
+                      }`}
                     >
                       <button
                         onClick={(e) => {
@@ -677,7 +683,9 @@ export default function TimelineCheckModal({
                               ? "bg-danger/15 text-danger"
                               : isRisk
                               ? "bg-warn/15 text-warn"
-                              : "bg-white/[0.05] text-ink-light"
+                              : active
+                                ? "bg-accent/20 text-accent"
+                                : "bg-white/[0.05] text-ink-light"
                           }`}
                         >
                           #{entry.index}
@@ -761,7 +769,13 @@ export default function TimelineCheckModal({
                       ) : (
                         <p
                           className={`text-[12px] leading-snug mt-0.5 line-clamp-2 ${
-                            isIssue ? "text-danger" : isRisk ? "text-amber-800" : "text-ink"
+                            isIssue
+                              ? "text-danger"
+                              : isRisk
+                              ? "text-amber-800"
+                              : active
+                                ? "text-accent font-medium"
+                                : "text-ink"
                           }`}
                         >
                           {entry.text}
@@ -841,7 +855,9 @@ export default function TimelineCheckModal({
                     const width = Math.max((entry.end - entry.start) * pps, 4);
                     const isIssue = issueIndexes.has(entry.index);
                     const isRisk = riskIndexes.has(entry.index);
-                    const active = entry.index === activeIndex;
+                  const active =
+                    entry.index === activeIndex ||
+                    entry.index === activeEntry?.index;
                     return (
                       <div
                         key={entry.index}
