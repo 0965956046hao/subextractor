@@ -49,6 +49,10 @@ import {
 
 type TFunc = (key: string, vars?: Record<string, string | number>) => string;
 
+/** Guard: snapshot-hydrate chỉ chạy 1 lần mỗi trang tải thật, không chạy lại
+ *  khi điều hướng nội bộ làm AutoPipeline mount/unmount nhiều lần. */
+let restoredSnapshotOnce = false;
+
 function makeT(
   t: (key: keyof Dict, vars?: Record<string, string | number>) => string,
 ): TFunc {
@@ -472,26 +476,27 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     open(st.importActive(meta));
   }, [historyVideos, importDone]);
 
-  // Khôi phục danh sách pipeline đã lưu khi F5 trang (running/queued → error)
+  // Khôi phục pipeline ĐÃ KẾT THÚC (done/error) từ snapshot backend — chỉ chạy
+  // một lần mỗi lần tải trang thật (F5). Pipeline running/queued không bị đụng
+  // tới: khi quay lại tab (SPA) nó vẫn sống trong store với progress realtime;
+  // sau F5 thì importActive + restorePaused tự gắn lại tracker từ backend.
   useEffect(() => {
+    if (restoredSnapshotOnce) return;
+    restoredSnapshotOnce = true;
     fetch("/api/pipelines")
       .then((r) => r.json())
       .then((d) => {
-        if (d.pipelines?.length) {
-          const restored = d.pipelines.map((p: Pipeline) =>
-            p.status === "running" || p.status === "queued"
-              ? {
-                  ...p,
-                  status: "error" as const,
-                  stage: "error" as const,
-                  error: p.error || tr("pipeline.error.interruptedReload"),
-                }
-              : p,
-          );
-          usePipelineStore.getState().hydrate(restored);
+        const finished = ((d.pipelines ?? []) as Pipeline[]).filter(
+          (p) => p.status !== "running" && p.status !== "queued",
+        );
+        if (finished.length) {
+          usePipelineStore.getState().hydrateFinished(finished);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        // ignore — snapshot chỉ là lịch sử, không quan trọng nếu mất
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

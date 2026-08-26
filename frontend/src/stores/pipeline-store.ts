@@ -13,6 +13,7 @@ import {
   reportPipelineState,
   getPipelineState,
   reportTimelineAction,
+  getJobStatus,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
 
@@ -263,6 +264,9 @@ interface PipelineState {
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
   hydrate: (pipelines: Pipeline[]) => void;
+  /** Merge finished pipelines (done/error) from a backend snapshot without
+   *  touching running/queued ones that are being tracked live in memory. */
+  hydrateFinished: (list: Pipeline[]) => void;
   resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
   openTimelineCheck: (id: string) => void;
   closeTimelineCheck: (id: string) => void;
@@ -736,6 +740,18 @@ export const usePipelineStore = create<PipelineState>()(
         }
       },
       hydrate: (pipelines) => set({ pipelines }),
+      hydrateFinished: (list) =>
+        set((s) => {
+          const ids = new Set(s.pipelines.map((p) => p.id));
+          const vids = new Set(
+            s.pipelines.map((p) => p.videoId).filter(Boolean) as string[],
+          );
+          const add = list.filter(
+            (p) => !ids.has(p.id) && !(p.videoId && vids.has(p.videoId)),
+          );
+          if (add.length === 0) return {};
+          return { pipelines: [...add, ...s.pipelines] };
+        }),
       resolveTimelineCheck: async (id, action) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s || !s.timelineCheck?.waiting) return;
@@ -1032,6 +1048,17 @@ async function pollRemoteVideo(id: string, videoId: string) {
         return;
       }
       if (row.status === "done") {
+        // Batch log nội dung OCR ([00:00 → …] text) được emit ngay trước khi
+        // job chuyển done — poll này là cơ hội cuối để nạp chúng vào panel.
+        const jid = id.startsWith("remote-") ? id.slice("remote-".length) : "";
+        if (jid && jid !== videoId) {
+          try {
+            const st = await getJobStatus(jid);
+            if (st.logs?.length) appendBackendLogs(id, st.logs as LogEntry[]);
+          } catch {
+            /* ignore — job có thể đã bị dọn */
+          }
+        }
         patch(id, {
           status: "done",
           stage: "done",
@@ -1048,6 +1075,9 @@ async function pollRemoteVideo(id: string, videoId: string) {
         return;
       }
       if (row.status === "error") {
+        if (row.logs && Array.isArray(row.logs)) {
+          appendBackendLogs(id, row.logs as LogEntry[]);
+        }
         const stage = stageForJobType(row.job_type, row.phase);
         patch(id, {
           status: "error",

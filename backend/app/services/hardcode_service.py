@@ -104,7 +104,10 @@ def auto_fit_style(
     # _render_subtitle / srt_to_ass_blackbox scale font_size & margin_v by
     # th/1080, nên cả hai đều lưu ở chuẩn 1080p reference.
     s["font_size"] = max(18, int(font_px * 1080 / vh))
-    s["margin_v"] = max(0, int(((1 - y2) * vh - 40) * 1080 / vh))
+    # Đáy hộp phụ đề khớp chính xác mép dưới vùng OCR (y2). Không trừ thêm
+    # hằng số -40px nữa: với video chiều cao nhỏ hệ số phóng to khiến sub
+    # bị đẩy xuống lệch khỏi vùng đã chọn so với các video khác.
+    s["margin_v"] = max(0, int((1 - y2) * vh * 1080 / vh))
     return s
 
 
