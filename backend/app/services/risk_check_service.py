@@ -1,12 +1,13 @@
 """Subtitle risk-check service.
 
-Reads the current SRT, splits entries into batches and asks Gemini to flag
-risky lines (check only — never edits the file). The review language is set by
-the caller (`lang`), e.g. the pipeline's translate target. Risky categories:
-- NOT_TRANSLATED: text is not in the expected language (still foreign content)
-- TIMELINE_OVERLAP: line's time range overlaps the previous line
-- ADJACENT_SIMILAR: content is still >80% similar to the adjacent line
-  (should have been merged)
+Reads the current SRT and flags risky lines. Two complementary layers:
+
+1. CODE (deterministic): TIMELINE_OVERLAP — computed locally by comparing each
+   line's start against the previous line's end. No AI involved.
+2. GEMINI (text-only): NOT_TRANSLATED and ADJACENT_SIMILAR — reviewed via the
+   numbered-lines array protocol ("position|text"). The model never sees SRT
+   timestamps or indexes, so it cannot misreport positions beyond its own
+   numbering, which is validated range-wise before use.
 
 The result is saved to `temp/risk_check/{video_id}.json` and served back
 through `GET /api/srt/{video_id}/risk-check`.
@@ -18,7 +19,8 @@ import time
 
 from app.config import settings
 from app.services.media_utils import _srt_path
-from app.services.srt_utils import entries_to_srt, parse_srt
+from app.services.srt_utils import parse_srt
+from app.services.gemini_array import build_numbered_payload
 from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.retry_utils import (
     gemini_call_rotating,
@@ -29,28 +31,30 @@ from app.services.retry_utils import (
 logger = logging.getLogger(__name__)
 
 
-RISK_CHECK_PROMPT_VI = """You are a Vietnamese subtitle quality reviewer. You review an SRT subtitle file that was machine-translated to Vietnamese.
+RISK_CHECK_PROMPT_VI = """You are a Vietnamese subtitle quality reviewer. You review machine-translated Vietnamese subtitle lines.
 
-For EACH subtitle line, check for these problems:
+Input: numbered lines in the form "position|text" (consecutive subtitle lines, in order).
+
+For EACH line, check for these problems:
 1. NOT_TRANSLATED — the text is NOT Vietnamese: it still contains Chinese characters, or is in another language that should have been translated to Vietnamese.
-2. TIMELINE_OVERLAP — the line's time range overlaps the PREVIOUS line (its start time is BEFORE the previous line's end time).
-3. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
+2. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
 
 Output ONLY a JSON array (no markdown, no explanations). One object per risky line:
-[{"index": <line index>, "problems": ["NOT_TRANSLATED"], "note": "<ngắn gọn bằng tiếng Việt>"}]
-Use the problems list with zero or more of the three keys above. If a line has no problem, do NOT include it. If no line has problems, output only [].
+[{"i": <position>, "problems": ["NOT_TRANSLATED"], "note": "<ngắn gọn bằng tiếng Việt>"}]
+"i" is the input position number. Skip clean lines entirely. If no line has problems, output only [].
 """
 
-RISK_CHECK_PROMPT_GENERIC = """You are a {lang_name} subtitle quality reviewer. You review an SRT subtitle file that was machine-translated to {lang_name}.
+RISK_CHECK_PROMPT_GENERIC = """You are a {lang_name} subtitle quality reviewer. You review machine-translated {lang_name} subtitle lines.
 
-For EACH subtitle line, check for these problems:
+Input: numbered lines in the form "position|text" (consecutive subtitle lines, in order).
+
+For EACH line, check for these problems:
 1. NOT_TRANSLATED — the text is NOT {lang_name}: it still contains Chinese/other-language characters or foreign content that should have been translated to {lang_name}.
-2. TIMELINE_OVERLAP — the line's time range overlaps the PREVIOUS line (its start time is BEFORE the previous line's end time).
-3. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
+2. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
 
 Output ONLY a JSON array (no markdown, no explanations). One object per risky line:
-[{{"index": <line index>, "problems": ["NOT_TRANSLATED"], "note": "<short note in {lang_name}>"}}]
-Use the problems list with zero or more of the three keys above. If a line has no problem, do NOT include it. If no line has problems, output only [].
+[{{"i": <position>, "problems": ["NOT_TRANSLATED"], "note": "<short note in {lang_name}>"}}]
+"i" is the input position number. Skip clean lines entirely. If no line has problems, output only [].
 """
 
 RISK_LANG_NAMES = {
@@ -70,11 +74,11 @@ def _build_risk_check_prompt(lang: str) -> tuple[str, str]:
     if lang == "vi":
         return RISK_CHECK_PROMPT_VI, (
             "You review Vietnamese subtitles and only flag risky lines. "
-            "Always output a JSON array."
+            'Always output a JSON array using "i" for the input position.'
         )
     return RISK_CHECK_PROMPT_GENERIC.format(lang_name=lang_name), (
         f"You review {lang_name} subtitles and only flag risky lines. "
-        "Always output a JSON array."
+        'Always output a JSON array using "i" for the input position.'
     )
 
 
@@ -109,11 +113,26 @@ def _parse_json_array(text: str) -> list[dict]:
     return out
 
 
-def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[dict]:
-    """Run the Gemini risk check over the current SRT of `video_id`.
+def _check_timeline_overlaps(entries) -> list[dict]:
+    """Deterministic TIMELINE_OVERLAP detection (prev.end vs cur.start)."""
+    risks: list[dict] = []
+    for k in range(1, len(entries)):
+        prev, cur = entries[k - 1], entries[k]
+        if cur.start < prev.end - 0.001:  # 1ms tolerance for rounding noise
+            risks.append({
+                "index": cur.index,
+                "text": cur.text,
+                "problems": ["TIMELINE_OVERLAP"],
+                "note": f"Bắt đầu lúc {cur.startLabel} sớm hơn kết thúc dòng trước ({prev.endLabel}).",
+            })
+    return risks
 
-    `lang` is the language the subtitles are in (zh / en / vi); the prompt is
-    built accordingly so the "NOT_TRANSLATED" rule matches that language.
+
+def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[dict]:
+    """Run the risk check over the current SRT of `video_id`.
+
+    `lang` is the language the subtitles are in (zh / en / vi); the Gemini part
+    checks text-level issues while timeline overlaps are computed in code.
 
     Returns a list of risky lines: {index, text, problems, note}.
     """
@@ -128,11 +147,31 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
     if not configured_gemini_keys():
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
-    total_batches = (len(entries) + STEP - 1) // STEP
     risks: list[dict] = []
     seen_indexes: set[int] = set()
 
+    def _add(index: int, text: str, problems: list[str], note: str):
+        if index in seen_indexes:
+            return
+        seen_indexes.add(index)
+        risks.append({
+            "index": index,
+            "text": text,
+            "problems": problems,
+            "note": note,
+        })
+
+    # ── Layer 1: timeline overlaps, computed exactly in code ──
+    n_overlap = 0
+    for r in _check_timeline_overlaps(entries):
+        _add(r["index"], r["text"], r["problems"], r["note"])
+        n_overlap += 1
+    if n_overlap:
+        logger.info("Risk-check: %d TIMELINE_OVERLAP detected in code", n_overlap)
+
+    # ── Layer 2: text-level risks via Gemini (numbered lines, no timeline) ──
     prompt, system_instruction = _build_risk_check_prompt(lang)
+    total_batches = (len(entries) + STEP - 1) // STEP
 
     def _call_gemini(contents, config: dict):
         return gemini_call_rotating(
@@ -144,7 +183,7 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
 
     for bi, batch_start in enumerate(range(0, len(entries), STEP)):
         batch = entries[batch_start:batch_start + BATCH_SIZE]
-        batch_srt = entries_to_srt(batch)
+        payload = build_numbered_payload([e.text for e in batch])
         logger.info(
             "Risk-check batch %d-%d (lines %d-%d) to Gemini",
             batch_start + 1, min(batch_start + BATCH_SIZE, len(entries)),
@@ -158,7 +197,7 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
 
         try:
             response = _call_gemini(
-                prompt + "\n\n" + batch_srt,
+                prompt + "\n\nInput lines:\n\n" + payload,
                 {
                     "system_instruction": system_instruction,
                     "temperature": 0.1,
@@ -171,29 +210,23 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
 
         for item in items:
             try:
-                local_index = int(item.get("index", 0))
+                pos = int(item.get("i", item.get("position", item.get("index", -1))))
             except (TypeError, ValueError):
                 continue
-            # The batch SRT renumbers lines 1..N. local_index 1 maps to the first
-            # entry of the batch (global index batch_start + local_index). Only
-            # the FIRST batch has no overlap; for later batches the first
-            # OVERLAP local lines repeat the tail of the previous batch and must
-            # NOT be double-reported.
-            if batch_start > 0 and local_index <= OVERLAP:
+            if not (0 <= pos < len(batch)):
                 continue
-            global_index = batch_start + local_index
-            if 1 <= global_index <= len(entries) and global_index not in seen_indexes:
-                problems = item.get("problems", [])
-                if isinstance(problems, str):
-                    problems = [problems]
-                problems = [str(p) for p in problems if p]
-                seen_indexes.add(global_index)
-                risks.append({
-                    "index": global_index,
-                    "text": entries[global_index - 1].text,
-                    "problems": problems,
-                    "note": str(item.get("note", "") or ""),
-                })
+            # The first OVERLAP lines of later batches repeat the tail of the
+            # previous batch and must NOT be double-reported.
+            if batch_start > 0 and pos < OVERLAP:
+                continue
+            entry = batch[pos]
+            problems = item.get("problems", [])
+            if isinstance(problems, str):
+                problems = [problems]
+            problems = [str(p) for p in problems if p and p != "TIMELINE_OVERLAP"]
+            if not problems:
+                continue
+            _add(entry.index, entry.text, problems, str(item.get("note", "") or ""))
 
         if log_fn:
             log_fn(f"  Batch {bi + 1}: xong.")
