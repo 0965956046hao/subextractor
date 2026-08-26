@@ -227,6 +227,20 @@ export default function TimelineCheckModal({
     return entries.find((e) => currentTime >= e.start && currentTime <= e.end);
   }, [entries, currentTime]);
 
+  // Kim timeline chạy tới đâu thì danh sách SRT cuộn theo tới đó.
+  const activeListIndex = activeEntry?.index;
+  useEffect(() => {
+    if (activeListIndex == null) return;
+    const el = entryRefs.current.get(activeListIndex);
+    const list = listRef.current;
+    if (!el || !list) return;
+    const lr = list.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (er.top < lr.top + 8 || er.bottom > lr.bottom - 8) {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeListIndex]);
+
   const seekTo = useCallback((sec: number) => {
     const v = videoRef.current;
     if (v) {
@@ -501,7 +515,7 @@ export default function TimelineCheckModal({
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-9 h-9 rounded-full bg-warn/15 flex items-center justify-center flex-shrink-0">
-                <IconAlert className="w-5 h-5 text-amber-600" />
+                <IconAlert className="w-5 h-5 text-amber-400" />
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-ink">{t("timeline.title" as string)}</p>
@@ -524,7 +538,7 @@ export default function TimelineCheckModal({
               <button
                 onClick={onClose}
                 title={t("timeline.minimize" as string)}
-                className="w-9 h-9 rounded-full bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                className="icon-btn"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M18 6L6 18" /><path d="M6 6l12 12" />
@@ -581,7 +595,7 @@ export default function TimelineCheckModal({
           <div className="flex flex-col gap-4 min-h-0 flex-1">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 flex-1">
             {/* Left: video */}
-            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/10 flex flex-col min-h-0">
+            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-white/15 flex flex-col min-h-0">
               <div className="relative w-full flex-1 min-h-0">
                 <video
                   ref={videoRef}
@@ -617,7 +631,7 @@ export default function TimelineCheckModal({
                   </p>
                 )}
               </div>
-              <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] divide-y divide-black/[0.04]">
+              <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] divide-y divide-black/[0.04]">
                 {entries.map((entry) => {
                   const isIssue = issueIndexes.has(entry.index);
                   const isRisk = riskIndexes.has(entry.index);
@@ -643,8 +657,14 @@ export default function TimelineCheckModal({
                         }
                       }}
                       className={`group w-full text-left px-3 py-2 cursor-pointer transition-colors relative ${
-                        active ? "bg-accent-muted" : isIssue ? "bg-danger-muted" : isRisk ? "bg-warn-muted" : "hover:bg-black/[0.02]"
-                      } ${(isIssue || isRisk || active) ? "" : ""}`}
+                        active
+                          ? "bg-accent-muted ring-1 ring-inset ring-accent/40"
+                          : isIssue
+                            ? "bg-danger-muted"
+                            : isRisk
+                              ? "bg-warn-muted"
+                              : "hover:bg-white/[0.03]"
+                      }`}
                     >
                       <button
                         onClick={(e) => {
@@ -663,7 +683,9 @@ export default function TimelineCheckModal({
                               ? "bg-danger/15 text-danger"
                               : isRisk
                               ? "bg-warn/15 text-warn"
-                              : "bg-black/[0.04] text-ink-light"
+                              : active
+                                ? "bg-accent/20 text-accent"
+                                : "bg-white/[0.05] text-ink-light"
                           }`}
                         >
                           #{entry.index}
@@ -691,7 +713,7 @@ export default function TimelineCheckModal({
                             reTranslateEntry(entry.index);
                           }}
                           disabled={retranslatingIndex === entry.index}
-                          className="text-[10px] font-medium text-ink-muted hover:text-emerald-600 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1 disabled:opacity-60 disabled:cursor-wait"
+                          className="text-[10px] font-medium text-ink-muted hover:text-emerald-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1 disabled:opacity-60 disabled:cursor-wait"
                           title={t("timeline.reTranslateTitle" as string)}
                         >
                           {retranslatingIndex === entry.index ? (
@@ -720,7 +742,7 @@ export default function TimelineCheckModal({
                             onClick={(e) => e.stopPropagation()}
                             autoFocus
                             rows={2}
-                            className="w-full rounded-lg bg-white ring-1 ring-accent/30 focus:ring-2 focus:ring-accent px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none resize-y"
+                            className="textarea-field !text-[12px] leading-snug"
                             placeholder={t("timeline.enterSubtitle" as string)}
                           />
                           <div className="flex items-center justify-end gap-1.5 mt-1">
@@ -729,7 +751,7 @@ export default function TimelineCheckModal({
                                 e.stopPropagation();
                                 setEditingIndex(-1);
                               }}
-                              className="px-2 py-1 rounded-full text-[10px] font-medium text-ink-muted hover:bg-black/[0.04] transition-colors cursor-pointer"
+                              className="px-2 py-1 rounded-full text-[10px] font-medium text-ink-muted hover:bg-white/[0.05] transition-colors cursor-pointer"
                             >
                               {t("timeline.cancel" as string)}
                             </button>
@@ -747,7 +769,13 @@ export default function TimelineCheckModal({
                       ) : (
                         <p
                           className={`text-[12px] leading-snug mt-0.5 line-clamp-2 ${
-                            isIssue ? "text-danger" : isRisk ? "text-amber-800" : "text-ink"
+                            isIssue
+                              ? "text-danger"
+                              : isRisk
+                              ? "text-amber-800"
+                              : active
+                                ? "text-accent font-medium"
+                                : "text-ink"
                           }`}
                         >
                           {entry.text}
@@ -767,16 +795,16 @@ export default function TimelineCheckModal({
           </div>
 
             {/* Timeline editor */}
-            <div className="rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] p-3 flex-shrink-0">
+            <div className="rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] p-3 flex-shrink-0">
               <div className="flex items-center justify-between mb-2 gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
                     {t("timeline.timeline" as string)}
                   </p>
-                  <div className="flex items-center gap-1 rounded-full bg-black/[0.04] ring-1 ring-black/[0.05] px-1.5 py-1">
+                  <div className="flex items-center gap-1 rounded-full bg-white/[0.05] ring-1 ring-white/[0.08] px-1.5 py-1">
                     <button
                       onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.25))}
-                      className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
+                      className="w-6 h-6 rounded-full hover:bg-white/[0.08] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
                       title={t("timeline.zoomOut" as string)}
                     >
                       −
@@ -786,7 +814,7 @@ export default function TimelineCheckModal({
                     </span>
                     <button
                       onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.25))}
-                      className="w-6 h-6 rounded-full hover:bg-black/[0.06] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
+                      className="w-6 h-6 rounded-full hover:bg-white/[0.08] text-ink-muted flex items-center justify-center cursor-pointer transition-colors text-[13px] leading-none"
                       title={t("timeline.zoomIn" as string)}
                     >
                       +
@@ -797,10 +825,10 @@ export default function TimelineCheckModal({
                   {fmtClock(currentTime)} / {fmtClock(effectiveDuration)}
                 </p>
               </div>
-              <div className="overflow-x-auto scrollbar-thin" ref={trackRef}>
-                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }} onPointerDown={handleTrackPointerDown}>
+              <div className="overflow-x-auto overflow-y-hidden scrollbar-thin" ref={trackRef}>
+                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 + 12 }} onPointerDown={handleTrackPointerDown}>
                   {/* ruler — pointer-events-none so clicks fall through to scrub */}
-                  <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-black/[0.06] pointer-events-none">
+                  <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-white/[0.08] pointer-events-none">
                     {Array.from({ length: Math.ceil(effectiveDuration / interval) + 1 }).map((_, i) => (
                       <div
                         key={i}
@@ -815,7 +843,7 @@ export default function TimelineCheckModal({
                   </div>
                   {/* playhead — red marker tracking the video position */}
                   <div
-                    className="absolute top-5 bottom-0 w-[2px] bg-danger z-10 pointer-events-none"
+                    className="absolute top-6 bottom-0 w-[2px] bg-danger z-10 pointer-events-none"
                     style={{ left: currentTime * pps }}
                   >
                     <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-danger rounded-full shadow ring-2 ring-white" />
@@ -827,7 +855,9 @@ export default function TimelineCheckModal({
                     const width = Math.max((entry.end - entry.start) * pps, 4);
                     const isIssue = issueIndexes.has(entry.index);
                     const isRisk = riskIndexes.has(entry.index);
-                    const active = entry.index === activeIndex;
+                  const active =
+                    entry.index === activeIndex ||
+                    entry.index === activeEntry?.index;
                     return (
                       <div
                         key={entry.index}
@@ -845,7 +875,7 @@ export default function TimelineCheckModal({
                             : "bg-accent/70 ring-accent/40 text-white"
                         }`}
                         style={{
-                          top: 5 + ROW_H / 2 + row * ROW_H,
+                          top: 12 + ROW_H / 2 + row * ROW_H,
                           height: ROW_H - 10,
                           left,
                           width,
@@ -912,7 +942,7 @@ export default function TimelineCheckModal({
             <button
               onClick={() => onResolve("continue")}
               disabled={saving || checking}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer disabled:opacity-50"
+              className="btn-island-secondary btn-sm disabled:opacity-50"
             >
               {t("timeline.keepAsIs" as string)}
             </button>

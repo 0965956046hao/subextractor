@@ -335,9 +335,9 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
           {t("pipeline.removeWatermarkDrawHint")}
         </p>
         <div className="flex gap-2 flex-shrink-0">
-          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">Space</kbd>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">Space</kbd>
           <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("region.play" as string)}</span>
-          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">↵</kbd>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">↵</kbd>
           <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("region.confirm" as string)}</span>
         </div>
       </div>
@@ -391,7 +391,7 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
             {regions.map((r, i) => {
               const color = REGION_COLORS[i % REGION_COLORS.length];
               return (
-                <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-black/[0.02]">
+                <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-white/[0.03]">
                   <div className="flex items-center gap-2.5">
                     <span
                       className="w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center"
@@ -407,7 +407,7 @@ export default function WatermarkRegionSelector({ videoId, onConfirm }: Props) {
                   <button
                     type="button"
                     onClick={() => handleRemoveRegion(i)}
-                    className="w-6 h-6 rounded-full bg-black/[0.04] text-ink-muted hover:bg-danger/10 hover:text-danger
+                    className="w-6 h-6 rounded-full bg-white/[0.05] text-ink-muted hover:bg-danger/10 hover:text-danger
                                flex items-center justify-center transition-colors cursor-pointer text-[10px]"
                   >
                     ✕

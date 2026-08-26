@@ -45,3 +45,45 @@ async def get_image(file_path: str):
     media_type = IMAGE_TYPES.get(ext, "application/octet-stream")
 
     return FileResponse(str(target), media_type=media_type)
+
+
+@router.get("/api/context-images/{video_id}")
+async def list_context_images(video_id: str):
+    """List cover image + context (scene) images for a pipeline video.
+
+    Returns {thumbnail: url|null, images: [url,...]} with URLs served by
+    GET /api/image/{path}. Falls back to the merged-context copy when the
+    video's own context dir has no thumbnail.
+    """
+    if not video_id or "/" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+
+    import json as _json
+
+    d = settings.temp_dir / "context" / video_id
+    out: dict = {"thumbnail": None, "images": []}
+    if not d.exists():
+        return out
+
+    thumb = d / "thumbnail.jpg"
+    if not thumb.exists():
+        # Fallback: bản context của lần merge gốc (meta.source_merge_id)
+        try:
+            meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+            mid = (_json.loads(meta_path.read_text(encoding="utf-8")) or {}).get(
+                "source_merge_id"
+            )
+            if mid and (settings.temp_dir / "merged" / f"{mid}_context" / "thumbnail.jpg").exists():
+                out["thumbnail"] = f"/api/image/merged/{mid}_context/thumbnail.jpg"
+        except Exception:
+            pass
+    else:
+        out["thumbnail"] = f"/api/image/context/{video_id}/thumbnail.jpg"
+
+    cdir = d / "context_images"
+    if cdir.exists():
+        for f in sorted(cdir.glob("context_*.jpg")):
+            out["images"].append(
+                f"/api/image/context/{video_id}/context_images/{f.name}"
+            )
+    return out

@@ -82,10 +82,21 @@ export interface VideoMeta {
   progress?: number;
   phase?: string;
   job_type?: string;
+  origin?: "extract" | "pipeline";
   job_id?: string;
   error?: string | null;
   logs?: LogEntry[];
   pipeline?: PipelineProgress;
+}
+
+export interface ContextImages {
+  thumbnail: string | null;
+  images: string[];
+}
+
+export async function getContextImages(videoId: string): Promise<ContextImages> {
+  const res = await api.get(`/context-images/${videoId}`);
+  return res.data;
 }
 
 export async function listVideos(): Promise<VideoMeta[]> {

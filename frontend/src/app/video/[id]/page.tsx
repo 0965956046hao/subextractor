@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TranscriptPlayer from "@/components/TranscriptPlayer";
+import PageHeader from "@/components/layout/PageHeader";
 import { AnimatedBlock } from "@/lib/animation";
 import { listVideos, getJobStatus, cancelJob } from "@/lib/api";
 import type { VideoMeta, LogEntry } from "@/lib/api";
@@ -37,11 +38,11 @@ function fmtTime(ts: number): string {
 }
 
 const LOG_LEVEL_STYLE: Record<string, string> = {
-  info: "text-accent",
-  success: "text-emerald-600",
-  warn: "text-amber-600",
+  info: "text-accent-light",
+  success: "text-emerald-400",
+  warn: "text-amber-400",
   error: "text-danger",
-  text: "text-violet-700 font-medium",
+  text: "text-violet-300 font-medium",
 };
 
 function JobProgress({
@@ -217,7 +218,7 @@ function JobProgress({
         </div>
 
         <div className="max-w-sm mx-auto">
-          <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+          <div className="h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] ${
                 error
@@ -281,8 +282,8 @@ function JobProgress({
         </div>
 
         {logs.length > 0 && (
-          <div className="rounded-2xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden mt-8">
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.05] bg-white/40">
+          <div className="rounded-2xl bg-white/[0.03] ring-1 ring-white/[0.08] overflow-hidden mt-8">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.07] bg-white/[0.03]">
               <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
               <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-ink-muted">
                 {t("video.logs")}
@@ -292,7 +293,7 @@ function JobProgress({
               {logs.map((log, i) => (
                 <div
                   key={`${log.ts}-${i}`}
-                  className="flex items-start gap-2 px-3 py-1.5 rounded-xl bg-white/60 ring-1 ring-black/[0.03]"
+                  className="flex items-start gap-2 px-3 py-1.5 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08]"
                 >
                   <p
                     className={`text-[13px] leading-snug flex-1 ${(LOG_LEVEL_STYLE[log.level] as string) ?? "text-ink"}`}
@@ -354,68 +355,42 @@ export default function VideoDetailPage() {
   const filename = meta?.filename ?? "";
 
   return (
-    <main className="min-h-[100dvh] max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
-      <AnimatedBlock delay={0}>
-        <Link
-          href="/"
-          className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-        >
-          <span className="btn-island-icon !w-7 !h-7">
-            <svg
-              className="w-3.5 h-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M19 12H5" />
-              <path d="M11 18l-6-6 6-6" />
-            </svg>
-          </span>
-          <span className="tracking-tight">{t("back.library")}</span>
-        </Link>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={100} className="mt-10 mb-10">
-        <div className="flex items-start justify-between gap-6 flex-wrap">
-          <div className="min-w-0">
-            <div className="eyebrow mb-4">{t("video.eyebrow")}</div>
-            <h1 className="text-[clamp(1.8rem,4.5vw,3.4rem)] font-semibold tracking-tight leading-[1.05] text-balance text-ink break-words">
-              {loading ? t("video.loading") : filename || videoId}
-            </h1>
-            <div className="flex items-center gap-2 mt-4 flex-wrap">
-              {isActive && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent-muted ring-1 ring-accent/15 text-[11px] font-medium text-accent/90">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                  {t("video.processingBadge", { progress: meta?.progress ?? 0 })}
-                </span>
-              )}
-
-              {meta?.created_at && (
-                <span className="text-[11px] text-ink-light tabular-nums">
-                  {t("video.extracted", { date: formatDate(meta.created_at) })}
-                </span>
-              )}
-              {entries !== null && (
-                <Link
-                  href={`/extract?video_id=${videoId}`}
-                  className="text-[11px] font-medium text-accent/80 hover:text-accent transition-colors cursor-pointer"
-                >
-                  {t("video.retryLink")}
-                </Link>
-              )}
-              <button
-                onClick={() => setReloadKey((k) => k + 1)}
-                className="text-[11px] font-medium text-accent/80 hover:text-accent transition-colors cursor-pointer"
+    <div>
+      <PageHeader
+        back={{ href: "/", label: t("back.library") }}
+        title={loading ? t("video.loading") : filename || videoId}
+        badge={
+          isActive ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent-muted ring-1 ring-accent/20 text-[11px] font-medium text-accent-light">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+              {t("video.processingBadge", { progress: meta?.progress ?? 0 })}
+            </span>
+          ) : undefined
+        }
+        actions={
+          <>
+            {meta?.created_at && (
+              <span className="text-[12px] text-ink-light tabular-nums mr-1">
+                {t("video.extracted", { date: formatDate(meta.created_at) })}
+              </span>
+            )}
+            {entries !== null && (
+              <Link
+                href={`/extract?video_id=${videoId}`}
+                className="btn-island-secondary !px-4 !py-2 text-[12px]"
               >
-                {t("video.refresh")}
-              </button>
-            </div>
-          </div>
-        </div>
-      </AnimatedBlock>
+                {t("video.retryLink")}
+              </Link>
+            )}
+            <button
+              onClick={() => setReloadKey((k) => k + 1)}
+              className="btn-island-secondary !px-4 !py-2 text-[12px]"
+            >
+              {t("video.refresh")}
+            </button>
+          </>
+        }
+      />
 
       {isActive && meta?.job_id ? (
         <AnimatedBlock delay={200}>
@@ -477,12 +452,12 @@ export default function VideoDetailPage() {
         <AnimatedBlock delay={200}>
           {/* View mode toggle — Floating glass island */}
           <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
               <button
                 onClick={() => setViewMode("transcript")}
                 className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   viewMode === "transcript"
-                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    ? "bg-accent text-white shadow-sm"
                     : "text-ink-light hover:text-ink"
                 }`}
               >
@@ -503,6 +478,6 @@ export default function VideoDetailPage() {
           </div>
         </AnimatedBlock>
       )}
-    </main>
+    </div>
   );
 }

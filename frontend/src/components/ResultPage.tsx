@@ -108,7 +108,7 @@ const LOG_STYLE: Record<
     ),
   },
   text: {
-    fg: "text-violet-600",
+    fg: "text-violet-300",
     bg: "bg-violet-500/10 ring-violet-500/20",
     icon: (
       <svg
@@ -148,7 +148,7 @@ function LogRow({ log, index }: { log: LogEntry; index: number }) {
   const style = LOG_STYLE[log.level] ?? LOG_STYLE.info;
   return (
     <div
-      className="flex items-start gap-3 px-3 py-2 rounded-xl bg-white/60 ring-1 ring-black/[0.03]"
+      className="flex items-start gap-3 px-3 py-2 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08]"
       style={{
         animation: `fade-in-right 0.5s cubic-bezier(0.32,0.72,0,1) ${Math.min(index * 40, 300)}ms forwards`,
         opacity: 0,
@@ -160,7 +160,7 @@ function LogRow({ log, index }: { log: LogEntry; index: number }) {
         {style.icon}
       </span>
       <p
-        className={`text-[13px] leading-snug flex-1 pt-0.5 ${log.level === "text" ? "font-medium text-violet-700" : "text-ink"}`}
+        className={`text-[13px] leading-snug flex-1 pt-0.5 ${log.level === "text" ? "font-medium text-violet-300" : "text-ink"}`}
       >
         {log.message}
       </p>
@@ -183,8 +183,8 @@ function LogFeed({ logs, active }: { logs: LogEntry[]; active: boolean }) {
   }, [logs]);
 
   return (
-    <div className="rounded-2xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden mt-8">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-black/[0.05] bg-white/40">
+    <div className="rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] overflow-hidden mt-8">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.07] bg-white/[0.03]">
         <span
           className={`w-2 h-2 rounded-full transition-colors duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] ${
             active ? "bg-accent animate-pulse" : "bg-success"
@@ -548,7 +548,7 @@ export default function ResultPage({
             </div>
 
             <div className="max-w-sm mx-auto">
-              <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+              <div className="h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-1000 ease-[cubic-bezier(0.32,0.72,0,1)]
                     ${phase === "error" ? "bg-danger" : "bg-gradient-to-r from-blue-600 to-blue-400"}`}

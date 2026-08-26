@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
+import PageHeader from "@/components/layout/PageHeader";
 import { useI18n, type Dict } from "@/lib/i18n";
 import {
   getPipelineHealth,
@@ -20,6 +20,8 @@ import {
   getAppConfig,
   uploadVideo,
   getDownloadUrl,
+  getContextImages,
+  type ContextImages,
   getDubbedDownloadUrl,
   listYoutubeChannels,
   setActiveWatermarkPreset,
@@ -48,6 +50,10 @@ import {
 } from "@/stores/pipeline-store";
 
 type TFunc = (key: string, vars?: Record<string, string | number>) => string;
+
+/** Guard: snapshot-hydrate chỉ chạy 1 lần mỗi trang tải thật, không chạy lại
+ *  khi điều hướng nội bộ làm AutoPipeline mount/unmount nhiều lần. */
+let restoredSnapshotOnce = false;
 
 function makeT(
   t: (key: keyof Dict, vars?: Record<string, string | number>) => string,
@@ -262,11 +268,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     "douyin",
   );
   const [srcLang, setSrcLang] = useState<"zh" | "en" | "vi">("zh");
-  const [translateOn, setTranslateOn] = useState(false);
+  const [translateOn, setTranslateOn] = useState(true);
   const [translateTarget, setTranslateTarget] = useState<"zh" | "en" | "vi">(
     "vi",
   );
-  const [dubOn, setDubOn] = useState(false);
+  const [dubOn, setDubOn] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploaded, setUploaded] = useState<{
@@ -279,11 +285,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
-  const [muteOriginal, setMuteOriginal] = useState(true);
-  const [originalGainDb, setOriginalGainDb] = useState(6);
+  const [muteOriginal, setMuteOriginal] = useState(false);
+  const [originalGainDb, setOriginalGainDb] = useState(12);
   const [multiVoice, setMultiVoice] = useState(false);
-  const [autoFitSubs, setAutoFitSubs] = useState(true);
-  const [watermarkOn, setWatermarkOn] = useState(false);
+  const [autoFitSubs, setAutoFitSubs] = useState(false);
+  const [watermarkOn, setWatermarkOn] = useState(true);
   const [useFalThumbnail, setUseFalThumbnail] = useState(false);
   const [useGptThumbnail, setUseGptThumbnail] = useState(false);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
@@ -435,26 +441,64 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     };
   }, []);
 
-  // Khôi phục danh sách pipeline đã lưu khi F5 trang (running/queued → error)
+  // Deep-link from the Pipeline library: /auto?video_id=xxx opens that video.
+  const deepLinkHandled = useRef(false);
   useEffect(() => {
+    if (deepLinkHandled.current) return;
+    const vid = new URLSearchParams(window.location.search).get("video_id");
+    if (!vid) return;
+    const st = usePipelineStore.getState();
+    const existing = st.pipelines.find((p) => p.videoId === vid);
+    const meta = historyVideos.find((v) => v.video_id === vid);
+    // Wait until the history list has loaded before deciding.
+    if (!existing && !meta) return;
+    deepLinkHandled.current = true;
+    window.history.replaceState({}, "", "/auto");
+
+    const open = (id: string | "") => {
+      if (!id) return;
+      setSelectedId(id);
+      setTab("detail");
+    };
+    if (existing) {
+      open(existing.id);
+      return;
+    }
+    if (!meta) return;
+    if (meta.status === "done") {
+      open(
+        importDone({
+          videoId: meta.video_id,
+          title: meta.filename || meta.video_id,
+          hasDubbed: meta.has_dubbed ?? false,
+        }),
+      );
+      return;
+    }
+    open(st.importActive(meta));
+  }, [historyVideos, importDone]);
+
+  // Khôi phục pipeline ĐÃ KẾT THÚC (done/error) từ snapshot backend — chỉ chạy
+  // một lần mỗi lần tải trang thật (F5). Pipeline running/queued không bị đụng
+  // tới: khi quay lại tab (SPA) nó vẫn sống trong store với progress realtime;
+  // sau F5 thì importActive + restorePaused tự gắn lại tracker từ backend.
+  useEffect(() => {
+    if (restoredSnapshotOnce) return;
+    restoredSnapshotOnce = true;
     fetch("/api/pipelines")
       .then((r) => r.json())
       .then((d) => {
-        if (d.pipelines?.length) {
-          const restored = d.pipelines.map((p: Pipeline) =>
-            p.status === "running" || p.status === "queued"
-              ? {
-                  ...p,
-                  status: "error" as const,
-                  stage: "error" as const,
-                  error: p.error || tr("pipeline.error.interruptedReload"),
-                }
-              : p,
-          );
-          usePipelineStore.getState().hydrate(restored);
+        const finished = ((d.pipelines ?? []) as Pipeline[]).filter(
+          (p) => p.status !== "running" && p.status !== "queued",
+        );
+        if (finished.length) {
+          usePipelineStore.getState().hydrateFinished(finished);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        // ignore — snapshot chỉ là lịch sử, không quan trọng nếu mất
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -739,82 +783,36 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
 
   return (
     <>
-      <main className="min-h-[100dvh] max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-16">
-        <AnimatedBlock delay={0}>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <Link
-              href="/"
-              className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-            >
-              <span className="btn-island-icon !w-7 !h-7">
-                <svg
-                  className="w-3.5 h-3.5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+      <div>
+        <PageHeader
+          title={tr("pipeline.title")}
+          description={tr("pipeline.subtitle")}
+          actions={
+            <>
+              {hasFinished && (
+                <button
+                  onClick={handleClearFinished}
+                  className="btn-island-secondary !px-4 !py-2 text-[12px]"
                 >
-                  <path d="M19 12H5" />
-                  <path d="M11 18l-6-6 6-6" />
-                </svg>
-              </span>
-              <span className="tracking-tight">
-                {tr("pipeline.backLibrary")}
-              </span>
-            </Link>
-            {hasFinished && (
+                  {tr("pipeline.clearFinished")}
+                </button>
+              )}
               <button
-                onClick={handleClearFinished}
-                className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.97] cursor-pointer"
+                onClick={() => setConfirmingClear(true)}
+                className="btn-island-danger !px-4 !py-2 text-[12px]"
               >
-                {tr("pipeline.clearFinished")}
+                {tr("pipeline.clearTemp")}
               </button>
-            )}
-            <button
-              onClick={() => setConfirmingClear(true)}
-              className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger-muted ring-1 ring-danger/15 text-danger hover:bg-danger/10 transition-all duration-300 active:scale-[0.97] cursor-pointer"
-            >
-              {tr("pipeline.clearTemp")}
-            </button>
-            <Link
-              href="/settings"
-              title={tr("pipeline.settingsTitle")}
-              className="w-9 h-9 rounded-full bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-all duration-300 active:scale-[0.95] flex items-center justify-center cursor-pointer"
-            >
-              <svg
-                className="w-[18px] h-[18px]"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            </Link>
-          </div>
-        </AnimatedBlock>
-
-        <AnimatedBlock delay={100} className="mt-10 mb-10">
-          <div className="eyebrow mb-4">{tr("pipeline.eyebrow")}</div>
-          <h1 className="text-[clamp(1.8rem,4.5vw,3.4rem)] font-semibold tracking-tight leading-[1.05] text-ink">
-            {tr("pipeline.title")}
-          </h1>
-          <p className="mt-4 text-sm text-ink-muted max-w-lg leading-relaxed">
-            {tr("pipeline.subtitle")}
-          </p>
-        </AnimatedBlock>
+            </>
+          }
+        />
 
         {/* Step 1: Input */}
         <AnimatedBlock delay={150}>
           <div className="double-bezel mb-6">
             <div className="double-bezel-inner p-5 sm:p-6">
               {healthLoading ? (
-                <div className="flex items-center gap-2 mb-4 rounded-xl bg-black/[0.03] ring-1 ring-black/[0.05] px-4 py-3">
+                <div className="flex items-center gap-2 mb-4 rounded-xl bg-white/[0.04] ring-1 ring-white/[0.08] px-4 py-3">
                   <IconSpinner className="w-4 h-4 text-accent" />
                   <span className="text-[12px] text-ink-muted">
                     {tr("pipeline.health.checking")}
@@ -828,7 +826,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </p>
                     <button
                       onClick={checkHealth}
-                      className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-warn/15 text-warn/80 ring-1 ring-warn/15 hover:bg-warn/25 transition-colors cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-warn-muted text-warn ring-1 ring-warn/25 hover:bg-warn/25 transition-colors cursor-pointer"
                     >
                       {tr("pipeline.retry")}
                     </button>
@@ -873,18 +871,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </span>
                   <button
                     onClick={checkHealth}
-                    className="ml-auto px-2.5 py-1 rounded-full text-[10px] font-medium bg-success/15 text-success/80 ring-1 ring-success/15 hover:bg-success/25 transition-colors cursor-pointer"
+                    className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium bg-success-muted text-success ring-1 ring-success/25 hover:bg-success/25 transition-colors cursor-pointer"
                   >
                     {tr("pipeline.retry")}
                   </button>
                 </div>
               ) : null}
-              <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] mb-4 w-fit">
+              <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] mb-4 w-fit">
                 {(["douyin", "youtube", "upload"] as const).map((t) => (
                   <button
                     key={t}
                     onClick={() => setSourceType(t)}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                       sourceType === t
                         ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
@@ -916,7 +914,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             : tr("pipeline.placeholder.douyin")
                           : tr("pipeline.placeholder.notConfigured")
                     }
-                    className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <button
                     onClick={handleAdd}
@@ -974,7 +972,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         </button>
                         <button
                           onClick={() => fileInputRef.current?.click()}
-                          className="px-4 py-2 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:text-ink transition-colors cursor-pointer"
+                          className="btn-island-secondary btn-xs"
                         >
                           {tr("pipeline.changeVideo")}
                     </button>
@@ -990,7 +988,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </p>
                       <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="mt-3 px-4 py-2 rounded-full text-[11px] font-medium bg-danger/15 text-danger ring-1 ring-danger/15 hover:bg-danger/25 transition-colors cursor-pointer"
+                        className="mt-3 btn-ghost-danger bg-danger-muted"
                       >
                         {tr("pipeline.retry")}
                       </button>
@@ -999,7 +997,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       disabled={!health?.healthy}
-                      className="w-full rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] px-4 py-6 text-[13px] text-ink-light hover:bg-black/[0.04] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
+                      className="w-full rounded-xl border border-dashed border-white/[0.14] bg-white/[0.03] px-4 py-6 text-[13px] text-ink-light hover:bg-white/[0.05] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
                     >
                       <svg
                         className="w-5 h-5"
@@ -1023,12 +1021,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                   {tr("pipeline.sourceLang")}
                 </span>
-                <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+                <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
                   {(["zh", "en", "vi"] as const).map((l) => (
                     <button
                       key={l}
                       onClick={() => setSrcLang(l)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                         srcLang === l
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1051,11 +1049,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   {tr("pipeline.scanRegion")}
                 </span>
                 <div
-                  className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
+                  className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
                 >
                   <button
                     onClick={() => setRegionMode("auto")}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                       regionMode === "auto"
                         ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
@@ -1065,7 +1063,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </button>
                   <button
                     onClick={() => setRegionMode("manual")}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                       regionMode === "manual"
                         ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                         : "text-ink-light hover:text-ink"
@@ -1080,12 +1078,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     : tr("pipeline.regionManualHint")}
                 </p>
               </div>
-              <div className="mt-4 border-t border-black/[0.05] pt-4">
+              <div className="mt-4 border-t border-white/[0.07] pt-4">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                     {tr("pipeline.dubTitle")}
                   </span>
-                  <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+                  <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
                     {(["vi-VN", "en-US"] as const).map((l) => (
                       <button
                         key={l}
@@ -1098,7 +1096,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             l === "vi-VN" ? "BV421_vivn_streaming" : "",
                           );
                         }}
-                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                        className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                           voiceLang === l
                             ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                             : "text-ink-light hover:text-ink"
@@ -1111,11 +1109,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     ))}
                   </div>
                   <div
-                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
+                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
                   >
                     <button
                       onClick={() => switchDubEngine("google")}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         dubEngine === "google"
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1125,7 +1123,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </button>
                     <button
                       onClick={() => switchDubEngine("capcut")}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         dubEngine === "capcut"
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1145,7 +1143,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           setPreviewUrl(null);
                           setPreviewError(false);
                         }}
-                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {(dubEngine === "capcut"
                           ? capcutVoices
@@ -1159,7 +1157,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <button
                         onClick={handlePreviewVoice}
                         disabled={previewing}
-                        className="px-4 py-2 rounded-full text-[11px] font-medium bg-accent-muted ring-1 ring-accent/15 text-accent hover:bg-accent/15 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="btn-island-secondary btn-xs chip-active disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {previewing
                           ? tr("pipeline.creatingAudio")
@@ -1218,11 +1216,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     {tr("pipeline.originalVoice")}
                   </span>
                   <div
-                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
+                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
                   >
                     <button
                       onClick={() => setMuteOriginal(true)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         muteOriginal
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1232,7 +1230,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </button>
                     <button
                       onClick={() => setMuteOriginal(false)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         !muteOriginal
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1273,7 +1271,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </p>
                 )}
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1302,16 +1300,16 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </div>
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4 flex items-center gap-3 flex-wrap">
+                <div className="mt-4 border-t border-white/[0.07] pt-4 flex items-center gap-3 flex-wrap">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                     {tr("pipeline.alignSubs")}
                   </span>
                   <div
-                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] `}
+                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
                   >
                     <button
                       onClick={() => setAutoFitSubs(true)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         autoFitSubs
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1321,7 +1319,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </button>
                     <button
                       onClick={() => setAutoFitSubs(false)}
-                      className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] cursor-pointer ${
+                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         !autoFitSubs
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
@@ -1337,7 +1335,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </p>
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1366,12 +1364,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
                         {tr("pipeline.translateTo")}
                       </span>
-                      <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05]">
+                      <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
                         {(["zh", "en", "vi"] as const).map((l) => (
                           <button
                             key={l}
                             onClick={() => setTranslateTarget(l)}
-                            className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-all active:scale-[0.97] ${
+                            className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
                               translateTarget === l
                                 ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                                 : "text-ink-light hover:text-ink"
@@ -1392,7 +1390,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1423,7 +1421,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1456,7 +1454,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         <select
                           value={watermarkPreset || presets[0]?.id || ""}
                           onChange={(e) => setWatermarkPreset(e.target.value)}
-                          className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 cursor-pointer"
+                          className="w-full rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 cursor-pointer"
                         >
                           {presets.length === 0 ? (
                             <option value="">
@@ -1479,7 +1477,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 </div>
 
                 {/* ── Remove Watermark (delogo) ── */}
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1534,7 +1532,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1583,7 +1581,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </div>
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4 space-y-3">
+                <div className="mt-4 border-t border-white/[0.07] pt-4 space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1639,7 +1637,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </div>
                 </div>
 
-                <div className="mt-4 border-t border-black/[0.05] pt-4">
+                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1666,7 +1664,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 </div>
 
                 {autoUploadYoutube && (
-                  <div className="mt-3 border-t border-black/[0.05] pt-3">
+                  <div className="mt-3 border-t border-white/[0.07] pt-3">
                     <label className="flex items-center justify-between gap-3">
                       <span className="text-[11px] text-ink-muted">
                         {tr("pipeline.youtubeChannel")}
@@ -1674,7 +1672,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <select
                         value={ytChannel}
                         onChange={(e) => setYtChannel(e.target.value)}
-                        className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                        className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
                       >
                         <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
                         {ytChannels.map((ch) => (
@@ -1699,12 +1697,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         {/* Tabs */}
         <AnimatedBlock delay={200}>
           <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/[0.03] ring-1 ring-black/[0.05] w-max">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] w-max">
               <button
                 onClick={() => setTab("detail")}
                 className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   tab === "detail"
-                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    ? "bg-accent text-white shadow-sm"
                     : "text-ink-light hover:text-ink"
                 }`}
               >
@@ -1714,7 +1712,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 onClick={() => setTab("active")}
                 className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   tab === "active"
-                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    ? "bg-accent text-white shadow-sm"
                     : "text-ink-light hover:text-ink"
                 }`}
               >
@@ -1729,7 +1727,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 onClick={() => setTab("done")}
                 className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
                   tab === "done"
-                    ? "bg-white text-ink shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]"
+                    ? "bg-accent text-white shadow-sm"
                     : "text-ink-light hover:text-ink"
                 }`}
               >
@@ -1850,7 +1848,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
             </div>
           </AnimatedBlock>
         )}
-      </main>
+      </div>
 
       {confirmingClear && (
         <div
@@ -1874,13 +1872,13 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingClear(false)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.no")}
                 </button>
                 <button
                   onClick={handleClearTemp}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                  className="btn-island-danger btn-sm"
                 >
                   {tr("pipeline.confirmClear")}
                 </button>
@@ -1928,9 +1926,9 @@ function PipelineRow({
   return (
     <div
       onClick={onOpen}
-      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-black/[0.06] bg-black/[0.02] hover:bg-black/[0.04] transition-colors cursor-pointer"
+      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05] transition-colors cursor-pointer"
     >
-      <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-black/[0.08]">
+      <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-white/[0.11]">
         {p.videoId ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -1993,7 +1991,7 @@ function PipelineRow({
           {p.title || p.url || tr("pipeline.jobTitle", { id: p.id })}
         </p>
         <div className="flex items-center gap-2 mt-1.5">
-          <div className="flex-1 h-1 rounded-full bg-black/[0.06] overflow-hidden">
+          <div className="flex-1 h-1 rounded-full bg-white/[0.08] overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 p.status === "error"
@@ -2028,7 +2026,7 @@ function PipelineRow({
           onOpen();
         }}
         title={tr("pipeline.previewMedia")}
-        className="px-2.5 h-7 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+        className="px-2.5 h-7 rounded-full text-[11px] font-medium bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
       >
         {tr("pipeline.previewMediaBtn")}
       </button>
@@ -2100,7 +2098,7 @@ function PipelineRow({
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmingRemove(false)}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                      className="btn-island-secondary btn-sm"
                     >
                       {tr("pipeline.noContinue")}
                     </button>
@@ -2109,7 +2107,7 @@ function PipelineRow({
                         setConfirmingRemove(false);
                         onRemove();
                       }}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                      className="btn-island-danger btn-sm"
                     >
                       {tr("pipeline.confirmCancel")}
                     </button>
@@ -2126,7 +2124,7 @@ function PipelineRow({
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmingRemove(false)}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                      className="btn-island-secondary btn-sm"
                     >
                       {tr("pipeline.noKeep")}
                     </button>
@@ -2135,7 +2133,7 @@ function PipelineRow({
                         setConfirmingRemove(false);
                         onRemove();
                       }}
-                      className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                      className="btn-island-danger btn-sm"
                     >
                       {tr("pipeline.delete")}
                     </button>
@@ -2165,9 +2163,9 @@ function HistoryRow({
   return (
     <div
       onClick={onOpen}
-      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-black/[0.06] bg-black/[0.02] hover:bg-black/[0.04] transition-colors cursor-pointer"
+      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05] transition-colors cursor-pointer"
     >
-      <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-black/[0.08]">
+      <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-white/[0.11]">
         {v.has_video ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -2265,7 +2263,7 @@ function HistoryRow({
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingDelete(false)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.noKeep")}
                 </button>
@@ -2274,7 +2272,7 @@ function HistoryRow({
                     setConfirmingDelete(false);
                     onDelete();
                   }}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                  className="btn-island-danger btn-sm"
                 >
                   {tr("pipeline.deleteVideoConfirm")}
                 </button>
@@ -2303,19 +2301,19 @@ function ThumbnailReviewActions({
     <>
       <button
         onClick={onAccept}
-        className="px-4 py-2 text-[12px] font-medium bg-accent text-white rounded-full hover:opacity-90 transition-colors cursor-pointer"
+        className="btn-island-primary btn-sm"
       >
         Chấp nhận
       </button>
       <button
         onClick={() => setShowRegen(!showRegen)}
-        className="px-4 py-2 text-[12px] font-medium bg-amber-500 text-white rounded-full hover:opacity-90 transition-colors cursor-pointer"
+        className="btn-warn"
       >
         Tạo lại
       </button>
       <button
         onClick={onSkip}
-        className="px-4 py-2 text-[12px] font-medium bg-stone-200 text-ink rounded-full hover:bg-stone-300 transition-colors cursor-pointer"
+        className="btn-island-secondary btn-sm"
       >
         Bỏ qua
       </button>
@@ -2464,7 +2462,7 @@ function DetailView({
             <button
               onClick={() => setPreviewOpen(true)}
               title={tr("pipeline.previewMedia")}
-              className="px-2.5 h-7 rounded-full text-[11px] font-medium bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer"
+              className="px-2.5 h-7 rounded-full text-[11px] font-medium bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer"
             >
               {tr("pipeline.previewMediaBtn")}
             </button>
@@ -2478,7 +2476,7 @@ function DetailView({
             )}
             <button
               onClick={onRemove}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+              className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
             >
               {tr("pipeline.delete")}
             </button>
@@ -2636,7 +2634,7 @@ function DetailView({
                 %
               </span>
             </div>
-            <div className="h-2 rounded-full bg-black/[0.06] overflow-hidden">
+            <div className="h-2 rounded-full bg-white/[0.08] overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-500 ${
                   p.status === "error"
@@ -2654,7 +2652,7 @@ function DetailView({
         )}
 
         <div className="relative">
-          <div className="absolute left-[11px] top-6 bottom-6 w-[2px] bg-black/[0.06]" />
+          <div className="absolute left-[11px] top-6 bottom-6 w-[2px] bg-white/[0.08]" />
           <div className="space-y-1">
           {STEPS.map((s, i) => {
             const done = i < activeStep || p.status === "done";
@@ -2676,14 +2674,14 @@ function DetailView({
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
                     skipped
-                      ? "bg-black/[0.04] text-ink-light"
+                      ? "bg-white/[0.05] text-ink-light"
                       : isFailed
                         ? "bg-danger-muted text-danger"
                         : done
                           ? "bg-success/15 text-success"
                           : active
                             ? "bg-accent-muted text-accent"
-                            : "bg-black/[0.04] text-ink-light"
+                            : "bg-white/[0.05] text-ink-light"
                   }`}
                 >
                   {skipped ? (
@@ -2751,7 +2749,7 @@ function DetailView({
                       <select
                         value={p.youtubeChannel || ""}
                         onChange={(e) => updatePipeline(p.id, { youtubeChannel: e.target.value })}
-                        className="rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                        className="input-field max-w-[200px] !py-1 !text-[12px]"
                       >
                         <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
                         {ytChannels.map((ch) => (
@@ -2780,7 +2778,7 @@ function DetailView({
                               }
                               updatePipeline(p.id, { watermarkPreset: presetId });
                             }}
-                            className="rounded-lg border border-black/[0.08] bg-white px-2 py-1 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                            className="input-field max-w-[200px] !py-1 !text-[12px]"
                           >
                             <option value="">{tr("pipeline.watermarkNone")}</option>
                             {presets.map((pr) => (
@@ -2794,7 +2792,7 @@ function DetailView({
                     </div>
                   )}
                   {(active || done) && !skipped && (
-                    <div className="mt-1.5 h-1 rounded-full bg-black/[0.06] overflow-hidden">
+                    <div className="mt-1.5 h-1 rounded-full bg-white/[0.08] overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all duration-500 ${
                           done ? "bg-success" : "bg-accent"
@@ -2864,8 +2862,8 @@ function DetailView({
         </div>
 
         {p.logs.length > 0 && (
-          <div className="mt-4 rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] overflow-hidden">
-            <div className="px-4 py-2 border-b border-black/[0.05] bg-white/40 flex items-center justify-between">
+          <div className="mt-4 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] overflow-hidden">
+            <div className="px-4 py-2 border-b border-white/[0.07] bg-white/[0.03] flex items-center justify-between">
               <span className="text-[10px] font-medium uppercase tracking-[0.15em] text-ink-muted">
                 {tr("pipeline.logHeader", { count: p.logs.length })}
               </span>
@@ -3004,13 +3002,16 @@ function DetailView({
                   </span>
                 </a>
               )}
+              {p.videoId && (
+                <ContextImagesButton videoId={p.videoId} />
+              )}
               {p.updatedThumbnailUrl && (
                 <button
                   onClick={() =>
                     navigator.clipboard.writeText(p.updatedThumbnailUrl || "")
                   }
                   title={tr("pipeline.copyThumbnailTitle")}
-                  className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                  className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
                 >
                   {tr("pipeline.copyThumbnail")}
                 </button>
@@ -3020,13 +3021,13 @@ function DetailView({
             <iframe
               src={previewUrl}
               title={tr("pipeline.resultVideoTitle")}
-              className="w-full aspect-video rounded-xl ring-1 ring-black/[0.06] bg-black"
+              className="w-full aspect-video rounded-xl ring-1 ring-white/[0.09] bg-black"
               allow="autoplay; fullscreen"
               allowFullScreen
             />
 
             {onStartNext && (
-              <div className="mt-5 pt-4 border-t border-black/[0.05] flex items-center justify-between gap-4 flex-wrap">
+              <div className="mt-5 pt-4 border-t border-white/[0.07] flex items-center justify-between gap-4 flex-wrap">
                 <p className="text-[12px] text-ink-muted leading-relaxed">
                   {tr("pipeline.donePrompt")}
                 </p>
@@ -3080,7 +3081,7 @@ function DetailView({
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmingCancel(false)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.noContinue2")}
                 </button>
@@ -3089,7 +3090,7 @@ function DetailView({
                     setConfirmingCancel(false);
                     cancelPipeline(p.id);
                   }}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-danger text-white hover:bg-danger transition-colors cursor-pointer"
+                  className="btn-island-danger btn-sm"
                 >
                   {tr("pipeline.confirmCancelDelete")}
                 </button>
@@ -3140,13 +3141,13 @@ function DetailView({
               <div className="flex items-center justify-end gap-2 mt-5">
                 <button
                   onClick={() => resolveTimelineCheck(p.id, "continue")}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.timelineCheckContinue")}
                 </button>
                 <button
                   onClick={() => openTimelineCheck(p.id)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-warn text-white hover:bg-warn transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  className="btn-warn"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -3180,7 +3181,7 @@ function DetailView({
             <div className="double-bezel-inner p-5 sm:p-6">
               <div className="flex items-start gap-3 mb-3">
                 <div className="w-9 h-9 rounded-full bg-violet-500/15 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-5 h-5 text-violet-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <svg className="w-5 h-5 text-violet-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M11 5L6 9H2v6h4l5 4V5z" />
                     <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
                   </svg>
@@ -3197,13 +3198,13 @@ function DetailView({
               <div className="flex items-center justify-end gap-2 mt-5">
                 <button
                   onClick={() => resolveVoiceCheck(p.id, "continue")}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                  className="btn-island-secondary btn-sm"
                 >
                   {tr("pipeline.voiceCheckSkip")}
                 </button>
                 <button
                   onClick={() => openVoiceCheck(p.id)}
-                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  className="btn-island-primary btn-sm"
                 >
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M11 5L6 9H2v6h4l5 4V5z" />
@@ -3248,5 +3249,143 @@ function DetailView({
         bigThumbs={p.bigThumbs}
       />
     </div>
+  );
+}
+
+
+function ContextImagesButton({ videoId }: { videoId: string }) {
+  const { t } = useI18n();
+  const tr = makeT(t);
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<ContextImages | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(false);
+
+  useEffect(() => {
+    if (!open || data || err) return;
+    setLoading(true);
+    getContextImages(videoId)
+      .then(setData)
+      .catch(() => setErr(true))
+      .finally(() => setLoading(false));
+  }, [open, data, err, videoId]);
+
+  const hasAnything = !!(data && (data.thumbnail || data.images.length > 0));
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn-island-primary group text-sm !px-5 !py-2.5"
+      >
+        <span className="tracking-tight">{tr("pipeline.imagesBtn")}</span>
+        <span className="btn-island-icon">
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </span>
+      </button>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="double-bezel w-full max-w-3xl max-h-[85vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="double-bezel-inner flex flex-col min-h-0">
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.08] flex-shrink-0">
+                <p className="text-sm font-semibold text-ink">
+                  {tr("pipeline.imagesTitle")}
+                </p>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="w-7 h-7 rounded-lg hover:bg-white/[0.08] text-ink-muted flex items-center justify-center cursor-pointer transition-colors"
+                  aria-label={tr("btn.cancel")}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="overflow-y-auto scrollbar-thin p-5 space-y-5">
+                {loading && (
+                  <p className="text-[13px] text-ink-muted py-8 text-center">
+                    {tr("status.loading")}
+                  </p>
+                )}
+                {!loading && err && (
+                  <p className="text-[13px] text-danger py-8 text-center">
+                    {tr("result.failed")}
+                  </p>
+                )}
+                {!loading && !err && !hasAnything && (
+                  <p className="text-[13px] text-ink-light py-8 text-center">
+                    {tr("pipeline.imagesEmpty")}
+                  </p>
+                )}
+                {!loading && data?.thumbnail && (
+                  <section>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-light mb-2">
+                      {tr("pipeline.imagesCover")}
+                    </p>
+                    <a
+                      href={data.thumbnail}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block rounded-xl overflow-hidden ring-1 ring-white/[0.12] hover:ring-accent/50 transition-colors"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={data.thumbnail}
+                        alt={tr("pipeline.imagesCover")}
+                        className="w-full max-h-[46vh] object-contain bg-black/40"
+                      />
+                    </a>
+                  </section>
+                )}
+                {!loading && data && data.images.length > 0 && (
+                  <section>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-light mb-2">
+                      {tr("pipeline.imagesScenes")} ({data.images.length})
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {data.images.map((src) => (
+                        <a
+                          key={src}
+                          href={src}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block rounded-lg overflow-hidden ring-1 ring-white/[0.1] hover:ring-accent/50 transition-colors aspect-video bg-black/40"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={src}
+                            alt=""
+                            loading="lazy"
+                            className="w-full h-full object-cover hover:scale-[1.03] transition-transform duration-300"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

@@ -250,9 +250,9 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
           {t("region.instructions" as string)}
         </p>
         <div className="flex gap-2 flex-shrink-0">
-          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">Space</kbd>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">Space</kbd>
           <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("region.play" as string)}</span>
-          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">↵</kbd>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">↵</kbd>
           <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("region.confirm" as string)}</span>
         </div>
       </div>
@@ -269,7 +269,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
           <button
             onClick={() => { videoRef.current?.pause(); }}
             className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium
-                       bg-black/[0.03] text-ink-muted hover:bg-black/[0.06] hover:text-ink
+                       bg-white/[0.04] text-ink-muted hover:bg-white/[0.08] hover:text-ink
                        transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]
                        active:scale-[0.97] cursor-pointer"
           >
@@ -305,8 +305,8 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
                 const v = videoRef.current;
                 if (v) setStartTime(v.currentTime);
               }}
-              className="px-3 py-1.5 text-[11px] font-medium bg-black/[0.04] text-ink-muted rounded-lg
-                         hover:bg-black/[0.08] transition-colors cursor-pointer"
+              className="px-3 py-1.5 text-[11px] font-medium bg-white/[0.05] text-ink-muted rounded-lg
+                         hover:bg-white/[0.11] transition-colors cursor-pointer"
             >
               {t("region.useCurrentTime" as string)}
             </button>
@@ -320,7 +320,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
                 setStartTime(isNaN(v) || v <= 0 ? null : v);
               }}
               placeholder="0"
-              className="w-20 px-2 py-1.5 text-[12px] font-mono text-ink bg-black/[0.03] border border-black/[0.08]
+              className="w-20 px-2 py-1.5 text-[12px] font-mono text-ink bg-white/[0.04] border border-white/[0.10]
                          rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/50"
             />
             <span className="text-[11px] text-ink-light">{t("region.seconds" as string)}</span>

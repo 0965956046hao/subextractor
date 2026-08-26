@@ -601,7 +601,10 @@ def _render_preview_image(
         style.get("bold"),
         style.get("italic"),
     )
-    overlay = _render_subtitle(sample_text, vw, vh, font_path, style, fixed_size=True)
+    # fixed_size=False để preview co-chữ-vừa-khung GIỐNG HỆT bước hardcode thật
+    # (trước đây fixed_size=True làm dòng dài/video dọc hiện chữ to tràn khung
+    # trong preview nhưng bị shrink ở video cuối → kéo xong bị lệch vị trí).
+    overlay = _render_subtitle(sample_text, vw, vh, font_path, style)
 
     if overlay_only:
         import numpy as np

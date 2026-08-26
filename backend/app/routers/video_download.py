@@ -111,7 +111,13 @@ def _download_and_register(url: str, source: str) -> dict:
     try:
         (video_dir / "meta.json").write_text(
             json.dumps(
-                {"filename": filename, "source": source, "source_url": url, "title": title},
+                {
+                    "filename": filename,
+                    "source": source,
+                    "source_url": url,
+                    "title": title,
+                    "origin": "pipeline",
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",

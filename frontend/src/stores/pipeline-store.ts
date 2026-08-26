@@ -13,6 +13,7 @@ import {
   reportPipelineState,
   getPipelineState,
   reportTimelineAction,
+  getJobStatus,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
 
@@ -216,8 +217,8 @@ export interface ImportedDone {
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
   voice: "BV421_vivn_streaming",
-  muteOriginal: true,
-  originalGainDb: 0,
+  muteOriginal: false,      // giữ âm thanh gốc làm nền
+  originalGainDb: 12,       // giảm -12dB
   multiVoice: false,
   keepOriginalEnabled: false,
 };
@@ -275,6 +276,9 @@ interface PipelineState {
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
   hydrate: (pipelines: Pipeline[]) => void;
+  /** Merge finished pipelines (done/error) from a backend snapshot without
+   *  touching running/queued ones that are being tracked live in memory. */
+  hydrateFinished: (list: Pipeline[]) => void;
   resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
   openTimelineCheck: (id: string) => void;
   closeTimelineCheck: (id: string) => void;
@@ -310,7 +314,7 @@ function newPipeline(
   checkVoice = false,
   autoUploadYoutube = false,
   youtubeChannel = "",
-  useFalThumbnail = true,
+  useFalThumbnail = false,
   useGptThumbnail = false,
   srcLang = "",
   translateOn = true,
@@ -403,7 +407,7 @@ export const usePipelineStore = create<PipelineState>()(
         url,
         regionMode = "manual",
         dub = {},
-        autoFit = true,
+        autoFit = false,
         watermark = false,
         watermarkPreset = "",
         removeWatermarkEnabled = false,
@@ -412,7 +416,7 @@ export const usePipelineStore = create<PipelineState>()(
         checkVoice = false,
         autoUploadYoutube = false,
         youtubeChannel = "",
-        useFalThumbnail = true,
+        useFalThumbnail = false,
         useGptThumbnail = false,
         srcLang = "",
         translateOn = true,
@@ -455,9 +459,9 @@ export const usePipelineStore = create<PipelineState>()(
         const p = newPipeline(
           id,
           input.filename,
-          input.regionMode ?? "auto",
+          input.regionMode ?? "manual",
           input.dub ?? {},
-          input.autoFit ?? true,
+          input.autoFit ?? false,
           input.watermark ?? false,
           input.watermarkPreset ?? "",
           input.removeWatermarkEnabled ?? false,
@@ -466,7 +470,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.checkVoice ?? false,
           input.autoUploadYoutube ?? false,
           input.youtubeChannel ?? "",
-          input.useFalThumbnail ?? true,
+          input.useFalThumbnail ?? false,
           input.useGptThumbnail ?? false,
           input.srcLang ?? "zh",
           input.translateOn ?? true,
@@ -756,6 +760,18 @@ export const usePipelineStore = create<PipelineState>()(
         }
       },
       hydrate: (pipelines) => set({ pipelines }),
+      hydrateFinished: (list) =>
+        set((s) => {
+          const ids = new Set(s.pipelines.map((p) => p.id));
+          const vids = new Set(
+            s.pipelines.map((p) => p.videoId).filter(Boolean) as string[],
+          );
+          const add = list.filter(
+            (p) => !ids.has(p.id) && !(p.videoId && vids.has(p.videoId)),
+          );
+          if (add.length === 0) return {};
+          return { pipelines: [...add, ...s.pipelines] };
+        }),
       resolveTimelineCheck: async (id, action) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s || !s.timelineCheck?.waiting) return;
@@ -1052,6 +1068,17 @@ async function pollRemoteVideo(id: string, videoId: string) {
         return;
       }
       if (row.status === "done") {
+        // Batch log nội dung OCR ([00:00 → …] text) được emit ngay trước khi
+        // job chuyển done — poll này là cơ hội cuối để nạp chúng vào panel.
+        const jid = id.startsWith("remote-") ? id.slice("remote-".length) : "";
+        if (jid && jid !== videoId) {
+          try {
+            const st = await getJobStatus(jid);
+            if (st.logs?.length) appendBackendLogs(id, st.logs as LogEntry[]);
+          } catch {
+            /* ignore — job có thể đã bị dọn */
+          }
+        }
         patch(id, {
           status: "done",
           stage: "done",
@@ -1068,6 +1095,9 @@ async function pollRemoteVideo(id: string, videoId: string) {
         return;
       }
       if (row.status === "error") {
+        if (row.logs && Array.isArray(row.logs)) {
+          appendBackendLogs(id, row.logs as LogEntry[]);
+        }
         const stage = stageForJobType(row.job_type, row.phase);
         patch(id, {
           status: "error",
@@ -2401,7 +2431,10 @@ async function runPipeline(id: string, startStep = 4) {
         }
 
         patch(id, { stage: "saving" });
-        appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
+        // Bản dịch đã được backend lưu vào translated/{id}/subtitles_{lang}.srt
+        // ngay ở bước Dịch — bước này chỉ tải nội dung về để đối chiếu + vá
+        // dòng chưa dịch (retranslate tự ghi bản vá lên file trên disk).
+        appendLog(id, "Đã lưu phụ đề dịch — kiểm tra độ phủ với bản gốc...");
         if (!translatedExists || !srtText) {
           const srtRes = await fetch(
             `/api/download/translated/${videoId}?lang=${translateTarget}`,
@@ -2414,9 +2447,9 @@ async function runPipeline(id: string, startStep = 4) {
           srtText = await srtRes.text();
         }
 
-        // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
-        // trong bản gốc mà bản dịch không phủ (dòng bị rơi mất) và dòng chưa
-        // được dịch. Chỉ báo log, không chặn pipeline.
+        // Đối chiếu bản dịch với SRT gốc: phát hiện khoảng thời gian bị rơi
+        // và các dòng còn giữ nguyên bản gốc. Nếu có dòng chưa dịch thì gọi
+        // retranslate tự vá rồi dùng bản đã vá cho các bước sau.
         appendLog(id, "Đối chiếu phụ đề dịch với file gốc...");
         try {
           const cmpRes = await fetch(`/api/srt/${videoId}/compare`, {
@@ -2777,13 +2810,28 @@ async function runPipeline(id: string, startStep = 4) {
       markStepStart(id, 10);
       appendLog(id, "Tạo meta (tiêu đề/mô tả/tags) từ ngữ cảnh...");
       try {
-        const mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
-        const md = await mr.json();
-        if (mr.ok && md.meta) {
+        let md: any = null;
+        let mr: Response | null = null;
+        // Retry khi proxy frontend reset socket (ECONNRESET) trong lúc
+        // Gemini sinh meta chạy lâu. Tối đa 3 lần, nghỉ 1.5s giữa các lần.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
+            md = await mr.json();
+            if (mr.ok) break;
+          } catch {
+            md = null;
+          }
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+        }
+        if (mr?.ok && md?.meta) {
           patch(id, { meta: md.meta });
           appendLog(id, `Meta: ${md.meta.title || "(không có tiêu đề)"}`);
         } else {
-          appendLog(id, `Không tạo được meta: ${md.detail || "lỗi"}`);
+          appendLog(
+            id,
+            `Không tạo được meta: ${md?.detail || "lỗi mạng/timeout"}`
+          );
         }
       } catch {
         appendLog(id, "Bỏ qua tạo meta (lỗi).");

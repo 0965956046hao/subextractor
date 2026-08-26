@@ -49,7 +49,7 @@ export default function PreviewModal({
                 </p>
                 <button
                   onClick={onClose}
-                  className="w-8 h-8 rounded-lg bg-black/[0.04] text-ink-muted flex items-center justify-center hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+                  className="icon-btn"
                 >
                   <svg
                     className="w-4 h-4"
@@ -71,7 +71,7 @@ export default function PreviewModal({
                   <p className="text-[11px] font-medium text-ink-muted mb-2">
                     Thumbnail
                   </p>
-                  <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] min-h-[200px]">
+                  <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-white/[0.09] min-h-[200px]">
                     {thumbnail ? (
                       <img
                         src={thumbnail}
@@ -91,7 +91,7 @@ export default function PreviewModal({
                     <p className="text-[11px] font-medium text-ink-muted mb-2">
                       Video
                     </p>
-                    <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] min-h-[200px]">
+                    <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-white/[0.09] min-h-[200px]">
                       {videoUrl ? (
                         // eslint-disable-next-line jsx-a11y/media-has-caption
                         <video
@@ -111,7 +111,7 @@ export default function PreviewModal({
                       <p className="text-[11px] font-medium text-ink-muted mb-2">
                         Audio
                       </p>
-                      <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] min-h-[120px]">
+                      <div className="flex-1 rounded-xl overflow-hidden bg-black ring-1 ring-white/[0.09] min-h-[120px]">
                         {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                         <video
                           src={audioUrl}
@@ -133,7 +133,7 @@ export default function PreviewModal({
                     {bigThumbs.map((src, i) => (
                       <div
                         key={i}
-                        className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.06] aspect-video cursor-zoom-in"
+                        className="rounded-xl overflow-hidden bg-black ring-1 ring-white/[0.09] aspect-video cursor-zoom-in"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img

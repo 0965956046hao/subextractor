@@ -487,14 +487,14 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
 
           <div className="flex gap-2 flex-wrap">
             {/* Translate */}
-            {/* <select value={transSrcLang} onChange={(e) => setTransSrcLang(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink cursor-pointer">
+            {/* <select value={transSrcLang} onChange={(e) => setTransSrcLang(e.target.value)} className="input-field !py-1.5 !text-[12px] cursor-pointer">
               <option value="zh">Trung</option>
               <option value="en">Anh</option>
               <option value="ja">Nhật</option>
               <option value="ko">Hàn</option>
             </select>
             <span className="text-[12px] text-ink-light">→</span>
-            <select value={transDstLang} onChange={(e) => setTransDstLang(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink cursor-pointer">
+            <select value={transDstLang} onChange={(e) => setTransDstLang(e.target.value)} className="input-field !py-1.5 !text-[12px] cursor-pointer">
               <option value="vi">Việt</option>
               <option value="en">Anh</option>
               <option value="zh">Trung</option>
@@ -502,13 +502,13 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
             <button
               onClick={() => runToolJob("translate")}
               disabled={!!toolJob && toolJob.status !== "done" && toolJob.status !== "error"}
-              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-violet-500/10 text-violet-700 ring-1 ring-violet-500/20 hover:bg-violet-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 rounded-full text-[11px] font-medium tracking-tight bg-violet-500/10 text-violet-300 ring-1 ring-violet-500/20 hover:bg-violet-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Dịch (Gemini)
             </button>
 
             <span className="text-[11px] text-ink-light ml-1">Giọng:</span>
-            <select value={ttsVoice} onChange={(e) => setTtsVoice(e.target.value)} className="rounded-lg border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] text-ink cursor-pointer">
+            <select value={ttsVoice} onChange={(e) => setTtsVoice(e.target.value)} className="input-field !py-1.5 !text-[12px] cursor-pointer">
               <option value="vi-VN-Standard-A">Nữ A</option>
               <option value="vi-VN-Standard-B">Nam B</option>
               <option value="vi-VN-Standard-C">Nữ C</option>
@@ -532,7 +532,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   e.target.value = "";
                 }}
                 defaultValue=""
-                className="rounded-lg border border-indigo-500/20 bg-indigo-500/[0.06] px-2 py-1.5 text-[12px] text-indigo-700 cursor-pointer"
+                className="input-field !py-1.5 !text-[12px] cursor-pointer"
               >
                 <option value="" disabled>📂 Tải file SRT...</option>
                 {availableSrtFiles.map((f) => (
@@ -549,7 +549,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   e.target.value = "";
                 }}
                 defaultValue=""
-                className="rounded-lg border border-cyan-500/20 bg-cyan-500/[0.06] px-2 py-1.5 text-[12px] text-cyan-700 cursor-pointer"
+                className="input-field !py-1.5 !text-[12px] cursor-pointer"
               >
                 <option value="" disabled>🎙️ TTS...</option>
                 {availableTtsFiles.map((f) => (
@@ -627,7 +627,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   <span className="text-[12px] font-medium text-ink-muted flex-1">
                     {toolJob.type === "translate" ? t("transcript.translating" as string) : t("transcript.synthesizingVoice" as string)}
                   </span>
-                  <div className="w-32 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+                  <div className="w-32 h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
                     <div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400" style={{ width: `${Math.max(3, toolJob.progress)}%` }} />
                   </div>
                   <span className="text-[10px] font-mono text-ink-light tabular-nums w-8 text-right">{toolJob.progress}%</span>
@@ -665,14 +665,14 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               </button>
               <button
                 onClick={handleApplySrt}
-                className="px-4 py-2 rounded-full text-[12px] font-medium tracking-tight bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/20 transition-colors cursor-pointer"
+                className="btn-island-secondary btn-sm chip-active"
               >
                 {t("transcript.applySrt" as string)}
               </button>
               <a
                 href={getTranslatedDownloadUrl(videoId)}
                 download
-                className="px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+                className="btn-island-secondary btn-sm"
               >
                 {t("transcript.downloadVnSrt" as string)}
               </a>
@@ -773,7 +773,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
               <button
                 onClick={togglePlay}
                 aria-label={playing ? t("transcript.pause" as string) : t("transcript.play" as string)}
-                className="w-9 h-9 rounded-full bg-accent text-white flex items-center justify-center hover:bg-accent shadow-sm active:scale-[0.95] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer flex-shrink-0"
+                className="icon-btn !bg-accent !text-white hover:!bg-accent-light"
               >
                 {playing ? (
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
@@ -811,7 +811,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                   className={`w-full text-left rounded-xl px-3 py-2 transition-all duration-200 cursor-pointer group
                     ${i === activeIndex
                       ? "bg-accent-muted ring-1 ring-accent/20"
-                      : "hover:bg-black/[0.03] ring-1 ring-transparent"}`}
+                      : "hover:bg-white/[0.04] ring-1 ring-transparent"}`}
                 >
                   <div className="flex items-baseline gap-2">
                     <span className={`text-[10px] font-mono tabular-nums tracking-tight flex-shrink-0 ${i === activeIndex ? "text-accent" : "text-ink-light"}`}>
@@ -850,7 +850,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     setShowSettings(false);
                     setSettingsStatus("");
                   }}
-                  className="w-6 h-6 rounded-full bg-black/[0.04] flex items-center justify-center hover:bg-black/[0.08] transition-all duration-300 cursor-pointer"
+                  className="w-6 h-6 rounded-full bg-white/[0.05] flex items-center justify-center hover:bg-white/[0.11] transition-all duration-300 cursor-pointer"
                 >
                   <svg className="w-3.5 h-3.5 text-ink-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
                     <line x1="18" y1="6" x2="6" y2="18" />
@@ -868,7 +868,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     value={settingsGeminiKey}
                     onChange={(e) => setSettingsGeminiKey(e.target.value)}
                     placeholder="AIzaSy..."
-                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/15"
+                    className="w-full rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/30"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     {t("transcript.settings.getAt" as string)}{" "}
@@ -886,7 +886,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     onChange={(e) => setSettingsTtsJson(e.target.value)}
                     placeholder='{"type": "service_account", "project_id": "..."}'
                     rows={4}
-                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-accent/15"
+                    className="w-full rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2 text-[11px] text-ink font-mono resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     {t("transcript.settings.ttsHowto" as string)}
@@ -901,7 +901,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                     value={settingsFalKey}
                     onChange={(e) => setSettingsFalKey(e.target.value)}
                     placeholder={t("transcript.settings.falPlaceholder" as string)}
-                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/15"
+                    className="w-full rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/30"
                   />
                   <p className="text-[9px] text-ink-light mt-1">
                     {t("transcript.settings.getAt" as string)}{" "}
@@ -929,7 +929,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
                       setShowSettings(false);
                       setSettingsStatus("");
                     }}
-                    className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-black/[0.04] transition-all duration-300 cursor-pointer active:scale-[0.97]"
+                    className="px-4 py-1.5 rounded-full text-[11px] font-medium text-ink-muted hover:bg-white/[0.05] transition-all duration-300 cursor-pointer active:scale-[0.97]"
                   >
                     {t("transcript.settings.close" as string)}
                   </button>
@@ -947,7 +947,7 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
       )}
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-ink/90 text-white text-xs font-medium shadow-lg" style={{ animation: "fade-in 0.2s ease forwards" }}>
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-surface ring-1 ring-white/[0.12] text-ink text-xs font-medium shadow-lg backdrop-blur" style={{ animation: "fade-in 0.2s ease forwards" }}>
           {toast}
         </div>
       )}

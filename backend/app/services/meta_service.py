@@ -85,11 +85,12 @@ def generate_video_meta(video_id: str) -> dict:
         share_text=share_text or "Không có",
     )
 
-    response = client.models.generate_content(
-        model=settings.gemini_model,
-        contents=prompt,
-        config={"temperature": 0.3},
-    )
+    # Dùng Chat API thay vì Models.generate_content: tránh cảnh báo AFC
+    # (automatic function calling) của SDK và chỉ thực hiện 1 lượt truy vấn
+    # thay vì nhiều round-trip (tối đa 10) → nhanh hơn, không làm proxy
+    # frontend reset socket (ECONNRESET) khi meta generation chạy lâu.
+    chat = client.chats.create(model=settings.gemini_model)
+    response = chat.send_message(prompt, config={"temperature": 0.3})
     raw = response.text.strip()
     raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     meta = json.loads(raw)

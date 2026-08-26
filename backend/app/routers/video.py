@@ -36,6 +36,30 @@ def _meta_filename(video_id: str) -> str | None:
         return None
 
 
+def _meta_origin(video_id: str) -> str:
+    """Library bucket: "extract" (manual OCR upload) or "pipeline" (auto import).
+    Legacy videos without an explicit origin are inferred from import markers
+    (source_merge_id / source_url / source); everything else defaults to extract."""
+    meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+    if not meta_path.exists():
+        return "extract"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "extract"
+    origin = meta.get("origin")
+    if origin in ("extract", "pipeline"):
+        return origin
+    if (
+        meta.get("source_merge_id")
+        or meta.get("source_url")
+        or meta.get("source")
+        or meta.get("title")
+    ):
+        return "pipeline"
+    return "extract"
+
+
 def _srt_exists(video_id: str) -> bool:
     return (settings.temp_dir / "srt" / video_id / "subtitles.srt").exists()
 
@@ -79,6 +103,7 @@ async def list_videos(
             "progress": job.get("progress", 0),
             "phase": job.get("phase", ""),
             "job_type": job.get("job_type", ""),
+            "origin": _meta_origin(video_id),
             "job_id": job_id,
             "error": job.get("error") if status == "error" else None,
             "logs": job.get("logs", []),
@@ -124,6 +149,7 @@ async def list_videos(
                     "progress": ps.get("progress", 0),
                     "phase": ps.get("stage", ""),
                     "job_type": "pipeline",
+                    "origin": _meta_origin(video_id),
                     "job_id": None,
                     "error": None,
                     "logs": [],
@@ -148,6 +174,7 @@ async def list_videos(
                     srt_path.stat().st_mtime, tz=timezone.utc
                 ).isoformat(),
                 "status": "done",
+                "origin": _meta_origin(video_id),
             }
             if ps:
                 # AutoPipeline finished with an error → surface it as error so
@@ -182,6 +209,7 @@ async def list_videos(
                     vdir.stat().st_mtime, tz=timezone.utc
                 ).isoformat(),
                 "status": "uploaded",
+                "origin": _meta_origin(video_id),
             })
 
     return {"videos": videos}
@@ -372,6 +400,56 @@ async def clear_temp(jobs: dict = Depends(get_jobs), pipeline_states: dict = Dep
     return {"cleared": True, "subdirs_wiped": removed}
 
 
+_playback_audio_cache: dict[str, bool] = {}
+
+
+def _file_has_audio(path: Path) -> bool:
+    """ffprobe xem file có audio stream không (không probe được → coi như có)."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a",
+                "-show_entries", "stream=index", "-of", "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+        return bool(proc.stdout.strip())
+    except Exception:
+        return True
+
+
+def _get_playback_path(video_id: str) -> Path:
+    """Path dùng cho PLAYBACK (preview / check popup).
+
+    Bản làm việc videos/{id}/video.mp4 được import từ {merge_id}_video.mp4 —
+    CHỈ CÓ HÌNH (tối ưu cho OCR). Khi thiếu audio stream, phục vụ thay thế
+    bản đầy đủ merged/{source_merge_id}.mp4 để preview kiểm tra sub có tiếng.
+    """
+    p = _get_video_path(video_id)
+    cached = _playback_audio_cache.get(video_id)
+    if cached is None:
+        cached = _file_has_audio(p)
+        _playback_audio_cache[video_id] = cached
+    if cached:
+        return p
+    try:
+        meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return p
+    mid = meta.get("source_merge_id")
+    if not mid:
+        return p
+    full = settings.temp_dir / "merged" / f"{mid}.mp4"
+    if full.exists() and _file_has_audio(full):
+        return full
+    return p
+
+
 def _get_video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():
@@ -461,7 +539,7 @@ async def get_video_compat(
     duration: float | None = Query(None, description="Duration in seconds — first N seconds of the video"),
 ):
     """Legacy endpoint — auto-detect video file by video_id."""
-    video_path = _get_video_path(video_id)
+    video_path = _get_playback_path(video_id)
 
     if duration and duration > 0:
         trim_dir = settings.temp_dir / "trimmed" / video_id
