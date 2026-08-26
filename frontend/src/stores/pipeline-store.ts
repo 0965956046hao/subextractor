@@ -263,7 +263,11 @@ interface PipelineState {
   openVoiceCheck: (id: string) => void;
   closeVoiceCheck: (id: string) => void;
   confirmWatermarkRegions: (id: string, regions: Region[]) => void;
-  confirmThumbnailReview: (id: string, action: "accept" | "skip", extraInstructions?: string) => void;
+  confirmThumbnailReview: (
+    id: string,
+    action: "accept" | "skip",
+    extraInstructions?: string,
+  ) => void;
   resolveThumbnailFallback: (id: string, choice: "fal" | "skip") => void;
   restorePaused: () => void;
 }
@@ -654,7 +658,12 @@ export const usePipelineStore = create<PipelineState>()(
           set((st) => ({
             pipelines: st.pipelines.map((p) =>
               p.id === id
-                ? { ...p, updatedThumbnailUrl: null, thumbnailReview: null, stage: "thumbnail" }
+                ? {
+                    ...p,
+                    updatedThumbnailUrl: null,
+                    thumbnailReview: null,
+                    stage: "thumbnail",
+                  }
                 : p,
             ),
           }));
@@ -911,7 +920,8 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
       if (fails >= 10) {
         return {
           status: "error",
-          error: "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+          error:
+            "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
         };
       }
     }
@@ -941,7 +951,8 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
       if (fails >= 10) {
         return {
           status: "error",
-          error: "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+          error:
+            "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
         };
       }
     }
@@ -1143,7 +1154,10 @@ const watermarkRegionWaiters = new Map<
 >();
 const thumbnailReviewWaiters = new Map<
   string,
-  { resolve: (result: { action: "accept" | "skip"; extra?: string }) => void; reject: () => void }
+  {
+    resolve: (result: { action: "accept" | "skip"; extra?: string }) => void;
+    reject: () => void;
+  }
 >();
 const thumbnailFallbackWaiters = new Map<
   string,
@@ -1226,10 +1240,14 @@ function rejectWatermarkRegion(id: string) {
   }
 }
 
-function waitForThumbnailReview(id: string): Promise<{ action: "accept" | "skip"; extra?: string }> {
-  return new Promise<{ action: "accept" | "skip"; extra?: string }>((resolve, reject) => {
-    thumbnailReviewWaiters.set(id, { resolve, reject });
-  });
+function waitForThumbnailReview(
+  id: string,
+): Promise<{ action: "accept" | "skip"; extra?: string }> {
+  return new Promise<{ action: "accept" | "skip"; extra?: string }>(
+    (resolve, reject) => {
+      thumbnailReviewWaiters.set(id, { resolve, reject });
+    },
+  );
 }
 
 function rejectThumbnailReview(id: string) {
@@ -1378,7 +1396,10 @@ async function ensureVoiceMap(
     const vmData = await vmCheck.json();
     if (vmData.exists) {
       voiceMapEnsuredIds.add(videoId);
-      appendLog(id, `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`);
+      appendLog(
+        id,
+        `voice_map.json đã có sẵn (${vmData.voices} dòng có giọng riêng).`,
+      );
       return true;
     }
     appendLog(
@@ -1569,7 +1590,10 @@ async function runPrep(id: string, startStep = 0) {
         });
         const yd = await yr.json();
         if (!yr.ok) {
-          appendLog(id, `YouTube import HTTP ${yr.status}: ${yd.detail || "lỗi"}`);
+          appendLog(
+            id,
+            `YouTube import HTTP ${yr.status}: ${yd.detail || "lỗi"}`,
+          );
           throw new Error(yd.detail || "Không thể tải video YouTube");
         }
         videoId = yd.video_id;
@@ -1964,10 +1988,15 @@ async function runPipeline(id: string, startStep = 4) {
         } catch {
           const text = await pr.text().catch(() => "");
           appendLog(id, `OCR HTTP ${pr.status}: ${text.slice(0, 500)}`);
-          throw new Error(`OCR server error ${pr.status}: ${text.slice(0, 200)}`);
+          throw new Error(
+            `OCR server error ${pr.status}: ${text.slice(0, 200)}`,
+          );
         }
         if (!pr.ok) {
-          appendLog(id, `OCR HTTP ${pr.status}: ${(pd as any).detail || "lỗi"}`);
+          appendLog(
+            id,
+            `OCR HTTP ${pr.status}: ${(pd as any).detail || "lỗi"}`,
+          );
           throw new Error((pd as any).detail || "Không thể bắt đầu OCR");
         }
         const jobId = (pd as any).job_id as string;
@@ -1993,7 +2022,7 @@ async function runPipeline(id: string, startStep = 4) {
       // Send Telegram Mini App button for watermark selection
       if (videoId) {
         try {
-          const videoUrl = `https://aaron-qualifying-tiny-extends.trycloudflare.com/api/video/${videoId}/video.mp4?duration=10`;
+          const videoUrl = `https://precisely-player-trackbacks-amplifier.trycloudflare.com/api/video/${videoId}/video.mp4?duration=10`;
           const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
             method: "POST",
             headers: JSON_HEADERS,
@@ -2012,14 +2041,13 @@ async function runPipeline(id: string, startStep = 4) {
 
       const wmRegions = await waitForWatermarkRegion(id);
       patch(id, { removeWatermarkRegions: wmRegions });
-      appendLog(
-        id,
-        `Đã chọn ${wmRegions.length} vùng watermark`,
-      );
+      appendLog(id, `Đã chọn ${wmRegions.length} vùng watermark`);
     }
 
     // Re-read from store after patch to get updated removeWatermarkRegions
-    const curAfterWm = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    const curAfterWm = usePipelineStore
+      .getState()
+      .pipelines.find((x) => x.id === id);
     const wmRegionsNow = curAfterWm?.removeWatermarkRegions ?? [];
 
     // 3.6 Delogo (remove watermark) — sau OCR
@@ -2034,7 +2062,10 @@ async function runPipeline(id: string, startStep = 4) {
           if (statusData.exists && statusData.valid) {
             skipDelogo = true;
             appendLog(id, "Delogo.mp4 đã tồn tại — bỏ qua bước xoá watermark.");
-            patch(id, { progress: 100, stepProgress: stepProgressFor("processing", 100) });
+            patch(id, {
+              progress: 100,
+              stepProgress: stepProgressFor("processing", 100),
+            });
           }
         }
       } catch {
@@ -2086,8 +2117,14 @@ async function runPipeline(id: string, startStep = 4) {
                       appendLog(id, `[delogo] ${evt.message}`);
                     } else if (evt.type === "progress") {
                       // Update pipeline progress AND step progress for delogo
-                      const newStepProgress = stepProgressFor("processing", evt.pct);
-                      patch(id, { progress: evt.pct, stepProgress: newStepProgress });
+                      const newStepProgress = stepProgressFor(
+                        "processing",
+                        evt.pct,
+                      );
+                      patch(id, {
+                        progress: evt.pct,
+                        stepProgress: newStepProgress,
+                      });
                     } else if (evt.type === "error") {
                       appendLog(id, `[delogo] ERROR: ${evt.message}`);
                       delogoFailed = true;
@@ -2099,7 +2136,10 @@ async function runPipeline(id: string, startStep = 4) {
                         id,
                         `[delogo] Xoá watermark xong${elapsed} — output: ${evt.path} (${((evt.output_size || 0) / 1024 / 1024).toFixed(1)} MB)`,
                       );
-                      patch(id, { progress: 100, stepProgress: stepProgressFor("processing", 100) });
+                      patch(id, {
+                        progress: 100,
+                        stepProgress: stepProgressFor("processing", 100),
+                      });
                       delogoDone = true;
                     }
                   } catch {
@@ -2121,7 +2161,10 @@ async function runPipeline(id: string, startStep = 4) {
       // Nếu delogo thất bại → dừng pipeline (OCR đã chạy xong).
       if (delogoFailed) {
         patch(id, { status: "error", stage: "error" });
-        appendLog(id, "Xoá watermark thất bại — dừng pipeline. Vui lòng chọn lại vùng và thử lại.");
+        appendLog(
+          id,
+          "Xoá watermark thất bại — dừng pipeline. Vui lòng chọn lại vùng và thử lại.",
+        );
         return;
       }
 
@@ -2367,7 +2410,9 @@ async function runPipeline(id: string, startStep = 4) {
                 }),
               });
               appendLog(id, "Đã gửi nút Mini App kiểm tra sub qua Telegram.");
-            } catch { /* ignore */ }
+            } catch {
+              /* ignore */
+            }
             appendLog(
               id,
               issues.length > 0
@@ -2512,7 +2557,9 @@ async function runPipeline(id: string, startStep = 4) {
             }),
           });
           appendLog(id, "Đã gửi nút Mini App kiểm tra voice qua Telegram.");
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
         try {
           const voiceAbort = new AbortController();
           await Promise.race([
@@ -2550,7 +2597,10 @@ async function runPipeline(id: string, startStep = 4) {
         markStepSkipped(id, 8);
       } else {
         if (hardcodedExists) {
-          appendLog(id, "Đã có phụ đề cứng nhưng bật watermark — encode lại để chèn watermark.");
+          appendLog(
+            id,
+            "Đã có phụ đề cứng nhưng bật watermark — encode lại để chèn watermark.",
+          );
         }
         appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
         const hr = await fetch(`/api/hardcode/${videoId}`, {
@@ -2686,10 +2736,7 @@ async function runPipeline(id: string, startStep = 4) {
             loginNeeded = true;
           } else {
             gptNoImage = true;
-            appendLog(
-              id,
-              `ChatGPT không trả về ảnh: ${d.detail || "lỗi"}`,
-            );
+            appendLog(id, `ChatGPT không trả về ảnh: ${d.detail || "lỗi"}`);
           }
         } catch (e) {
           gptNoImage = true;
@@ -2700,7 +2747,11 @@ async function runPipeline(id: string, startStep = 4) {
         }
 
         if (loginNeeded) {
-          patch(id, { needChatgptLogin: true, status: "error", stage: "thumbnail" });
+          patch(id, {
+            needChatgptLogin: true,
+            status: "error",
+            stage: "thumbnail",
+          });
           appendLog(
             id,
             `Cần đăng nhập ChatGPT: Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại.`,
@@ -2713,7 +2764,10 @@ async function runPipeline(id: string, startStep = 4) {
         if (gptNoImage) {
           // ChatGPT không trả ảnh → cho user chọn: đổi qua fal.ai hoặc bỏ qua.
           patch(id, { thumbnailFallback: { waiting: true }, resumeStep: 10 });
-          appendLog(id, "ChatGPT không tạo được ảnh — chọn đổi qua fal.ai hoặc bỏ qua.");
+          appendLog(
+            id,
+            "ChatGPT không tạo được ảnh — chọn đổi qua fal.ai hoặc bỏ qua.",
+          );
           const choice = await waitForThumbnailFallback(id);
           if (choice === "skip") {
             appendLog(id, "Bỏ qua cập nhật thumbnail.");
@@ -2737,7 +2791,11 @@ async function runPipeline(id: string, startStep = 4) {
           // Pause for user review
           patch(id, {
             stage: "thumbnail_review",
-            thumbnailReview: { waiting: true, imageUrl: thumbUrl, extraInstructions: "" },
+            thumbnailReview: {
+              waiting: true,
+              imageUrl: thumbUrl,
+              extraInstructions: "",
+            },
             resumeStep: 10,
           });
           appendLog(id, "Duyệt thumbnail: Chấp nhận hoặc Tạo lại...");
@@ -2750,9 +2808,16 @@ async function runPipeline(id: string, startStep = 4) {
             // Regenerate with extra instructions — loop back
             patch(id, {
               stage: "thumbnail",
-              thumbnailReview: { waiting: false, imageUrl: null, extraInstructions: reviewResult.extra },
+              thumbnailReview: {
+                waiting: false,
+                imageUrl: null,
+                extraInstructions: reviewResult.extra,
+              },
             });
-            appendLog(id, `Tạo lại thumbnail với hướng dẫn: ${reviewResult.extra}`);
+            appendLog(
+              id,
+              `Tạo lại thumbnail với hướng dẫn: ${reviewResult.extra}`,
+            );
             // Re-run step 10 from the top (will use the extra_instructions in the body)
             markStepEnd(id, 10);
             // Use setTimeout to avoid deep recursion; enqueue will pick up from step 10
@@ -2776,7 +2841,6 @@ async function runPipeline(id: string, startStep = 4) {
 
     await Promise.all([doMeta(), doThumbnail()]);
     if (abortAfterThumbnail) return;
-
 
     // 11. Upload YouTube (chỉ khi bật auto upload)
     if (startStep <= 11) {
