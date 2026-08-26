@@ -1630,6 +1630,43 @@ async def run_telegram_auto_job(
         else:
             await _tg_send(chat_id, f"⚠️ Nhúng phụ đề thất bại: {jobs[hc_job_id].get('error', 'unknown')}")
 
+        # ── Step 8: Thumbnail (FAL / ChatGPT) ──
+        thumb_mode = job.get("thumbnail") or "none"
+        if thumb_mode != "none":
+            job["phase"] = "thumbnail"
+            thumb_png = settings.temp_dir / "thumb" / video_id / "thumbnail.png"
+            try:
+                if thumb_mode == "fal":
+                    await _tg_send(chat_id, "🖼️ Đang tạo thumbnail bằng FAL...")
+                    from app.services.fal_service import update_thumbnail
+                    await loop.run_in_executor(_context_executor, update_thumbnail, video_id)
+                elif thumb_mode == "gpt":
+                    await _tg_send(chat_id, "🖼️ Đang tạo thumbnail bằng ChatGPT...")
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=600) as client:
+                        resp = await client.post(
+                            f"{settings.frontend_url.rstrip('/')}/api/chatgpt-thumbnail",
+                            json={"video_id": video_id},
+                        )
+                        data = resp.json()
+                        if resp.status_code != 200 or data.get("status") == "need_login":
+                            raise RuntimeError(
+                                data.get("detail") or f"HTTP {resp.status_code}"
+                            )
+
+                # Gửi ảnh thumbnail đã tạo cho user xem.
+                if thumb_png.exists():
+                    from app.services.telegram_service import telegram_service
+                    sent = await telegram_service.send_photo(
+                        chat_id, str(thumb_png), "🖼️ <b>Thumbnail đã tạo</b>"
+                    )
+                    if not sent:
+                        await _tg_send(chat_id, "🖼️ Thumbnail đã tạo xong.")
+                else:
+                    await _tg_send(chat_id, "⚠️ Không tìm thấy file thumbnail.")
+            except Exception as e:
+                await _tg_send(chat_id, f"⚠️ Tạo thumbnail thất bại: {str(e)[:150]}")
+
         # ── Done ──
         job["status"] = "done"
         job["progress"] = 100
