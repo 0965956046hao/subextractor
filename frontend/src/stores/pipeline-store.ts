@@ -2022,7 +2022,7 @@ async function runPipeline(id: string, startStep = 4) {
       // Send Telegram Mini App button for watermark selection
       if (videoId) {
         try {
-          const videoUrl = `https://precisely-player-trackbacks-amplifier.trycloudflare.com/api/video/${videoId}/video.mp4?duration=10`;
+          const videoUrl = `https://zjzmt-203-205-28-227.free.pinggy.net/api/video/${videoId}/video.mp4?duration=10`;
           const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
             method: "POST",
             headers: JSON_HEADERS,
