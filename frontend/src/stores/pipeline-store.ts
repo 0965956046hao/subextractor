@@ -206,8 +206,8 @@ export interface ImportedDone {
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
   voice: "BV421_vivn_streaming",
-  muteOriginal: true,
-  originalGainDb: 0,
+  muteOriginal: false,      // giữ âm thanh gốc làm nền
+  originalGainDb: 12,       // giảm -12dB
   multiVoice: false,
 };
 
@@ -297,7 +297,7 @@ function newPipeline(
   checkVoice = false,
   autoUploadYoutube = false,
   youtubeChannel = "",
-  useFalThumbnail = true,
+  useFalThumbnail = false,
   useGptThumbnail = false,
   srcLang = "",
   translateOn = true,
@@ -388,7 +388,7 @@ export const usePipelineStore = create<PipelineState>()(
         url,
         regionMode = "manual",
         dub = {},
-        autoFit = true,
+        autoFit = false,
         watermark = false,
         watermarkPreset = "",
         removeWatermarkEnabled = false,
@@ -397,7 +397,7 @@ export const usePipelineStore = create<PipelineState>()(
         checkVoice = false,
         autoUploadYoutube = false,
         youtubeChannel = "",
-        useFalThumbnail = true,
+        useFalThumbnail = false,
         useGptThumbnail = false,
         srcLang = "",
         translateOn = true,
@@ -440,9 +440,9 @@ export const usePipelineStore = create<PipelineState>()(
         const p = newPipeline(
           id,
           input.filename,
-          input.regionMode ?? "auto",
+          input.regionMode ?? "manual",
           input.dub ?? {},
-          input.autoFit ?? true,
+          input.autoFit ?? false,
           input.watermark ?? false,
           input.watermarkPreset ?? "",
           input.removeWatermarkEnabled ?? false,
@@ -451,7 +451,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.checkVoice ?? false,
           false,
           input.youtubeChannel ?? "",
-          input.useFalThumbnail ?? true,
+          input.useFalThumbnail ?? false,
           input.useGptThumbnail ?? false,
           input.srcLang ?? "zh",
           input.translateOn ?? true,
@@ -2326,7 +2326,10 @@ async function runPipeline(id: string, startStep = 4) {
         }
 
         patch(id, { stage: "saving" });
-        appendLog(id, "Ghi đè phụ đề dịch lên file SRT hiện tại...");
+        // Bản dịch đã được backend lưu vào translated/{id}/subtitles_{lang}.srt
+        // ngay ở bước Dịch — bước này chỉ tải nội dung về để đối chiếu + vá
+        // dòng chưa dịch (retranslate tự ghi bản vá lên file trên disk).
+        appendLog(id, "Đã lưu phụ đề dịch — kiểm tra độ phủ với bản gốc...");
         if (!translatedExists || !srtText) {
           const srtRes = await fetch(
             `/api/download/translated/${videoId}?lang=${translateTarget}`,
@@ -2339,9 +2342,9 @@ async function runPipeline(id: string, startStep = 4) {
           srtText = await srtRes.text();
         }
 
-        // Đối chiếu với file gốc TRƯỚC khi ghi đè: phát hiện khoảng thời gian
-        // trong bản gốc mà bản dịch không phủ (dòng bị rơi mất) và dòng chưa
-        // được dịch. Chỉ báo log, không chặn pipeline.
+        // Đối chiếu bản dịch với SRT gốc: phát hiện khoảng thời gian bị rơi
+        // và các dòng còn giữ nguyên bản gốc. Nếu có dòng chưa dịch thì gọi
+        // retranslate tự vá rồi dùng bản đã vá cho các bước sau.
         appendLog(id, "Đối chiếu phụ đề dịch với file gốc...");
         try {
           const cmpRes = await fetch(`/api/srt/${videoId}/compare`, {

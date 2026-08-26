@@ -262,11 +262,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     "douyin",
   );
   const [srcLang, setSrcLang] = useState<"zh" | "en" | "vi">("zh");
-  const [translateOn, setTranslateOn] = useState(false);
+  const [translateOn, setTranslateOn] = useState(true);
   const [translateTarget, setTranslateTarget] = useState<"zh" | "en" | "vi">(
     "vi",
   );
-  const [dubOn, setDubOn] = useState(false);
+  const [dubOn, setDubOn] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploaded, setUploaded] = useState<{
@@ -279,11 +279,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
-  const [muteOriginal, setMuteOriginal] = useState(true);
-  const [originalGainDb, setOriginalGainDb] = useState(6);
+  const [muteOriginal, setMuteOriginal] = useState(false);
+  const [originalGainDb, setOriginalGainDb] = useState(12);
   const [multiVoice, setMultiVoice] = useState(false);
-  const [autoFitSubs, setAutoFitSubs] = useState(true);
-  const [watermarkOn, setWatermarkOn] = useState(false);
+  const [autoFitSubs, setAutoFitSubs] = useState(false);
+  const [watermarkOn, setWatermarkOn] = useState(true);
   const [useFalThumbnail, setUseFalThumbnail] = useState(false);
   const [useGptThumbnail, setUseGptThumbnail] = useState(false);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
