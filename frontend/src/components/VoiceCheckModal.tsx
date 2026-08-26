@@ -452,7 +452,7 @@ export default function VoiceCheckModal({
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-9 h-9 rounded-full bg-violet-500/15 flex items-center justify-center flex-shrink-0">
-                <IconSpeaker className="w-5 h-5 text-violet-600" />
+                <IconSpeaker className="w-5 h-5 text-violet-300" />
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-ink">{t("voice.title" as string)}</p>
@@ -501,7 +501,7 @@ export default function VoiceCheckModal({
               </button>
               <button
                 onClick={onClose}
-                className="w-9 h-9 rounded-full bg-black/[0.04] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.08] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                className="w-9 h-9 rounded-full bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M18 6L6 18" /><path d="M6 6l12 12" />
@@ -631,7 +631,7 @@ export default function VoiceCheckModal({
           {/* Body: video + voice list */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 flex-1">
             {/* Left: video */}
-            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/10 flex flex-col min-h-0">
+            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-white/15 flex flex-col min-h-0">
               <div className="relative w-full flex-1 min-h-0">
                 <video
                   ref={videoRef}
@@ -658,20 +658,20 @@ export default function VoiceCheckModal({
             <div className="flex flex-col min-h-0">
               {/* Bulk voice switch */}
               {uniqueVoices.length > 1 && (
-                <div className="flex items-center gap-2 mb-2 p-2 rounded-lg bg-black/[0.03] ring-1 ring-black/[0.06]">
+                <div className="flex items-center gap-2 mb-2 p-2 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.09]">
                   {/* From voice dropdown — only voices used in this video */}
                   <div className="relative flex-1 min-w-0">
                     <button
                       onClick={() => { setBulkFromOpen(!bulkFromOpen); setBulkToOpen(false); }}
-                      className="w-full text-left text-[11px] font-medium px-2 py-1.5 rounded-md bg-white ring-1 ring-black/[0.08] text-ink cursor-pointer flex items-center justify-between gap-1"
+                      className="w-full text-left text-[11px] font-medium px-2 py-1.5 rounded-md bg-white ring-1 ring-white/[0.11] text-ink cursor-pointer flex items-center justify-between gap-1"
                     >
                       <span className="truncate">{bulkFrom ? uniqueVoices.find((v) => v.voice_type === bulkFrom)?.display_name : t("voice.bulkFrom" as string)}</span>
                       <svg className="w-3 h-3 flex-shrink-0 text-ink-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M6 9l6 6 6-6" /></svg>
                     </button>
                     {bulkFromOpen && (
-                      <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white ring-1 ring-black/10 shadow-lg">
+                      <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white ring-1 ring-white/15 shadow-lg">
                         {uniqueVoices.map((v) => (
-                          <div key={v.voice_type} className="flex items-center gap-1 px-2 py-1 hover:bg-black/[0.04] cursor-pointer">
+                          <div key={v.voice_type} className="flex items-center gap-1 px-2 py-1 hover:bg-white/[0.05] cursor-pointer">
                             <button
                               onClick={(e) => { e.stopPropagation(); setBulkFrom(v.voice_type); setBulkFromOpen(false); }}
                               className="flex-1 text-left text-[11px] text-ink truncate"
@@ -681,7 +681,7 @@ export default function VoiceCheckModal({
                             <button
                               onClick={(e) => { e.stopPropagation(); handleBulkPreview(v.voice_type); }}
                               disabled={bulkPreviewing === v.voice_type}
-                              className="w-5 h-5 rounded flex items-center justify-center text-violet-600 hover:bg-violet-500/10 cursor-pointer disabled:opacity-50 flex-shrink-0"
+                              className="w-5 h-5 rounded flex items-center justify-center text-violet-300 hover:bg-violet-500/10 cursor-pointer disabled:opacity-50 flex-shrink-0"
                             >
                               {bulkPreviewing === v.voice_type ? (
                                 <IconSpinner className="w-3 h-3" />
@@ -701,15 +701,15 @@ export default function VoiceCheckModal({
                   <div className="relative flex-1 min-w-0">
                     <button
                       onClick={() => { setBulkToOpen(!bulkToOpen); setBulkFromOpen(false); }}
-                      className="w-full text-left text-[11px] font-medium px-2 py-1.5 rounded-md bg-white ring-1 ring-black/[0.08] text-ink cursor-pointer flex items-center justify-between gap-1"
+                      className="w-full text-left text-[11px] font-medium px-2 py-1.5 rounded-md bg-white ring-1 ring-white/[0.11] text-ink cursor-pointer flex items-center justify-between gap-1"
                     >
                       <span className="truncate">{bulkTo ? allVoices.find((v) => v.voice_type === bulkTo)?.display_name : t("voice.bulkTo" as string)}</span>
                       <svg className="w-3 h-3 flex-shrink-0 text-ink-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M6 9l6 6 6-6" /></svg>
                     </button>
                     {bulkToOpen && (
-                      <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white ring-1 ring-black/10 shadow-lg">
+                      <div className="absolute z-50 top-full left-0 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white ring-1 ring-white/15 shadow-lg">
                         {allVoices.filter((v) => v.voice_type !== bulkFrom).map((v) => (
-                          <div key={v.voice_type} className="flex items-center gap-1 px-2 py-1 hover:bg-black/[0.04] cursor-pointer">
+                          <div key={v.voice_type} className="flex items-center gap-1 px-2 py-1 hover:bg-white/[0.05] cursor-pointer">
                             <button
                               onClick={(e) => { e.stopPropagation(); setBulkTo(v.voice_type); setBulkToOpen(false); }}
                               className="flex-1 text-left text-[11px] text-ink truncate"
@@ -719,7 +719,7 @@ export default function VoiceCheckModal({
                             <button
                               onClick={(e) => { e.stopPropagation(); handleBulkPreview(v.voice_type); }}
                               disabled={bulkPreviewing === v.voice_type}
-                              className="w-5 h-5 rounded flex items-center justify-center text-violet-600 hover:bg-violet-500/10 cursor-pointer disabled:opacity-50 flex-shrink-0"
+                              className="w-5 h-5 rounded flex items-center justify-center text-violet-300 hover:bg-violet-500/10 cursor-pointer disabled:opacity-50 flex-shrink-0"
                             >
                               {bulkPreviewing === v.voice_type ? (
                                 <IconSpinner className="w-3 h-3" />
@@ -756,7 +756,7 @@ export default function VoiceCheckModal({
                   </p>
                 )}
               </div>
-              <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-black/[0.02] ring-1 ring-black/[0.05] divide-y divide-black/[0.04]">
+              <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] divide-y divide-black/[0.04]">
                 {loading && (
                   <div className="flex items-center justify-center gap-2 p-6 text-[12px] text-ink-muted">
                     <IconSpinner className="w-4 h-4" /> {t("voice.loading" as string)}
@@ -789,11 +789,11 @@ export default function VoiceCheckModal({
                           ? "bg-violet-500/20 ring-1 ring-violet-500/30"
                           : isActive
                             ? "bg-violet-500/10"
-                            : "hover:bg-black/[0.02]"
+                            : "hover:bg-white/[0.03]"
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-700">
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300">
                           #{line.index}
                         </span>
                         <span className="font-mono text-[10px] text-ink-light">
@@ -809,7 +809,7 @@ export default function VoiceCheckModal({
                             disabled={isSwitching}
                             className={`ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 cursor-pointer transition-colors ${
                               expandedIndex === line.index
-                                ? "bg-violet-500/20 text-violet-700 ring-1 ring-violet-500/30"
+                                ? "bg-violet-500/20 text-violet-300 ring-1 ring-violet-500/30"
                                 : "bg-success/15 text-success hover:bg-success/20"
                             }`}
                           >
@@ -855,7 +855,7 @@ export default function VoiceCheckModal({
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); setEditingIndex(null); }}
-                              className="text-[10px] px-2 py-1 rounded-md bg-black/[0.04] text-ink-muted hover:bg-black/[0.08] cursor-pointer"
+                              className="text-[10px] px-2 py-1 rounded-md bg-white/[0.05] text-ink-muted hover:bg-white/[0.11] cursor-pointer"
                             >
                               {t("voice.cancel" as string)}
                             </button>
@@ -870,7 +870,7 @@ export default function VoiceCheckModal({
                               setEditingIndex(line.index);
                               setEditText(line.text);
                             }}
-                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-violet-600 hover:bg-violet-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5"
+                            className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-ink-light hover:text-violet-300 hover:bg-violet-500/10 cursor-pointer transition-all flex-shrink-0 mt-0.5"
                             title={t("voice.editText" as string)}
                           >
                             <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -927,7 +927,7 @@ export default function VoiceCheckModal({
                                 className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium transition-colors ${
                                   isCurrent
                                     ? "bg-violet-600 text-white"
-                                    : "bg-black/[0.04] text-ink-muted hover:bg-violet-500/15 hover:text-violet-700"
+                                    : "bg-white/[0.05] text-ink-muted hover:bg-violet-500/15 hover:text-violet-300"
                                 }`}
                               >
                                 <span>{uv.display_name}</span>
@@ -939,7 +939,7 @@ export default function VoiceCheckModal({
                                   }}
                                   disabled={previewingIndex === line.index}
                                   className={`w-4 h-4 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-50 ${
-                                    isCurrent ? "hover:bg-white/20" : "hover:bg-black/[0.06]"
+                                    isCurrent ? "hover:bg-white/20" : "hover:bg-white/[0.08]"
                                   }`}
                                   title={t("voice.preview" as string)}
                                 >
@@ -960,7 +960,7 @@ export default function VoiceCheckModal({
                                       setExpandedIndex(null);
                                     }}
                                     disabled={isSwitching}
-                                    className="w-4 h-4 rounded-full flex items-center justify-center cursor-pointer hover:bg-black/[0.06] disabled:opacity-50"
+                                    className="w-4 h-4 rounded-full flex items-center justify-center cursor-pointer hover:bg-white/[0.08] disabled:opacity-50"
                                     title={t("voice.selectVoice" as string)}
                                   >
                                     <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
@@ -984,7 +984,7 @@ export default function VoiceCheckModal({
                                 handlePreview(line.index, line.text);
                               }}
                               disabled={previewingIndex === line.index}
-                              className="text-[10px] font-medium text-violet-600 hover:text-violet-500 transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-60"
+                              className="text-[10px] font-medium text-violet-300 hover:text-violet-500 transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-60"
                             >
                               {previewingIndex === line.index ? (
                                 <IconSpinner className="w-3 h-3" />
@@ -1012,7 +1012,7 @@ export default function VoiceCheckModal({
           <div className="flex items-center gap-2 pt-1">
             <button
               onClick={onClose}
-              className="mr-auto px-4 py-2 rounded-full text-[12px] font-medium bg-black/[0.03] ring-1 ring-black/[0.06] text-ink-muted hover:bg-black/[0.06] hover:text-ink transition-colors cursor-pointer"
+              className="mr-auto px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
             >
               {t("voice.close" as string)}
             </button>

@@ -7,25 +7,26 @@ module.exports = {
         sans: ["Outfit", "system-ui", "sans-serif"],
       },
       colors: {
-        paper: "#f7f7f5",
+        paper: "#131316",
         surface: {
-          DEFAULT: "#ffffff",
-          muted: "#f0f0ee",
+          DEFAULT: "#1c1c21",
+          muted: "#24242b",
         },
         ink: {
-          DEFAULT: "#1c1c1a",
-          muted: "#7a7a75",
-          light: "#a8a8a3",
+          DEFAULT: "#ececf1",
+          muted: "#a2a2ae",
+          light: "#70707d",
         },
         glass: {
-          DEFAULT: "rgba(255,255,255,0.82)",
-          stroke: "rgba(0,0,0,0.05)",
-          hover: "rgba(0,0,0,0.025)",
+          DEFAULT: "rgba(19,19,22,0.82)",
+          stroke: "rgba(255,255,255,0.07)",
+          hover: "rgba(255,255,255,0.04)",
         },
+        rail: "#0e0e11",
         accent: {
-          DEFAULT: "#2563eb",
-          light: "#3b82f6",
-          muted: "rgba(37,99,235,0.08)",
+          DEFAULT: "#3b82f6",
+          light: "#60a5fa",
+          muted: "rgba(59,130,246,0.12)",
         },
         danger: {
           DEFAULT: "#dc2626",

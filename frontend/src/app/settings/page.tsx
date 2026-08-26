@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
+import PageHeader from "@/components/layout/PageHeader";
+import CollapsibleSection from "@/components/layout/CollapsibleSection";
 import {
   getAppConfig,
   saveAppConfig,
@@ -103,7 +104,7 @@ function ColorField({
           type="color"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-8 h-8 rounded-lg border border-black/[0.08] bg-white cursor-pointer"
+          className="w-8 h-8 rounded-lg border border-white/[0.09] bg-black/25 cursor-pointer"
         />
         <input
           type="text"
@@ -786,30 +787,12 @@ export default function SettingsPage() {
   };
 
   return (
-    <main className="min-h-[100dvh] max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14 md:py-20">
-      <AnimatedBlock delay={0}>
-        <div className="flex items-center justify-between gap-4 flex-wrap mb-12">
-          <Link
-            href="/"
-            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-          >
-            <span className="btn-island-icon !w-7 !h-7">
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M19 12H5" />
-                <path d="M11 18l-6-6 6-6" />
-              </svg>
-            </span>
-            <span className="tracking-tight">{t("back.library")}</span>
-          </Link>
-          {health && (
+    <div>
+      <PageHeader
+        title={t("settings.title")}
+        description={t("settings.desc")}
+        badge={
+          health ? (
             <span
               className={`tag ${health.healthy ? "!bg-success-muted !text-success" : "!bg-warn-muted !text-warn"}`}
             >
@@ -817,19 +800,23 @@ export default function SettingsPage() {
                 ? t("settings.health.ready")
                 : t("settings.health.needConfig")}
             </span>
-          )}
-        </div>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={100} className="mb-12">
-        <div className="eyebrow mb-5">{t("settings.eyebrow")}</div>
-        <h1 className="text-[clamp(2rem,5vw,3.2rem)] font-semibold tracking-tight leading-[1.05] text-ink">
-          {t("settings.title")}
-        </h1>
-        <p className="mt-5 text-sm text-ink-muted max-w-lg leading-relaxed">
-          {t("settings.desc")}
-        </p>
-      </AnimatedBlock>
+          ) : undefined
+        }
+        actions={
+          <>
+            <button
+              onClick={handleSave}
+              disabled={loading}
+              className="btn-island-primary text-[13px] !px-5 !py-2 disabled:opacity-50"
+            >
+              {t("settings.save")}
+            </button>
+            {status && (
+              <span className="text-[12px] text-success font-medium">{status}</span>
+            )}
+          </>
+        }
+      />
 
       {error && (
         <div className="mb-6 rounded-xl bg-danger-muted ring-1 ring-danger/15 px-4 py-3 text-[12px] text-danger">
@@ -837,6 +824,8 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* -- Group: API Keys & Services -- */}
+      <CollapsibleSection title={t("settings.group.apis")} hint={t("settings.group.apis.hint")} defaultOpen>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <AnimatedBlock delay={150} className="md:col-span-2">
         <div className="double-bezel">
@@ -875,7 +864,7 @@ export default function SettingsPage() {
                 {geminiKeys.map((k, i) => (
                   <div
                     key={i}
-                    className="flex items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2"
+                    className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
                   >
                     <span className="font-mono text-[12px] text-ink-light truncate">
                       {k.length > 32 ? `${k.slice(0, 6)}…${k.slice(-4)}` : k}
@@ -1037,6 +1026,12 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
+      </div>
+      </CollapsibleSection>
+
+      {/* -- Group: Accounts & Integration -- */}
+      <CollapsibleSection title={t("settings.group.accounts")}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <AnimatedBlock delay={250} className="md:col-span-2">
         <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
@@ -1055,7 +1050,7 @@ export default function SettingsPage() {
                 return (
                   <div
                     key={svc}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-3"
+                    className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3"
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -1132,7 +1127,7 @@ export default function SettingsPage() {
               ).map(([label, ok]) => (
                 <div
                   key={label}
-                  className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-2.5"
+                  className="flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-2.5"
                 >
                   <span className="text-[12px] text-ink-muted">{label}</span>
                   <span
@@ -1159,7 +1154,7 @@ export default function SettingsPage() {
                 return (
                   <div
                     key={ch.id}
-                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] p-4"
+                    className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4"
                   >
                     <div className="flex items-center justify-between gap-3 mb-2">
                       <div className="flex items-center gap-2 min-w-0">
@@ -1182,7 +1177,7 @@ export default function SettingsPage() {
                           <>
                             <button
                               onClick={() => handleStartEditChannel(ch.id)}
-                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
+                              className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
                             >
                               {t("settings.youtube.edit")}
                             </button>
@@ -1197,7 +1192,7 @@ export default function SettingsPage() {
                         {isEditing && (
                           <button
                             onClick={() => setYtEditingChannel(null)}
-                            className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
+                            className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
                           >
                             {t("settings.youtube.close")}
                           </button>
@@ -1320,326 +1315,6 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
-      <AnimatedBlock delay={280}>
-        <div className="double-bezel">
-          <div className="double-bezel-inner p-5 sm:p-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
-              {t("settings.style.title")}
-            </p>
-            <p className="text-[11px] text-ink-light mb-4">
-              {t("settings.style.desc")}
-            </p>
-
-            <div className="mb-5">
-              <PreviewBadge style={style} />
-            </div>
-
-            <div className="space-y-5">
-              <label className="flex items-center justify-between gap-3">
-                <span className="text-[12px] text-ink-muted">
-                  {t("style.fontFamily")}
-                </span>
-                <select
-                  value={style.font_family}
-                  onChange={(e) => set({ font_family: e.target.value })}
-                  className="rounded-xl input-field text-[12px] w-auto"
-                >
-                  {FONT_OPTIONS.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <SliderField
-                label={t("style.fontSize")}
-                value={style.font_size}
-                min={16}
-                max={96}
-                suffix="px"
-                onChange={(v) => set({ font_size: v })}
-              />
-              <ColorField
-                label={t("style.textColor")}
-                value={style.text_color}
-                onChange={(v) => set({ text_color: v })}
-              />
-              <ColorField
-                label={t("style.outlineColor")}
-                value={style.outline_color}
-                onChange={(v) => set({ outline_color: v })}
-              />
-              <SliderField
-                label={t("style.outlineWidth")}
-                value={style.outline_width}
-                min={0}
-                max={8}
-                suffix="px"
-                onChange={(v) => set({ outline_width: v })}
-              />
-              <ToggleField
-                label={t("style.bold")}
-                value={style.bold}
-                onChange={(v) => set({ bold: v })}
-              />
-              <ToggleField
-                label={t("style.italic")}
-                value={style.italic}
-                onChange={(v) => set({ italic: v })}
-              />
-
-              <div className="border-t border-black/[0.05] pt-5 space-y-5">
-                <ToggleField
-                  label={t("style.boxEnabled")}
-                  value={style.box_enabled}
-                  onChange={(v) => set({ box_enabled: v })}
-                />
-                {style.box_enabled && (
-                  <div className="space-y-5">
-                    <ColorField
-                      label={t("style.boxColor")}
-                      value={style.box_color}
-                      onChange={(v) => set({ box_color: v })}
-                    />
-                    <SliderField
-                      label={t("style.boxOpacity")}
-                      value={style.box_opacity}
-                      min={0}
-                      max={255}
-                      suffix=""
-                      onChange={(v) => set({ box_opacity: v })}
-                    />
-                    <SliderField
-                      label={t("style.boxRadius")}
-                      value={style.box_radius}
-                      min={0}
-                      max={60}
-                      suffix="px"
-                      onChange={(v) => set({ box_radius: v })}
-                    />
-                    <ColorField
-                      label={t("style.boxBorderColor")}
-                      value={style.box_border_color}
-                      onChange={(v) => set({ box_border_color: v })}
-                    />
-                    <SliderField
-                      label={t("style.boxBorderWidth")}
-                      value={style.box_border_width}
-                      min={0}
-                      max={8}
-                      suffix="px"
-                      onChange={(v) => set({ box_border_width: v })}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-2">
-                <SliderField
-                  label={t("style.marginV")}
-                  value={style.margin_v}
-                  min={0}
-                  max={200}
-                  suffix="px"
-                  onChange={(v) => set({ margin_v: v })}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={320}>
-        <div className="double-bezel">
-          <div className="double-bezel-inner p-5 sm:p-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
-              {t("settings.wm.title")}
-            </p>
-            <p className="text-[11px] text-ink-light mb-5">
-              {t("settings.wm.desc")}
-            </p>
-
-            {presets.map((p) => {
-              const isActive = p.id === activePreset;
-              return (
-                <div
-                  key={p.id}
-                  className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-accent/40 bg-accent-muted" : "ring-black/[0.06] bg-white/50"}`}
-                >
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {isActive && (
-                        <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-accent text-white shrink-0">
-                          {t("settings.wm.active")}
-                        </span>
-                      )}
-                      <span className="text-[13px] font-medium text-ink truncate">
-                        {p.name}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() =>
-                          setEditingPreset(editingPreset === p.id ? null : p.id)
-                        }
-                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
-                      >
-                        {editingPreset === p.id
-                          ? t("settings.wm.close")
-                          : t("settings.wm.edit")}
-                      </button>
-                      {!isActive && (
-                        <button
-                          onClick={() => handleSetActive(p.id)}
-                          className="text-[11px] px-2 py-1 rounded-full ring-1 ring-black/[0.08] text-ink-muted hover:text-ink hover:ring-black/20 transition-colors cursor-pointer"
-                        >
-                          {t("settings.wm.useThis")}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleRemovePreset(p.id)}
-                        disabled={presets.length <= 1}
-                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-danger/15 text-danger hover:bg-danger/5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        {t("settings.wm.delete")}
-                      </button>
-                    </div>
-                  </div>
-
-                  {editingPreset === p.id && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                      <div>
-                        <p className="text-[11px] text-ink-muted mb-1.5">
-                          {t("settings.wm.name")}
-                        </p>
-                        <input
-                          type="text"
-                          defaultValue={p.name}
-                          id={`preset-name-${p.id}`}
-                          placeholder={t("settings.wm.namePh")}
-                          className="w-full rounded-xl input-field text-[12px]"
-                        />
-                      </div>
-                      <div>
-                        <p className="text-[11px] text-ink-muted mb-1.5">
-                          {t("settings.wm.text")}
-                        </p>
-                        <input
-                          type="text"
-                          defaultValue={p.text}
-                          id={`preset-text-${p.id}`}
-                          placeholder={t("settings.wm.textPh")}
-                          className="w-full rounded-xl input-field text-[12px]"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-4">
-                    {p.has_logo ? (
-                      <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-black/[0.08] bg-white flex items-center justify-center shrink-0">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`${presetLogoUrl(p.id)}?t=${Date.now()}`}
-                          alt="Logo"
-                          className="max-w-full max-h-full object-contain"
-                        />
-                      </div>
-                    ) : (
-                      <div className="w-16 h-16 rounded-lg border border-dashed border-black/15 bg-white/60 flex items-center justify-center shrink-0">
-                        <span className="text-[9px] text-ink-light px-2 text-center leading-tight">
-                          {t("settings.wm.noLogo")}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex flex-col gap-1.5">
-                      <label className="btn-island-secondary group !px-3 !py-1.5 text-[11px] cursor-pointer">
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp,image/gif"
-                          className="hidden"
-                          disabled={presetBusy}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) handlePresetLogoUpload(p.id, f);
-                            e.target.value = "";
-                          }}
-                        />
-                        <span className="tracking-tight">
-                          {p.has_logo
-                            ? t("settings.wm.replaceLogo")
-                            : t("settings.wm.uploadLogo")}
-                        </span>
-                      </label>
-                      {p.has_logo && (
-                        <button
-                          onClick={() => handlePresetLogoDelete(p.id)}
-                          className="text-[11px] text-danger hover:text-danger/80 text-left px-2 py-0.5 cursor-pointer"
-                        >
-                          {t("settings.wm.deleteLogo")}
-                        </button>
-                      )}
-                    </div>
-                    {editingPreset === p.id && (
-                      <button
-                        onClick={() => {
-                          const nameEl = document.getElementById(
-                            `preset-name-${p.id}`,
-                          ) as HTMLInputElement | null;
-                          const textEl = document.getElementById(
-                            `preset-text-${p.id}`,
-                          ) as HTMLInputElement | null;
-                          handleRenamePreset(
-                            p.id,
-                            nameEl?.value ?? p.name,
-                            textEl?.value ?? p.text,
-                          );
-                        }}
-                        className="btn-island-primary group !px-4 !py-1.5 text-[12px] ml-auto"
-                      >
-                        <span className="tracking-tight">{t("btn.save")}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            <div className="mt-5 pt-4 border-t border-black/[0.06]">
-              <p className="text-[12px] text-ink-muted mb-2">
-                {t("settings.wm.addNew")}
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  value={newPresetName}
-                  onChange={(e) => setNewPresetName(e.target.value)}
-                  placeholder={t("settings.wm.nameExample")}
-                  className="w-full rounded-xl input-field text-[12px]"
-                />
-                <input
-                  type="text"
-                  value={newPresetText}
-                  onChange={(e) => setNewPresetText(e.target.value)}
-                  placeholder={t("settings.wm.textExample")}
-                  className="w-full rounded-xl input-field text-[12px]"
-                />
-              </div>
-              <button
-                onClick={handleAddPreset}
-                disabled={presetBusy}
-                className="btn-island-primary group text-[12px] !px-5 !py-2 mt-3 disabled:opacity-50"
-              >
-                <span className="tracking-tight">
-                  {presetBusy ? t("btn.saving") : t("settings.wm.add")}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </AnimatedBlock>
-
       <AnimatedBlock delay={340} className="md:col-span-2">
         <div className="double-bezel">
           <div className="double-bezel-inner p-5 sm:p-6">
@@ -1754,12 +1429,12 @@ export default function SettingsPage() {
                     </p>
 
                     {/* Manual fallback: copy /start command */}
-                    <div className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3">
+                    <div className="w-full rounded-xl border border-white/[0.09] bg-white/[0.04] px-4 py-3">
                       <p className="text-[11px] text-ink-muted mb-2">
                         {t("settings.telegram.manualFallback")}
                       </p>
                       <div className="flex items-center gap-2">
-                        <code className="flex-1 text-[12px] font-mono text-ink bg-black/[0.03] rounded-lg px-3 py-2 truncate select-all">
+                        <code className="flex-1 text-[12px] font-mono text-ink bg-white/[0.06] rounded-lg px-3 py-2 truncate select-all">
                           /start {tgQR.registration_token}
                         </code>
                         <button
@@ -1817,7 +1492,7 @@ export default function SettingsPage() {
                       {tgConfig.connected_chats.map((ch) => (
                         <div
                           key={ch.chat_id}
-                          className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-4 py-2.5"
+                          className="flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-2.5"
                         >
                           <div className="min-w-0">
                             <span className="text-[12px] text-ink">
@@ -1842,7 +1517,7 @@ export default function SettingsPage() {
 
                 {/* Test message button */}
                 {tgConfig.connected_chats.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-black/[0.06]">
+                  <div className="mt-4 pt-3 border-t border-white/[0.08]">
                     <button
                       type="button"
                       onClick={handleTestMessage}
@@ -1861,6 +1536,338 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
+      </div>
+      </CollapsibleSection>
+
+      {/* -- Group: Output Presets -- */}
+      <CollapsibleSection title={t("settings.group.output")}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <AnimatedBlock delay={280}>
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
+              {t("settings.style.title")}
+            </p>
+            <p className="text-[11px] text-ink-light mb-4">
+              {t("settings.style.desc")}
+            </p>
+
+            <div className="mb-5">
+              <PreviewBadge style={style} />
+            </div>
+
+            <div className="space-y-5">
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-[12px] text-ink-muted">
+                  {t("style.fontFamily")}
+                </span>
+                <select
+                  value={style.font_family}
+                  onChange={(e) => set({ font_family: e.target.value })}
+                  className="rounded-xl input-field text-[12px] w-auto"
+                >
+                  {FONT_OPTIONS.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <SliderField
+                label={t("style.fontSize")}
+                value={style.font_size}
+                min={16}
+                max={96}
+                suffix="px"
+                onChange={(v) => set({ font_size: v })}
+              />
+              <ColorField
+                label={t("style.textColor")}
+                value={style.text_color}
+                onChange={(v) => set({ text_color: v })}
+              />
+              <ColorField
+                label={t("style.outlineColor")}
+                value={style.outline_color}
+                onChange={(v) => set({ outline_color: v })}
+              />
+              <SliderField
+                label={t("style.outlineWidth")}
+                value={style.outline_width}
+                min={0}
+                max={8}
+                suffix="px"
+                onChange={(v) => set({ outline_width: v })}
+              />
+              <ToggleField
+                label={t("style.bold")}
+                value={style.bold}
+                onChange={(v) => set({ bold: v })}
+              />
+              <ToggleField
+                label={t("style.italic")}
+                value={style.italic}
+                onChange={(v) => set({ italic: v })}
+              />
+
+              <div className="border-t border-white/[0.08] pt-5 space-y-5">
+                <ToggleField
+                  label={t("style.boxEnabled")}
+                  value={style.box_enabled}
+                  onChange={(v) => set({ box_enabled: v })}
+                />
+                {style.box_enabled && (
+                  <div className="space-y-5">
+                    <ColorField
+                      label={t("style.boxColor")}
+                      value={style.box_color}
+                      onChange={(v) => set({ box_color: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxOpacity")}
+                      value={style.box_opacity}
+                      min={0}
+                      max={255}
+                      suffix=""
+                      onChange={(v) => set({ box_opacity: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxRadius")}
+                      value={style.box_radius}
+                      min={0}
+                      max={60}
+                      suffix="px"
+                      onChange={(v) => set({ box_radius: v })}
+                    />
+                    <ColorField
+                      label={t("style.boxBorderColor")}
+                      value={style.box_border_color}
+                      onChange={(v) => set({ box_border_color: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxBorderWidth")}
+                      value={style.box_border_width}
+                      min={0}
+                      max={8}
+                      suffix="px"
+                      onChange={(v) => set({ box_border_width: v })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2">
+                <SliderField
+                  label={t("style.marginV")}
+                  value={style.margin_v}
+                  min={0}
+                  max={200}
+                  suffix="px"
+                  onChange={(v) => set({ margin_v: v })}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={320}>
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted mb-1">
+              {t("settings.wm.title")}
+            </p>
+            <p className="text-[11px] text-ink-light mb-5">
+              {t("settings.wm.desc")}
+            </p>
+
+            {presets.map((p) => {
+              const isActive = p.id === activePreset;
+              return (
+                <div
+                  key={p.id}
+                  className={`mb-4 rounded-xl p-4 ring-1 ${isActive ? "ring-accent/40 bg-accent-muted" : "ring-white/[0.09] bg-white/[0.03]"}`}
+                >
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isActive && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-accent text-white shrink-0">
+                          {t("settings.wm.active")}
+                        </span>
+                      )}
+                      <span className="text-[13px] font-medium text-ink truncate">
+                        {p.name}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() =>
+                          setEditingPreset(editingPreset === p.id ? null : p.id)
+                        }
+                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
+                      >
+                        {editingPreset === p.id
+                          ? t("settings.wm.close")
+                          : t("settings.wm.edit")}
+                      </button>
+                      {!isActive && (
+                        <button
+                          onClick={() => handleSetActive(p.id)}
+                          className="text-[11px] px-2 py-1 rounded-full ring-1 ring-white/[0.12] text-ink-muted hover:text-ink hover:ring-white/25 transition-colors cursor-pointer"
+                        >
+                          {t("settings.wm.useThis")}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleRemovePreset(p.id)}
+                        disabled={presets.length <= 1}
+                        className="text-[11px] px-2 py-1 rounded-full ring-1 ring-danger/15 text-danger hover:bg-danger/5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {t("settings.wm.delete")}
+                      </button>
+                    </div>
+                  </div>
+
+                  {editingPreset === p.id && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <p className="text-[11px] text-ink-muted mb-1.5">
+                          {t("settings.wm.name")}
+                        </p>
+                        <input
+                          type="text"
+                          defaultValue={p.name}
+                          id={`preset-name-${p.id}`}
+                          placeholder={t("settings.wm.namePh")}
+                          className="w-full rounded-xl input-field text-[12px]"
+                        />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-ink-muted mb-1.5">
+                          {t("settings.wm.text")}
+                        </p>
+                        <input
+                          type="text"
+                          defaultValue={p.text}
+                          id={`preset-text-${p.id}`}
+                          placeholder={t("settings.wm.textPh")}
+                          className="w-full rounded-xl input-field text-[12px]"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-4">
+                    {p.has_logo ? (
+                      <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-white/10 bg-white flex items-center justify-center shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`${presetLogoUrl(p.id)}?t=${Date.now()}`}
+                          alt="Logo"
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-16 h-16 rounded-lg border border-dashed border-white/15 bg-white/[0.04] flex items-center justify-center shrink-0">
+                        <span className="text-[9px] text-ink-light px-2 text-center leading-tight">
+                          {t("settings.wm.noLogo")}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="btn-island-secondary group !px-3 !py-1.5 text-[11px] cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          disabled={presetBusy}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handlePresetLogoUpload(p.id, f);
+                            e.target.value = "";
+                          }}
+                        />
+                        <span className="tracking-tight">
+                          {p.has_logo
+                            ? t("settings.wm.replaceLogo")
+                            : t("settings.wm.uploadLogo")}
+                        </span>
+                      </label>
+                      {p.has_logo && (
+                        <button
+                          onClick={() => handlePresetLogoDelete(p.id)}
+                          className="text-[11px] text-danger hover:text-danger/80 text-left px-2 py-0.5 cursor-pointer"
+                        >
+                          {t("settings.wm.deleteLogo")}
+                        </button>
+                      )}
+                    </div>
+                    {editingPreset === p.id && (
+                      <button
+                        onClick={() => {
+                          const nameEl = document.getElementById(
+                            `preset-name-${p.id}`,
+                          ) as HTMLInputElement | null;
+                          const textEl = document.getElementById(
+                            `preset-text-${p.id}`,
+                          ) as HTMLInputElement | null;
+                          handleRenamePreset(
+                            p.id,
+                            nameEl?.value ?? p.name,
+                            textEl?.value ?? p.text,
+                          );
+                        }}
+                        className="btn-island-primary group !px-4 !py-1.5 text-[12px] ml-auto"
+                      >
+                        <span className="tracking-tight">{t("btn.save")}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="mt-5 pt-4 border-t border-white/[0.08]">
+              <p className="text-[12px] text-ink-muted mb-2">
+                {t("settings.wm.addNew")}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  value={newPresetName}
+                  onChange={(e) => setNewPresetName(e.target.value)}
+                  placeholder={t("settings.wm.nameExample")}
+                  className="w-full rounded-xl input-field text-[12px]"
+                />
+                <input
+                  type="text"
+                  value={newPresetText}
+                  onChange={(e) => setNewPresetText(e.target.value)}
+                  placeholder={t("settings.wm.textExample")}
+                  className="w-full rounded-xl input-field text-[12px]"
+                />
+              </div>
+              <button
+                onClick={handleAddPreset}
+                disabled={presetBusy}
+                className="btn-island-primary group text-[12px] !px-5 !py-2 mt-3 disabled:opacity-50"
+              >
+                <span className="tracking-tight">
+                  {presetBusy ? t("btn.saving") : t("settings.wm.add")}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      </div>
+      </CollapsibleSection>
+
+      {/* -- Group: Environment Tools -- */}
+      <CollapsibleSection title={t("settings.group.devtools")}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Environment tools section */}
       <AnimatedBlock delay={320}>
         <div className="double-bezel">
@@ -1886,7 +1893,7 @@ export default function SettingsPage() {
                 {toolsStatus.map((tool) => (
                   <div
                     key={tool.name}
-                    className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2"
+                    className="flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
                   >
                     <span className="text-[12px] text-ink">
                       {tool.display}
@@ -1922,6 +1929,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </AnimatedBlock>
+      </div>
+      </CollapsibleSection>
 
       {/* Tools install modal */}
       {showToolsModal && (
@@ -1947,7 +1956,7 @@ export default function SettingsPage() {
                 {toolsLogs.map((log, i) => (
                   <div
                     key={i}
-                    className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2"
+                    className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
                   >
                     <span className={`text-[11px] ${
                       log.status === "done" ? "text-success" :
@@ -1963,7 +1972,7 @@ export default function SettingsPage() {
                   </div>
                 ))}
                 {toolsInstalling && toolsLogs.length === 0 && (
-                  <div className="rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2">
+                  <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2">
                     <span className="text-[11px] text-ink animate-pulse">Đang kiểm tra...</span>
                   </div>
                 )}
@@ -1982,28 +1991,6 @@ export default function SettingsPage() {
         </div>
       )}
 
-      </div>
-
-      <AnimatedBlock delay={350}>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleSave}
-            className="btn-island-primary group text-sm !px-6 !py-2.5"
-          >
-            <span className="tracking-tight">{t("settings.save")}</span>
-          </button>
-          {status && (
-            <span className="text-[12px] text-success font-medium">
-              {status}
-            </span>
-          )}
-          {loading && (
-            <span className="text-[12px] text-ink-light">
-              {t("status.loading")}
-            </span>
-          )}
-        </div>
-      </AnimatedBlock>
-    </main>
+    </div>
   );
 }

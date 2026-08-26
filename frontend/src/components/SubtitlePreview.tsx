@@ -159,7 +159,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           {t("preview.helpDesc2")}
         </p>
         <div className="flex gap-2 flex-shrink-0">
-          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-black/[0.03] ring-1 ring-black/[0.06]">↵</kbd>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">↵</kbd>
           <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("preview.confirmShort")}</span>
         </div>
       </div>

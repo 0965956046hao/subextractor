@@ -158,7 +158,7 @@ def import_video(body: ImportRequest):
                 logger.info("Copied thumbnail for %s from merge %s", video_id, body.merge_id)
 
     try:
-        meta = {"filename": body.filename or "douyin.mp4"}
+        meta = {"filename": body.filename or "douyin.mp4", "origin": "pipeline"}
         if body.merge_id:
             meta["source_merge_id"] = body.merge_id
         (video_dir / "meta.json").write_text(

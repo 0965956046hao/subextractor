@@ -127,7 +127,7 @@ export default function UploadPage({ onUploaded }: Props) {
                   </p>
                 </div>
                 <div className="w-full max-w-xs space-y-2">
-                  <div className="h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+                  <div className="h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
                     <div
                       className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]"
                       style={{ width: `${Math.max(progress, 2)}%` }}

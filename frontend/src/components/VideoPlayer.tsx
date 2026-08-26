@@ -181,7 +181,7 @@ export default function VideoPlayer({
         onMouseMove={handleTimelineDrag}
         onMouseLeave={() => setSeeking(false)}
       >
-        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-black/[0.06] overflow-hidden">
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-white/[0.08] overflow-hidden">
           <div
             className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-150"
             style={{ width: `${pct}%` }}

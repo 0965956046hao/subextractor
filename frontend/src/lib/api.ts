@@ -82,6 +82,7 @@ export interface VideoMeta {
   progress?: number;
   phase?: string;
   job_type?: string;
+  origin?: "extract" | "pipeline";
   job_id?: string;
   error?: string | null;
   logs?: LogEntry[];

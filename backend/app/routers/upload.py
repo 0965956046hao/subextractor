@@ -40,7 +40,8 @@ async def upload_video(file: UploadFile = File(...)):
 
     try:
         (video_dir / "meta.json").write_text(
-            json.dumps({"filename": file.filename}), encoding="utf-8"
+            json.dumps({"filename": file.filename, "origin": "extract"}),
+            encoding="utf-8",
         )
     except Exception:
         pass

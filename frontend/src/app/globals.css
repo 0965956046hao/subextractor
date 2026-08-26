@@ -4,47 +4,50 @@
 
 @layer base {
   ::selection {
-    background-color: rgba(37, 99, 235, 0.15);
-    color: #1c1c1a;
+    background-color: rgba(59, 130, 246, 0.28);
+    color: #ffffff;
   }
 
   ::-webkit-scrollbar {
-    width: 5px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.07);
+    background: rgba(255, 255, 255, 0.1);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.12);
+    background: rgba(255, 255, 255, 0.18);
   }
 
   html {
     scroll-behavior: smooth;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
   }
 
   body {
-    background-color: #f7f7f5;
-    color: #1c1c1a;
+    background-color: #131316;
+    color: #ececf1;
   }
 
   * {
-    border-color: rgba(0, 0, 0, 0.06);
+    border-color: rgba(255, 255, 255, 0.07);
   }
 }
 
 @layer components {
-  /* ── Cards: Double-Bezel (Doppelrand / Nested Architecture) ── */
+  /* ── Cards: Double-Bezel (Studio Panel) ── */
   .double-bezel {
     @apply relative overflow-hidden;
-    background: rgba(0, 0, 0, 0.025);
-    padding: 1.5px;
-    border-radius: 1.25rem;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 1px;
+    border-radius: 0.875rem;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
   }
   .double-bezel::before {
     content: "";
@@ -53,10 +56,10 @@
     border-radius: inherit;
     padding: 1px;
     background: linear-gradient(
-      145deg,
-      rgba(0, 0, 0, 0.07) 0%,
-      rgba(0, 0, 0, 0.02) 40%,
-      transparent 100%
+      150deg,
+      rgba(255, 255, 255, 0.09) 0%,
+      rgba(255, 255, 255, 0.03) 45%,
+      rgba(255, 255, 255, 0.01) 100%
     );
     -webkit-mask: linear-gradient(#fff 0 0) content-box,
       linear-gradient(#fff 0 0);
@@ -65,118 +68,125 @@
     pointer-events: none;
   }
   .double-bezel-inner {
-    background: #ffffff;
-    border-radius: calc(1.25rem - 1.5px);
+    background: #1c1c21;
+    background-image: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.02),
+      transparent 40%
+    );
+    border-radius: calc(0.875rem - 1px);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.02),
-      0 1px 3px rgba(0, 0, 0, 0.04);
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 8px 24px -12px rgba(0, 0, 0, 0.5);
     height: 100%;
     transition: box-shadow 0.25s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .double-bezel:hover .double-bezel-inner {
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.02),
-      0 4px 16px rgba(0, 0, 0, 0.06),
-      0 1px 4px rgba(0, 0, 0, 0.03);
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 12px 32px -14px rgba(0, 0, 0, 0.6);
   }
 
   /* ── Buttons: Fluid Island Architecture ── */
   .btn-island {
-    @apply inline-flex items-center gap-2.5 rounded-full font-medium text-sm
+    @apply inline-flex items-center gap-2.5 rounded-lg font-medium text-sm
            cursor-pointer select-none;
-    transition: all 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: all 0.25s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .btn-island:active {
     transform: scale(0.97) translateY(1px);
     transition-duration: 0.1s;
   }
   .btn-island:focus-visible {
-    @apply outline-none ring-2 ring-accent/40 ring-offset-2;
+    @apply outline-none ring-2 ring-accent/50 ring-offset-2 ring-offset-paper;
   }
 
   .btn-island-primary {
-    @apply btn-island px-7 py-3 bg-accent text-white
-           shadow-soft;
+    @apply btn-island px-5 py-2.5 bg-accent text-white;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.15) inset,
+      0 6px 16px -6px rgba(59, 130, 246, 0.45);
   }
   .btn-island-primary:hover {
-    @apply bg-accent-light shadow-medium;
-    transform: translateY(-1.5px);
+    @apply bg-accent-light;
+    transform: translateY(-1px);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.18) inset,
+      0 10px 24px -8px rgba(59, 130, 246, 0.55);
   }
 
   .btn-island-secondary {
-    @apply btn-island px-6 py-2.5 bg-black/[0.035] text-ink-muted
-           ring-1 ring-black/[0.05];
+    @apply btn-island px-5 py-2.5 bg-white/[0.06] text-ink-muted
+           ring-1 ring-white/[0.09];
   }
   .btn-island-secondary:hover {
-    @apply bg-black/[0.06] text-ink;
+    @apply bg-white/[0.1] text-ink;
     transform: translateY(-1px);
   }
 
   .btn-island-danger {
-    @apply btn-island px-6 py-2.5 bg-danger-muted text-danger
-           ring-1 ring-danger/15;
+    @apply btn-island px-5 py-2.5 bg-danger-muted text-danger
+           ring-1 ring-danger/20;
   }
   .btn-island-danger:hover {
-    @apply bg-danger/10;
+    @apply bg-danger/15;
     transform: translateY(-1px);
   }
 
   .btn-island-icon {
-    @apply w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0
-           bg-white/20;
-    transition: all 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+    @apply w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0
+           bg-white/10;
+    transition: all 0.25s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .btn-island:hover .btn-island-icon {
-    @apply bg-white/30;
+    @apply bg-white/20;
     transform: translate(1px, -1px) scale(1.05);
   }
 
   /* ── Glass ── */
   .glass-panel {
-    @apply bg-white/80 backdrop-blur-xl;
-    border: 1px solid rgba(0, 0, 0, 0.04);
+    @apply bg-glass backdrop-blur-xl;
+    border: 1px solid rgba(255, 255, 255, 0.07);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.6),
-      0 1px 3px rgba(0, 0, 0, 0.03);
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 8px 32px -12px rgba(0, 0, 0, 0.6);
   }
 
   /* ── Labels ── */
   .eyebrow {
-    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1
-           text-[10px] font-medium uppercase tracking-[0.18em]
-           bg-black/[0.035] text-ink-muted;
-    letter-spacing: 0.18em;
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1
+           text-[10px] font-semibold uppercase tracking-[0.16em]
+            bg-accent-muted text-accent-light;
+    letter-spacing: 0.16em;
   }
 
   .tag {
-    @apply px-2.5 py-0.5 rounded-full text-[11px] font-medium text-ink-muted
-           bg-black/[0.03];
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    @apply px-2.5 py-0.5 rounded-md text-[11px] font-medium text-ink-muted
+           bg-white/[0.05];
+    border: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   /* ── Form inputs ── */
   .input-field {
-    @apply w-full rounded-xl bg-white px-4 py-2.5 text-[13px] text-ink
+    @apply w-full rounded-lg bg-black/25 px-3.5 py-2.5 text-[13px] text-ink
            placeholder:text-ink-light focus:outline-none;
-    border: 1px solid rgba(0, 0, 0, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.09);
     transition: border-color 0.2s, box-shadow 0.2s;
   }
   .input-field:focus {
-    @apply ring-2 ring-accent/20;
-    border-color: rgba(37, 99, 235, 0.3);
+    @apply ring-2 ring-accent/30;
+    border-color: rgba(59, 130, 246, 0.5);
   }
 
   .textarea-field {
-    @apply w-full rounded-xl bg-white px-4 py-2.5 text-[12px] font-mono text-ink
+    @apply w-full rounded-lg bg-black/25 px-3.5 py-2.5 text-[12px] font-mono text-ink
            placeholder:text-ink-light focus:outline-none resize-y;
-    border: 1px solid rgba(0, 0, 0, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.09);
     transition: border-color 0.2s, box-shadow 0.2s;
   }
   .textarea-field:focus {
-    @apply ring-2 ring-accent/20;
-    border-color: rgba(37, 99, 235, 0.3);
+    @apply ring-2 ring-accent/30;
+    border-color: rgba(59, 130, 246, 0.5);
   }
 }
 
@@ -189,12 +199,10 @@
   }
 }
 
-/* ── Duplicate keyframes removed (defined in tailwind.config.js) ── */
-
 /* ── Scrollbar utilities ── */
 .scrollbar-hidden::-webkit-scrollbar { display: none; }
 .scrollbar-hidden { -ms-overflow-style: none; scrollbar-width: none; }
 .scrollbar-thin::-webkit-scrollbar { width: 5px; height: 6px; }
 .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius: 3px; }
-.diagonal-stripes { background: repeating-linear-gradient(45deg, transparent 0 4px, rgba(0,0,0,0.04) 4px 6px); }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+.diagonal-stripes { background: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,0.03) 4px 6px); }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatedBlock } from "@/lib/animation";
+import PageHeader from "@/components/layout/PageHeader";
 import { useI18n } from "@/lib/i18n";
 
 interface Channel {
@@ -220,47 +221,8 @@ export default function ChannelsPage() {
   };
 
   return (
-    <main className="min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
-      <AnimatedBlock delay={0}>
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <Link
-            href="/"
-            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-          >
-            <span className="btn-island-icon !w-7 !h-7">
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M19 12H5" />
-                <path d="M11 18l-6-6 6-6" />
-              </svg>
-            </span>
-            <span className="tracking-tight">{t("channel.backLibrary")}</span>
-          </Link>
-          <Link
-            href="/auto"
-            className="btn-island-secondary group !px-5 !py-2 text-[13px]"
-          >
-            <span className="tracking-tight">{t("channel.autoPipeline")}</span>
-          </Link>
-        </div>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={100} className="mt-10 mb-10">
-        <div className="eyebrow mb-4">{t("channel.eyebrow")}</div>
-        <h1 className="text-[clamp(1.8rem,4.5vw,3.4rem)] font-semibold tracking-tight leading-[1.05] text-ink">
-          {t("channel.title")}
-        </h1>
-        <p className="mt-4 text-sm text-ink-muted max-w-lg leading-relaxed">
-          {t("channel.desc")}
-        </p>
-      </AnimatedBlock>
+    <div>
+      <PageHeader title={t("channel.title")} description={t("channel.desc")} />
 
       <AnimatedBlock delay={150}>
         <div className="double-bezel mb-6">
@@ -275,7 +237,7 @@ export default function ChannelsPage() {
                 onChange={(e) => setNewUrl(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAdd()}
                 placeholder="https://www.douyin.com/user/MS4wLjAB..."
-                className="flex-1 rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/15"
+                input-field flex-1 font-mono
                 disabled={adding}
               />
               <button
@@ -312,7 +274,7 @@ export default function ChannelsPage() {
                   type="date"
                   value={scanDate}
                   onChange={(e) => setScanDate(e.target.value)}
-                  className="rounded-xl border border-black/[0.08] bg-white px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/15"
+                  className="rounded-lg border border-white/[0.09] bg-black/25 px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/30"
                 />
               </div>
             </div>
@@ -330,8 +292,8 @@ export default function ChannelsPage() {
                       key={ch.id}
                       className={`flex items-center gap-3 p-3 rounded-xl transition-colors ${
                         isPinned
-                          ? "bg-amber-50/80 ring-1 ring-amber-200/60"
-                          : "bg-black/[0.02] ring-1 ring-black/[0.05] hover:bg-black/[0.04]"
+                          ? "bg-warn-muted ring-1 ring-warn/25"
+                          : "bg-white/[0.03] ring-1 ring-white/[0.07] hover:bg-white/[0.05]"
                       }`}
                     >
                       <button
@@ -339,7 +301,7 @@ export default function ChannelsPage() {
                         className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors ${
                           isPinned
                             ? "text-warn hover:text-warn"
-                            : "text-ink-light hover:text-warn hover:bg-amber-50"
+                            : "text-ink-light hover:text-warn hover:bg-warn-muted"
                         }`}
                         title={isPinned ? t("channel.unpin") : t("channel.pin")}
                       >
@@ -360,10 +322,10 @@ export default function ChannelsPage() {
                           <img
                             src={ch.avatar_url}
                             alt=""
-                            className="w-10 h-10 rounded-full object-cover flex-shrink-0 bg-black/[0.04]"
+                            className="w-10 h-10 rounded-full object-cover flex-shrink-0 bg-white/[0.06]"
                           />
                         ) : (
-                          <div className="w-10 h-10 rounded-full bg-black/[0.06] flex items-center justify-center flex-shrink-0">
+                          <div className="w-10 h-10 rounded-full bg-white/[0.08] flex items-center justify-center flex-shrink-0">
                             <svg className="w-5 h-5 text-ink-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                               <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
                               <circle cx="12" cy="7" r="4" />
@@ -396,7 +358,7 @@ export default function ChannelsPage() {
                       <button
                         onClick={() => handleDelete(ch.id)}
                         disabled={scanning === ch.id}
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-danger hover:bg-red-50 transition-colors disabled:opacity-40 cursor-pointer"
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-ink-light hover:text-danger hover:bg-red-500/10 transition-colors disabled:opacity-40 cursor-pointer"
                       >
                         <svg
                           className="w-4 h-4"
@@ -459,7 +421,7 @@ export default function ChannelsPage() {
                 <div className="overflow-x-auto -mx-5 sm:-mx-6 px-5 sm:px-6">
                   <table className="w-full text-left">
                     <thead>
-                      <tr className="border-b border-black/[0.06]">
+                      <tr className="border-b border-white/[0.07]">
                         <th className="pb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-muted w-12">
                           #
                         </th>
@@ -493,7 +455,7 @@ export default function ChannelsPage() {
                         return (
                           <tr
                             key={v.aweme_id}
-                            className="border-b border-black/[0.04] hover:bg-black/[0.02] transition-colors"
+                            className="border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors"
                           >
                             <td className="py-4 text-[13px] text-ink-light font-mono">
                               {idx + 1}
@@ -505,7 +467,7 @@ export default function ChannelsPage() {
                                     src={v.video.cover.url_list[0]}
                                     alt=""
                                     width={200}
-                                    className=" h-30 object-cover rounded-xl flex-shrink-0 bg-black/[0.04]"
+                                    className=" h-30 object-cover rounded-lg flex-shrink-0 bg-white/[0.06]"
                                   />
                                 )}
                                 <div className="min-w-0">
@@ -655,7 +617,7 @@ export default function ChannelsPage() {
             </div>
             <button
               onClick={() => setPlayingVideo(null)}
-              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white/90 shadow-lg flex items-center justify-center text-gray-600 hover:text-gray-900 cursor-pointer"
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-surface ring-1 ring-white/10 shadow-lg flex items-center justify-center text-ink-muted hover:text-ink cursor-pointer"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                 <path d="M18 6L6 18M6 6l12 12" />
@@ -664,6 +626,6 @@ export default function ChannelsPage() {
           </div>
         </div>
       )}
-    </main>
+    </div>
   );
 }

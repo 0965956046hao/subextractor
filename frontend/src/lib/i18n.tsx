@@ -20,6 +20,27 @@ const dictionaries = {
 
     // Common
     "back.library": "Back to library",
+
+    // App shell navigation
+    "nav.group.workspace": "Workspace",
+    "nav.group.tools": "Tools",
+    "nav.group.system": "System",
+    "nav.library": "Subtitle Library",
+    "nav.library.pipeline": "Pipeline Library",
+    "nav.auto": "Auto Pipeline",
+    "nav.extract": "Extract Subtitles",
+    "nav.channels": "Channels",
+    "nav.settings": "Settings",
+    "nav.collapse": "Collapse sidebar",
+    "nav.expand": "Expand sidebar",
+    "nav.menu": "Open menu",
+
+    // Settings groups
+    "settings.group.apis": "API Keys & Services",
+    "settings.group.accounts": "Accounts & Integration",
+    "settings.group.output": "Output Presets",
+    "settings.group.devtools": "Environment Tools",
+    "settings.group.apis.hint": "Gemini · TTS · fal.ai",
     "lang.zh": "Chinese",
     "lang.en": "English",
     "lang.vi": "Vietnamese",
@@ -285,6 +306,8 @@ const dictionaries = {
     "library.heroTitle2": "ready to relive",
     "library.heroDesc":
       "Every video you've extracted lives here — open one to watch, read the transcript, and download clean SRT text.",
+    "library.desc.pipeline":
+      "Videos imported through the auto pipeline (Douyin / YouTube / merge) — track progress, watch results and download deliverables.",
     "library.startNewExtractor": "Start a new extractor",
     "library.videos": "videos",
     "library.subtitleLines": "subtitle lines",
@@ -294,6 +317,10 @@ const dictionaries = {
     "library.emptyDesc":
       "Upload your first video, mark the subtitle region, and let OCR do the rest. Your library appears here.",
     "library.startFirstExtractor": "Start your first extractor",
+    "library.newPipeline": "New video",
+    "library.emptyTitle.pipeline": "Pipeline library is empty",
+    "library.emptyDesc.pipeline":
+      "Import a video from the Auto Pipeline tool — resolve Douyin / YouTube links or upload, and the full pipeline runs from OCR to dubbing.",
     "library.videoCount": "{count} video(s)",
     "library.loadError": "Failed to load library",
     "library.deleteError": "Failed to delete",
@@ -863,6 +890,27 @@ const dictionaries = {
 
     // Common
     "back.library": "Quay lại thư viện",
+
+    // App shell navigation
+    "nav.group.workspace": "Không gian làm việc",
+    "nav.group.tools": "Công cụ",
+    "nav.group.system": "Hệ thống",
+    "nav.library": "Thư viện trích phụ đề",
+    "nav.library.pipeline": "Thư viện pipeline",
+    "nav.auto": "Pipeline tự động",
+    "nav.extract": "Trích phụ đề",
+    "nav.channels": "Kênh",
+    "nav.settings": "Cài đặt",
+    "nav.collapse": "Thu gọn thanh bên",
+    "nav.expand": "Mở rộng thanh bên",
+    "nav.menu": "Mở menu",
+
+    // Settings groups
+    "settings.group.apis": "API Key & Dịch vụ",
+    "settings.group.accounts": "Tài khoản & Tích hợp",
+    "settings.group.output": "Cấu hình đầu ra",
+    "settings.group.devtools": "Công cụ môi trường",
+    "settings.group.apis.hint": "Gemini · TTS · fal.ai",
     "lang.zh": "Tiếng Trung",
     "lang.en": "Tiếng Anh",
     "lang.vi": "Tiếng Việt",
@@ -1128,6 +1176,8 @@ const dictionaries = {
     "library.heroTitle2": "sẵn sàng để xem lại",
     "library.heroDesc":
       "Mọi video bạn đã trích xuất đều ở đây — mở một video để xem, đọc phụ đề, và tải file SRT sạch.",
+    "library.desc.pipeline":
+      "Các video import qua pipeline tự động (Douyin / YouTube / merge) — theo dõi tiến độ, xem kết quả và tải sản phẩm.",
     "library.startNewExtractor": "Bắt đầu trích xuất mới",
     "library.videos": "video",
     "library.subtitleLines": "dòng phụ đề",
@@ -1137,6 +1187,10 @@ const dictionaries = {
     "library.emptyDesc":
       "Tải video đầu tiên, đánh dấu vùng phụ đề, và để OCR làm phần còn lại. Thư viện của bạn sẽ xuất hiện ở đây.",
     "library.startFirstExtractor": "Bắt đầu trích xuất đầu tiên",
+    "library.newPipeline": "Tạo video mới",
+    "library.emptyTitle.pipeline": "Thư viện pipeline đang trống",
+    "library.emptyDesc.pipeline":
+      "Import video từ công cụ Pipeline tự động — resolve link Douyin / YouTube hoặc upload, toàn bộ pipeline chạy từ OCR đến lồng tiếng.",
     "library.videoCount": "{count} video",
     "library.loadError": "Không tải được thư viện",
     "library.deleteError": "Không xoá được",
