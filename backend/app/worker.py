@@ -1416,10 +1416,14 @@ async def run_telegram_auto_job(
             await _tg_send(chat_id, "🧠 Đang phân tích ngữ cảnh video...")
             try:
                 from app.services.context_service import generate_video_context
-                await loop.run_in_executor(
+                context_text = await loop.run_in_executor(
                     _context_executor,
                     generate_video_context, video_id, job.get("translate_target", "vi"),
                 )
+                if context_text:
+                    await _tg_send(chat_id, f"🧠 <b>Ngữ cảnh video:</b>\n{context_text}")
+                else:
+                    await _tg_send(chat_id, "⚠️ Không phân tích được ngữ cảnh (không quan trọng).")
             except Exception:
                 await _tg_send(chat_id, "⚠️ Phân tích ngữ cảnh thất bại (không quan trọng).")
 
