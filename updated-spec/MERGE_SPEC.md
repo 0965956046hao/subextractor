@@ -89,8 +89,9 @@ Lấy bản beta: cap log 500 dòng + clear `seenRef` khi vượt 2000 (spec §9
 2. Import test PASS: `srt_utils`, `gemini_array`, `tts_service`, `translation_service`, `risk_check_service`, `dub_service`, `hardcode_service`, `align_service`, `capcut_tts_client` (stub `tenacity`/`google.*` — chưa cài trong venv, lỗi môi trường có sẵn, không liên quan merge).
 3. Parser gemini_array: đủ/thiếu/thừa/duplicate/text chứa `|`/response rỗng — PASS toàn bộ.
 4. Call-site `_build_base_prompt`: mọi lời gọi đều truyền 4 đối số hoặc `n_lines=` — PASS.
-5. `npm run typecheck`: 4 lỗi còn lại (pagination, video-player, pipeline-store:407) **đã tồn tại trên HEAD trước merge** (verify bằng stash + typecheck lại) — không phải regression của merge. Các lỗi TS2307 là do `node_modules` thiếu package (môi trường).
+5. `npm run typecheck`: các lỗi TS đều **đã tồn tại trên HEAD trước merge** (verify bằng stash + typecheck lại) — không phải regression của merge.
 6. Merge commit `5a4e65e` có đúng 2 parents: `08bc67b` (haovpn) + `abdd219` (haovpn-beta).
+7. **Bổ sung sau merge** (`adf8278`): pyflakes bắt được 3 NameError runtime mà import-test bỏ sót — `_call_gemini`/`generate_voice_map` dùng `gemini_call_rotating`, `genai_generate_content_factory`, `_video_path` nhưng import top-level là bản slim của beta (beta đã xoá vì code của nó không còn dùng). Bài học: với merge giữ hàm từ cả 2 phía, phải chạy pyflakes/undefined-name scan, không chỉ test import.
 
 ---
 
