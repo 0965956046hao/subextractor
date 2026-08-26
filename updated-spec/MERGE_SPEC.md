@@ -94,7 +94,20 @@ Lấy bản beta: cap log 500 dòng + clear `seenRef` khi vượt 2000 (spec §9
 
 ---
 
-## 4. Backlog kế thừa từ spec beta (chưa fix, không thuộc phạm vi merge)
+## 4. Merge lần 2 — `origin/tinhptdv` (merge commit `0a5270c`)
+
+3 commit mới kể từ `08bc67b`, auto-merge sạch, không conflict:
+
+| File | Thay đổi |
+|---|---|
+| `start-be.sh` (mới) | Khởi động pinggy tunnel trước rồi mới chạy uvicorn — `STE_public_url` luôn fresh mỗi phiên (tunnel free 60min) |
+| `frontend/src/stores/pipeline-store.ts` | Bỏ hardcode URL `zjzmt-...free.pinggy.net` → dùng `NEXT_PUBLIC_TUNNEL_URL` (frontend/.env.local); thêm `"User-Agent": "SubtitleExtractor/1.0"` vào `JSON_HEADERS`; thêm `mode: "watermark"` khi gửi Telegram Mini App button |
+
+Verify: cap log 500 dòng của beta vẫn nguyên vẹn (dòng 1384/1447); các fix merge lần 1 không bị đụng tới.
+
+---
+
+## 5. Backlog kế thừa từ spec beta (chưa fix, không thuộc phạm vi merge)
 
 | # | Vấn đề |
 |---|---|
