@@ -20,6 +20,8 @@ import {
   getAppConfig,
   uploadVideo,
   getDownloadUrl,
+  getContextImages,
+  type ContextImages,
   getDubbedDownloadUrl,
   listYoutubeChannels,
   setActiveWatermarkPreset,
@@ -2998,6 +3000,9 @@ function DetailView({
                   </span>
                 </a>
               )}
+              {p.videoId && (
+                <ContextImagesButton videoId={p.videoId} />
+              )}
               {p.updatedThumbnailUrl && (
                 <button
                   onClick={() =>
@@ -3242,5 +3247,143 @@ function DetailView({
         bigThumbs={p.bigThumbs}
       />
     </div>
+  );
+}
+
+
+function ContextImagesButton({ videoId }: { videoId: string }) {
+  const { t } = useI18n();
+  const tr = makeT(t);
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<ContextImages | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(false);
+
+  useEffect(() => {
+    if (!open || data || err) return;
+    setLoading(true);
+    getContextImages(videoId)
+      .then(setData)
+      .catch(() => setErr(true))
+      .finally(() => setLoading(false));
+  }, [open, data, err, videoId]);
+
+  const hasAnything = !!(data && (data.thumbnail || data.images.length > 0));
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn-island-primary group text-sm !px-5 !py-2.5"
+      >
+        <span className="tracking-tight">{tr("pipeline.imagesBtn")}</span>
+        <span className="btn-island-icon">
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </span>
+      </button>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="double-bezel w-full max-w-3xl max-h-[85vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="double-bezel-inner flex flex-col min-h-0">
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.08] flex-shrink-0">
+                <p className="text-sm font-semibold text-ink">
+                  {tr("pipeline.imagesTitle")}
+                </p>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="w-7 h-7 rounded-lg hover:bg-white/[0.08] text-ink-muted flex items-center justify-center cursor-pointer transition-colors"
+                  aria-label={tr("btn.cancel")}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="overflow-y-auto scrollbar-thin p-5 space-y-5">
+                {loading && (
+                  <p className="text-[13px] text-ink-muted py-8 text-center">
+                    {tr("status.loading")}
+                  </p>
+                )}
+                {!loading && err && (
+                  <p className="text-[13px] text-danger py-8 text-center">
+                    {tr("result.failed")}
+                  </p>
+                )}
+                {!loading && !err && !hasAnything && (
+                  <p className="text-[13px] text-ink-light py-8 text-center">
+                    {tr("pipeline.imagesEmpty")}
+                  </p>
+                )}
+                {!loading && data?.thumbnail && (
+                  <section>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-light mb-2">
+                      {tr("pipeline.imagesCover")}
+                    </p>
+                    <a
+                      href={data.thumbnail}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block rounded-xl overflow-hidden ring-1 ring-white/[0.12] hover:ring-accent/50 transition-colors"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={data.thumbnail}
+                        alt={tr("pipeline.imagesCover")}
+                        className="w-full max-h-[46vh] object-contain bg-black/40"
+                      />
+                    </a>
+                  </section>
+                )}
+                {!loading && data && data.images.length > 0 && (
+                  <section>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-light mb-2">
+                      {tr("pipeline.imagesScenes")} ({data.images.length})
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {data.images.map((src) => (
+                        <a
+                          key={src}
+                          href={src}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block rounded-lg overflow-hidden ring-1 ring-white/[0.1] hover:ring-accent/50 transition-colors aspect-video bg-black/40"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={src}
+                            alt=""
+                            loading="lazy"
+                            className="w-full h-full object-cover hover:scale-[1.03] transition-transform duration-300"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

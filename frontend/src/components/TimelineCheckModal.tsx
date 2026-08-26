@@ -227,6 +227,20 @@ export default function TimelineCheckModal({
     return entries.find((e) => currentTime >= e.start && currentTime <= e.end);
   }, [entries, currentTime]);
 
+  // Kim timeline chạy tới đâu thì danh sách SRT cuộn theo tới đó.
+  const activeListIndex = activeEntry?.index;
+  useEffect(() => {
+    if (activeListIndex == null) return;
+    const el = entryRefs.current.get(activeListIndex);
+    const list = listRef.current;
+    if (!el || !list) return;
+    const lr = list.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (er.top < lr.top + 8 || er.bottom > lr.bottom - 8) {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeListIndex]);
+
   const seekTo = useCallback((sec: number) => {
     const v = videoRef.current;
     if (v) {
@@ -797,8 +811,8 @@ export default function TimelineCheckModal({
                   {fmtClock(currentTime)} / {fmtClock(effectiveDuration)}
                 </p>
               </div>
-              <div className="overflow-x-auto scrollbar-thin" ref={trackRef}>
-                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 }} onPointerDown={handleTrackPointerDown}>
+              <div className="overflow-x-auto overflow-y-hidden scrollbar-thin" ref={trackRef}>
+                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 + 12 }} onPointerDown={handleTrackPointerDown}>
                   {/* ruler — pointer-events-none so clicks fall through to scrub */}
                   <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-white/[0.08] pointer-events-none">
                     {Array.from({ length: Math.ceil(effectiveDuration / interval) + 1 }).map((_, i) => (
@@ -815,7 +829,7 @@ export default function TimelineCheckModal({
                   </div>
                   {/* playhead — red marker tracking the video position */}
                   <div
-                    className="absolute top-5 bottom-0 w-[2px] bg-danger z-10 pointer-events-none"
+                    className="absolute top-6 bottom-0 w-[2px] bg-danger z-10 pointer-events-none"
                     style={{ left: currentTime * pps }}
                   >
                     <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-danger rounded-full shadow ring-2 ring-white" />
@@ -845,7 +859,7 @@ export default function TimelineCheckModal({
                             : "bg-accent/70 ring-accent/40 text-white"
                         }`}
                         style={{
-                          top: 5 + ROW_H / 2 + row * ROW_H,
+                          top: 12 + ROW_H / 2 + row * ROW_H,
                           height: ROW_H - 10,
                           left,
                           width,

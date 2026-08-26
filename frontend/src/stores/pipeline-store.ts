@@ -2711,13 +2711,28 @@ async function runPipeline(id: string, startStep = 4) {
       markStepStart(id, 10);
       appendLog(id, "Tạo meta (tiêu đề/mô tả/tags) từ ngữ cảnh...");
       try {
-        const mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
-        const md = await mr.json();
-        if (mr.ok && md.meta) {
+        let md: any = null;
+        let mr: Response | null = null;
+        // Retry khi proxy frontend reset socket (ECONNRESET) trong lúc
+        // Gemini sinh meta chạy lâu. Tối đa 3 lần, nghỉ 1.5s giữa các lần.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
+            md = await mr.json();
+            if (mr.ok) break;
+          } catch {
+            md = null;
+          }
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+        }
+        if (mr?.ok && md?.meta) {
           patch(id, { meta: md.meta });
           appendLog(id, `Meta: ${md.meta.title || "(không có tiêu đề)"}`);
         } else {
-          appendLog(id, `Không tạo được meta: ${md.detail || "lỗi"}`);
+          appendLog(
+            id,
+            `Không tạo được meta: ${md?.detail || "lỗi mạng/timeout"}`
+          );
         }
       } catch {
         appendLog(id, "Bỏ qua tạo meta (lỗi).");

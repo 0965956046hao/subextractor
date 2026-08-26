@@ -89,6 +89,16 @@ export interface VideoMeta {
   pipeline?: PipelineProgress;
 }
 
+export interface ContextImages {
+  thumbnail: string | null;
+  images: string[];
+}
+
+export async function getContextImages(videoId: string): Promise<ContextImages> {
+  const res = await api.get(`/context-images/${videoId}`);
+  return res.data;
+}
+
 export async function listVideos(): Promise<VideoMeta[]> {
   const res = await api.get<{ videos: VideoMeta[] }>("/videos");
   return res.data.videos;

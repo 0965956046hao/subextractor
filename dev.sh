@@ -14,6 +14,33 @@ CAPCUT="$ROOT/capcut-tts-api"
 DS2API="$ROOT/ds2api"
 DS2API_PORT="${DS2API_PORT:-5001}"
 
+# Giải phóng các port cũ TRƯỚC KHI START.
+# Nếu còn instance dev.sh cũ (uvicorn :8000 / next :3000 / capcut :8100 /
+# ds2api :5001) chưa tắt hẳn, instance mới sẽ bị "Address already in use" →
+# backend crash ngay khi vừa reload, và frontend (next dev) tranh port 3000 /
+# dùng chung cache .next hỏng → mất CSS. Việc kill trước giúp re-run sạch.
+free_port() {
+  local port="$1"
+  local pids
+  # `|| true` bắt buộc: lsof trả exit 1 khi KHÔNG có listener → với `set -e`
+  # của dev.sh sẽ làm script thoát ngay (chính là lỗi "chạy xong Freeing
+  # ports rồi dừng, không start service nào"). Luôn trả 0 để tiếp tục.
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -n "$pids" ]; then
+    echo "  -> freeing port $port (pid: $pids)"
+    kill $pids 2>/dev/null || true
+    sleep 1
+    # fallback: force kill nếu vẫn còn giữ port
+    pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+  fi
+}
+echo "==> Freeing old dev ports (8000, 3000, 8100, ${DS2API_PORT})"
+free_port 8000
+free_port 3000
+free_port 8100
+free_port "${DS2API_PORT}"
+
 # Kill tất cả process khi Ctrl+C
 BACKEND_PID=""
 CAPCUT_PID=""
