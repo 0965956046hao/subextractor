@@ -233,6 +233,25 @@ def _has_subtitles_filter() -> bool:
         return False
 
 
+def _has_drawtext_filter() -> bool:
+    """Check whether ffmpeg was built with freetype (drawtext filter).
+
+    Một số bản ffmpeg (build thiếu freetype) không có drawtext — khi đó
+    watermark dạng chữ chạy phải bị bỏ qua thay vì làm chết cả job hardcode.
+    """
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=15,
+        )
+        # Match theo cột filter name để tránh nhầm với filter khác chứa chữ
+        # "drawtext" trong phần mô tả.
+        import re
+        return bool(re.search(r"^\s*\S+\s+drawtext\s", out.stdout or "", re.M))
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Font finder (macOS)
 # ---------------------------------------------------------------------------
@@ -524,8 +543,25 @@ def run_hardcode_sync(
             watermark = None
 
     # ── Build FFmpeg filter chain ──────────────────────────────────────────
+    if not has_libass:
+        logger.warning("hardcode job %s: ffmpeg lacks 'subtitles' filter — subs NOT burned", job_id)
+        _log(
+            "⚠ FFmpeg thiếu filter 'subtitles' (libass) — phụ đề sẽ KHÔNG được nhúng "
+            "vào video. Cài lại ffmpeg đầy đủ: brew reinstall ffmpeg",
+            "warning",
+        )
     has_logo = bool(watermark and watermark.get("logo_path"))
     has_scroll = bool(watermark and watermark.get("text"))
+    if has_scroll and not _has_drawtext_filter():
+        logger.warning(
+            "hardcode job %s: ffmpeg lacks 'drawtext' filter — skipping scrolling text", job_id,
+        )
+        _log(
+            "⚠ FFmpeg thiếu filter 'drawtext' (freetype) — bỏ qua chữ chạy watermark "
+            "(logo vẫn giữ nguyên). Cài lại ffmpeg đầy đủ: brew reinstall ffmpeg",
+            "warning",
+        )
+        has_scroll = False
     use_complex = has_logo or has_scroll
 
     # Escape the ASS filename for the subtitles filter.

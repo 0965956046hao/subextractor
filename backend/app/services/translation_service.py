@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.models import SrtEntry
-from app.services.media_utils import _srt_path
+from app.services.media_utils import _srt_path, _video_path
 from app.services.srt_utils import parse_srt, entries_to_srt
 from app.services.context_service import (
     load_video_context,
@@ -16,6 +16,8 @@ from app.services.job_utils import notify_ws_sync, job_log_sync
 from app.services.gemini_array import build_numbered_payload, gemini_map_texts
 from app.services.retry_utils import (
     configured_gemini_keys,
+    gemini_call_rotating,
+    genai_generate_content_factory,
 )
 
 logger = logging.getLogger(__name__)
