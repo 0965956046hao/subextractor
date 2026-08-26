@@ -377,6 +377,19 @@ def _get_video_path(video_id: str) -> Path:
     if video_dir.exists():
         for f in video_dir.iterdir():
             if f.stem.startswith("video"):
+                # If this video was imported from a merge, prefer the merged
+                # file (has both video + audio) over the video-only track.
+                meta_path = video_dir / "meta.json"
+                if meta_path.exists():
+                    try:
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        merge_id = meta.get("source_merge_id")
+                        if merge_id:
+                            merged = settings.temp_dir / "merged" / f"{merge_id}.mp4"
+                            if merged.exists() and merged.stat().st_size > 0:
+                                return merged
+                    except Exception:
+                        pass
                 return f
     # Fallback: after cleanup the original video is deleted — serve the final
     # hardcoded video so the result stays reviewable (library / detail pages).

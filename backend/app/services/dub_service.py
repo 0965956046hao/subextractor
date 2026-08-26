@@ -292,6 +292,65 @@ def _mix_background_with_voice(
     return out_path
 
 
+def _normalize_keep_ranges(ranges, duration: float) -> list[tuple[float, float]]:
+    """Sort + gộp overlap/gần kề, clamp theo duration, cap 200 đoạn."""
+    cleaned: list[tuple[float, float]] = []
+    for r in ranges or []:
+        try:
+            s = max(0.0, float(r.get("start", 0.0)))
+            e = float(r.get("end", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if duration > 0:
+            e = min(e, duration)
+        if e - s < 0.05:
+            continue
+        cleaned.append((s, e))
+    cleaned.sort()
+    merged: list[tuple[float, float]] = []
+    for s, e in cleaned:
+        if merged and s <= merged[-1][1] + 0.05:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged[:200]
+
+
+def _mix_background_with_keep_ranges(
+    instrumental: Path,
+    original_wav: Path,
+    ranges: list[tuple[float, float]],
+    out_path: Path,
+) -> Path:
+    """Nhạc nền Demucs + tiếng gốc chỉ bật trong `ranges` (volume-enable).
+
+    Trả về path nền dùng cho bước mix với full_voice. ranges rỗng → dùng
+    instrumental nguyên bản; phủ ≥98% video → dùng tiếng gốc nguyên bản.
+    """
+    if not ranges:
+        return instrumental
+    dur = _get_audio_duration(original_wav)
+    covered = sum(e - s for s, e in ranges)
+    if dur > 0 and covered >= dur * 0.98:
+        return original_wav
+    enable = "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in ranges)
+    fc = (
+        f"[1:a]volume=0:enable='{enable}'[kept];"
+        "[0:a][kept]amix=inputs=2:duration=first:normalize=0[out]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(instrumental),
+        "-i", str(original_wav),
+        "-filter_complex", fc,
+        "-map", "[out]",
+        "-c:a", "aac", "-b:a", "192k",
+        str(out_path),
+    ]
+    _run_ffmpeg(cmd)
+    return out_path
+
+
 def _db_to_volume(db: float) -> float:
     """Convert dB reduction to a linear volume multiplier (0 dB → 1.0)."""
     return float(10 ** (-db / 20))
@@ -319,6 +378,7 @@ def build_full_audio(
     multi_voice: bool = False,
     progress_callback=None,
     log_fn=None,
+    keep_ranges=None,
 ) -> Path:
     """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a.
 
@@ -327,6 +387,7 @@ def build_full_audio(
     (chỉ áp dụng cho engine CapCut).
     `mute_original` = True: Demucs tách giọng, giữ instrumental (no_vocals).
     `mute_original` = False: giữ nguyên audio gốc, giảm âm lượng `original_gain_db` dB.
+    `keep_ranges` = [{start,end}] (giây) — khi `mute_original`, giữ tiếng gốc trong các đoạn này (TTS vẫn đọc đè).
     """
     video_path = _video_path(video_id)
     out_dir = settings.temp_dir / "tts" / video_id
@@ -416,6 +477,25 @@ def build_full_audio(
         background_volume = _db_to_volume(original_gain_db)
         if log_fn:
             log_fn(f"Âm lượng nhạc nền gốc = {background_volume:.2f} ({original_gain_db:g} dB).")
+
+    norm_ranges: list[tuple[float, float]] = []
+    orig_wav = None
+    if mute_original and keep_ranges:
+        if log_fn:
+            log_fn(f"Giữ tiếng gốc trong {len(keep_ranges)} đoạn đã chọn...")
+        # separate_instrumental đã xoá audio.wav sau Demucs → trích lại tiếng gốc.
+        orig_wav = extract_audio(audio_source, out_dir)
+        norm_ranges = _normalize_keep_ranges(keep_ranges, _get_audio_duration(orig_wav))
+    if norm_ranges and orig_wav is not None:
+        background = _mix_background_with_keep_ranges(
+            instrumental, orig_wav, norm_ranges, out_dir / "background.m4a"
+        )
+        if log_fn:
+            log_fn(f"Nền đã trộn: giữ tiếng gốc trong {len(norm_ranges)} đoạn.")
+        if orig_wav.resolve() != Path(background).resolve():
+            orig_wav.unlink(missing_ok=True)
+    else:
+        background = instrumental
     cb(40)
 
     if tts_engine == "capcut":
@@ -562,7 +642,7 @@ def build_full_audio(
         if log_fn:
             log_fn("Trộn nhạc nền + giọng nói → full_audio.m4a...")
         _mix_background_with_voice(
-            instrumental, full_voice, background_volume, full_audio,
+            background, full_voice, background_volume, full_audio,
             dur=max(_get_audio_duration(instrumental), _get_audio_duration(full_voice)),
         )
         if log_fn:
@@ -587,6 +667,7 @@ def dub_audio_only(
     multi_voice: bool = False,
     progress_callback=None,
     log_fn=None,
+    keep_ranges=None,
 ) -> Path:
     """Separate vocals → synthesize Vietnamese TTS → mix into dubbed audio (no video merge)."""
     # Không tạo dubbed_video.mp4 nữa: bước hardcode đọc trực tiếp video gốc +
@@ -603,6 +684,7 @@ def dub_audio_only(
         multi_voice=multi_voice,
         progress_callback=progress_callback,
         log_fn=log_fn,
+        keep_ranges=keep_ranges,
     )
 
 
@@ -639,6 +721,7 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             multi_voice=job.get("multi_voice", False),
             progress_callback=progress,
             log_fn=_log,
+            keep_ranges=job.get("keep_ranges"),
         )
 
         job["status"] = "done"

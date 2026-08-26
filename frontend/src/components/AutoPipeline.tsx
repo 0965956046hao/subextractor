@@ -652,6 +652,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       removeWatermarkRegions: removeWmRegions,
       checkSubs,
       checkVoice,
+      autoUploadYoutube,
+      youtubeChannel: ytChannel,
       translateOn,
       translateTarget,
       dubOn,

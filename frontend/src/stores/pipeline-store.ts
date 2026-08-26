@@ -71,6 +71,7 @@ export type Stage =
   | "translating"
   | "saving"
   | "dub"
+  | "keep_original"
   | "muxing"
   | "meta"
   | "thumbnail"
@@ -91,6 +92,7 @@ export const STEP_STAGE: Record<string, number> = {
   translating: 7,
   saving: 7,
   dub: 8,
+  keep_original: 8,
   muxing: 9,
   meta: 10,
   thumbnail: 11,
@@ -109,6 +111,11 @@ export interface LogEntry {
   message: string;
   ts: number;
   level: string;
+}
+
+export interface TimeRange {
+  start: number;
+  end: number;
 }
 
 export interface Pipeline {
@@ -151,6 +158,8 @@ export interface Pipeline {
   dubVoice: string;
   muteOriginal: boolean;
   originalGainDb: number;
+  keepOriginalEnabled: boolean;
+  keepOriginalRanges: TimeRange[] | null;
   multiVoice: boolean;
   autoFit: boolean;
   watermark: boolean;
@@ -195,6 +204,7 @@ export interface DubOptions {
   muteOriginal: boolean;
   originalGainDb: number;
   multiVoice: boolean;
+  keepOriginalEnabled: boolean;
 }
 
 export interface ImportedDone {
@@ -209,6 +219,7 @@ const DEFAULT_DUB: DubOptions = {
   muteOriginal: true,
   originalGainDb: 0,
   multiVoice: false,
+  keepOriginalEnabled: false,
 };
 
 interface PipelineState {
@@ -246,6 +257,7 @@ interface PipelineState {
     removeWatermarkRegions?: Region[] | null;
     checkSubs?: boolean;
     checkVoice?: boolean;
+    autoUploadYoutube?: boolean;
     youtubeChannel?: string;
     useFalThumbnail?: boolean;
     useGptThumbnail?: boolean;
@@ -270,6 +282,7 @@ interface PipelineState {
   openVoiceCheck: (id: string) => void;
   closeVoiceCheck: (id: string) => void;
   confirmWatermarkRegions: (id: string, regions: Region[]) => void;
+  confirmKeepOriginal: (id: string, ranges: TimeRange[]) => void;
   confirmThumbnailReview: (
     id: string,
     action: "accept" | "skip",
@@ -345,6 +358,8 @@ function newPipeline(
     dubVoice: d.voice,
     muteOriginal: d.muteOriginal,
     originalGainDb: d.originalGainDb,
+    keepOriginalEnabled: d.keepOriginalEnabled ?? false,
+    keepOriginalRanges: null,
     multiVoice: d.multiVoice,
     autoFit,
     watermark,
@@ -449,7 +464,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.removeWatermarkRegions ?? [],
           input.checkSubs ?? false,
           input.checkVoice ?? false,
-          false,
+          input.autoUploadYoutube ?? false,
           input.youtubeChannel ?? "",
           input.useFalThumbnail ?? true,
           input.useGptThumbnail ?? false,
@@ -662,6 +677,10 @@ export const usePipelineStore = create<PipelineState>()(
         }));
         confirmWatermarkRegionAction(id, regions);
       },
+      confirmKeepOriginal: (id, ranges) => {
+        patch(id, { keepOriginalRanges: ranges });
+        confirmKeepOriginalAction(id, ranges);
+      },
       confirmThumbnailReview: (id, action, extraInstructions) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
@@ -727,6 +746,7 @@ export const usePipelineStore = create<PipelineState>()(
         rejectTimelineCheck(id);
         rejectThumbnailReview(id);
         rejectThumbnailFallback(id);
+        rejectKeepOriginal(id);
         if (videoId) {
           try {
             await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -1250,6 +1270,61 @@ function rejectWatermarkRegion(id: string) {
   const w = watermarkRegionWaiters.get(id);
   if (w) {
     watermarkRegionWaiters.delete(id);
+    w.reject();
+  }
+}
+
+const keepOriginalWaiters = new Map<
+  string,
+  { resolve: (r: TimeRange[]) => void; reject: () => void }
+>();
+
+function waitForKeepOriginal(id: string): Promise<TimeRange[]> {
+  return new Promise<TimeRange[]>((resolve, reject) => {
+    keepOriginalWaiters.set(id, { resolve, reject });
+
+    // Poll backend cho xác nhận từ tab khác / Telegram Mini App.
+    const poll = async () => {
+      while (keepOriginalWaiters.has(id)) {
+        await sleep(2000);
+        const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+        if (!cur?.videoId) continue;
+        try {
+          const st = await getPipelineState(cur.videoId);
+          const kc = (
+            st as unknown as {
+              keep_original_confirm?: {
+                confirmed?: boolean;
+                ranges?: unknown[];
+              } | null;
+            }
+          ).keep_original_confirm;
+          if (kc?.confirmed) {
+            keepOriginalWaiters.delete(id);
+            resolve((kc.ranges || []) as TimeRange[]);
+            return;
+          }
+        } catch {
+          // ignore transient
+        }
+      }
+    };
+    void poll();
+  });
+}
+
+function confirmKeepOriginalAction(id: string, ranges: TimeRange[]) {
+  const w = keepOriginalWaiters.get(id);
+  if (w) {
+    keepOriginalWaiters.delete(id);
+    w.resolve(ranges);
+  }
+}
+
+function rejectKeepOriginal(id: string) {
+  const w = keepOriginalWaiters.get(id);
+  if (w) {
+    keepOriginalWaiters.delete(id);
     w.reject();
   }
 }
@@ -2529,6 +2604,28 @@ async function runPipeline(id: string, startStep = 4) {
                   !cur.dubVoice.startsWith("AV")
                 ? cur.dubVoice
                 : "vi-VN-Standard-B";
+          // Opt-in: chọn đoạn giữ tiếng gốc trước khi chạy Demucs.
+          let keepRanges = cur.keepOriginalRanges;
+          if (
+            cur.muteOriginal &&
+            cur.keepOriginalEnabled &&
+            (!keepRanges || keepRanges.length === 0)
+          ) {
+            patch(id, { stage: "keep_original" });
+            appendLog(
+              id,
+              "Kéo chọn các đoạn giữ tiếng gốc trên timeline, nhấn Xác nhận để tiếp tục...",
+            );
+            keepRanges = await waitForKeepOriginal(id);
+            patch(id, { keepOriginalRanges: keepRanges });
+            appendLog(
+              id,
+              keepRanges.length > 0
+                ? `Sẽ giữ tiếng gốc trong ${keepRanges.length} đoạn.`
+                : "Không chọn đoạn nào — mute tiếng gốc toàn bộ.",
+            );
+            patch(id, { stage: "dub" });
+          }
           appendLog(
             id,
             engine === "capcut"
@@ -2550,6 +2647,8 @@ async function runPipeline(id: string, startStep = 4) {
                 mute_original: cur.muteOriginal,
                 original_gain_db: cur.originalGainDb,
                 multi_voice: cur.multiVoice && engine === "capcut",
+                keep_ranges:
+                  keepRanges && keepRanges.length > 0 ? keepRanges : undefined,
               }),
             });
             const dd = await dr.json();
