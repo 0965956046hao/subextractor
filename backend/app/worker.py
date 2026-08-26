@@ -1336,6 +1336,28 @@ async def run_telegram_auto_job(
 
         await _tg_send(chat_id, f"✅ Đã tải: {title[:60] or video_id}")
 
+        # Gửi gallery thumbnail + big thumbs để user xem nhanh ảnh ngữ cảnh.
+        try:
+            from app.services.context_service import (
+                _thumbnail_file, _context_image_paths,
+            )
+            gallery: list[str] = []
+            thumb_file = _thumbnail_file(video_id)
+            if thumb_file.exists():
+                gallery.append(str(thumb_file))
+            gallery.extend(str(p) for p in _context_image_paths(video_id))
+            if gallery:
+                from app.services.telegram_service import telegram_service
+                sent = await telegram_service.send_media_group(
+                    chat_id,
+                    gallery[:10],
+                    f"🖼 <b>Gallery ngữ cảnh</b> — {len(gallery)} ảnh",
+                )
+                if not sent:
+                    await _tg_send(chat_id, f"🖼 Đã tải {len(gallery)} ảnh ngữ cảnh.")
+        except Exception:
+            pass
+
         # ── Step 1.5: Manual region + subtitle position (via Mini App) ──
         region = {"x1": 0.114, "y1": 0.748, "x2": 0.863, "y2": 0.972}  # DEFAULT_REGION
         selected_style = None

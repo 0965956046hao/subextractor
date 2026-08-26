@@ -649,6 +649,89 @@ class TelegramService:
             logger.warning("Telegram sendAudio to %s failed: %s", chat_id, e)
             return False
 
+    async def send_media_group(
+        self, chat_id: int, image_paths: list[str], caption: str = "",
+    ) -> bool:
+        """Send 2-10 photos as a Telegram media group (gallery).
+
+        The first image carries the caption. Returns True on success.
+        """
+        import json as _json
+
+        if not self._token or not image_paths:
+            return False
+        # Telegram allows 2-10 items per media group; single photo → sendPhoto.
+        valid: list[Path] = [Path(p) for p in image_paths if Path(p).exists()]
+        if not valid:
+            return False
+        if len(valid) == 1:
+            return await self.send_photo(chat_id, str(valid[0]), caption)
+
+        client = httpx.AsyncClient(timeout=300)
+        try:
+            files = {}
+            media = []
+            for i, p in enumerate(valid[:10]):
+                f = await asyncio.to_thread(open, p, "rb")
+                files[f"file{i}"] = (p.name, f, "image/jpeg")
+                item = {"type": "photo", "media": f"attach://file{i}"}
+                if i == 0 and caption:
+                    item["caption"] = caption
+                    item["parse_mode"] = "HTML"
+                media.append(item)
+
+            resp = await client.post(
+                f"{TELEGRAM_API}/bot{self._token}/sendMediaGroup",
+                data={
+                    "chat_id": str(chat_id),
+                    "media": _json.dumps(media),
+                },
+                files=files,
+            )
+            result = resp.json()
+            for fh in files.values():
+                fh[1].close()
+            if result.get("ok"):
+                return True
+            logger.warning("Telegram sendMediaGroup failed: %s", result.get("description"))
+            return False
+        except Exception as e:
+            logger.warning("Telegram sendMediaGroup to %s failed: %s", chat_id, e)
+            return False
+        finally:
+            await client.aclose()
+
+    async def send_photo(self, chat_id: int, image_path: str, caption: str = "") -> bool:
+        """Send a single photo to a specific chat. Returns True if sent."""
+        if not self._token:
+            return False
+        p = Path(image_path)
+        if not (p.exists() and p.is_file()):
+            return False
+        try:
+            client = httpx.AsyncClient(timeout=300)
+            try:
+                with open(p, "rb") as f:
+                    resp = await client.post(
+                        f"{TELEGRAM_API}/bot{self._token}/sendPhoto",
+                        data={
+                            "chat_id": str(chat_id),
+                            "caption": caption,
+                            "parse_mode": "HTML",
+                        },
+                        files={"photo": (p.name, f, "image/jpeg")},
+                    )
+            finally:
+                await client.aclose()
+            result = resp.json()
+            if result.get("ok"):
+                return True
+            logger.warning("Telegram sendPhoto failed: %s", result.get("description"))
+            return False
+        except Exception as e:
+            logger.warning("Telegram sendPhoto to %s failed: %s", chat_id, e)
+            return False
+
     def has_connected_chats(self) -> bool:
         return bool(self._chat_ids)
 
