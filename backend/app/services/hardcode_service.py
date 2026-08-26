@@ -145,6 +145,9 @@ def _hex_to_rgba(hex_color: str, opacity: int = 255) -> tuple:
 
 _SUB_PAD_X = 24
 _SUB_PAD_Y = 16
+# Hiệu chỉnh dọc cho text \an5: tâm line-box libass ≠ tâm INK (do ascent/
+# descender). Đơn vị = nhân với font_size. Đo bằng script calibration.
+_ASS_TEXT_DY_RATIO = -0.04
 
 
 def srt_to_ass_blackbox(
@@ -238,7 +241,6 @@ Style: BoxBorder,Arial,{font_size_ref},{border_col},&H000000FF,{border_col},&H00
             fs -= 2
             bbox = _font(fs).getbbox(raw_text)
         tw_px, th_px = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        top_off = bbox[1]
 
         box_w = tw_px + pad_x * 2 + outline_w * 2
         box_h = th_px + pad_y * 2 + outline_w * 2
@@ -267,12 +269,15 @@ Style: BoxBorder,Arial,{font_size_ref},{border_col},&H000000FF,{border_col},&H00
                 f"{{\\an7\\pos({bx},{by})\\p1}}{path}{{\\p0}}"
             )
 
-        # Layer 2 — text neo top-left đúng toạ độ preview
-        tx = bx + pad_x + outline_w
-        ty = by + pad_y + outline_w - top_off
+        # Layer 2 — text căn TÂM hộp bằng \an5: libass tự căn giữa theo số đo
+        # font của nó nên không bao giờ lệch trái/phải (neo cạnh tay trước đây
+        # lệch vì libass đo width khác PIL). dy hiệu chỉnh tỉ lệ fs để tâm INK
+        # trùng tâm hộp (chữ có dấu/đuôi descender làm line-box lệch tâm).
+        box_cx = bx + box_w // 2
+        box_cy = by + box_h // 2 + round(_ASS_TEXT_DY_RATIO * fs)
         events.append(
             f"Dialogue: 2,{t0},{t1},SubStyle,,0,0,0,,"
-            f"{{\\an7\\pos({tx},{ty})\\fs{fs}}}"
+            f"{{\\an5\\pos({box_cx},{box_cy})\\fs{fs}}}"
             f"{esc}"
         )
 
