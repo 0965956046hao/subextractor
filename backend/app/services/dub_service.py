@@ -334,8 +334,12 @@ def _mix_background_with_keep_ranges(
     if dur > 0 and covered >= dur * 0.98:
         return original_wav
     enable = "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in ranges)
+    # Muốn tiếng gốc BẬT trong keep-ranges, TẮT ngoài. Với `volume=0`, filter
+    # chỉ áp dụng (→ tắt tiếng) khi enable=true, nên enable phải là "ngoài" các
+    # ranges: not(between + between + ...). Khi trong range → enable=false →
+    # passthrough (giữ nguyên tiếng gốc); khi ngoài → enable=true → volume=0.
     fc = (
-        f"[1:a]volume=0:enable='{enable}'[kept];"
+        f"[1:a]volume=0:enable='not({enable})'[kept];"
         "[0:a][kept]amix=inputs=2:duration=first:normalize=0[out]"
     )
     cmd = [
@@ -482,7 +486,7 @@ def build_full_audio(
     orig_wav = None
     if mute_original and keep_ranges:
         if log_fn:
-            log_fn(f"Giữ tiếng gốc trong {len(keep_ranges)} đoạn đã chọn...")
+            log_fn("Giữ tiếng gốc trong các đoạn đã chọn, đang trích & trộn nền...")
         # separate_instrumental đã xoá audio.wav sau Demucs → trích lại tiếng gốc.
         orig_wav = extract_audio(audio_source, out_dir)
         norm_ranges = _normalize_keep_ranges(keep_ranges, _get_audio_duration(orig_wav))
@@ -631,10 +635,15 @@ def build_full_audio(
 
     full_audio = out_dir / "full_audio.m4a"
     instrumental_mtime = instrumental.stat().st_mtime if instrumental.exists() else 0.0
+    # Nền có thể là instrumental gốc HOẶC background.m4a đã trộn keep_ranges
+    # → phải tính mtime của đúng file nền đang dùng để tránh tái dùng full_audio
+    # cũ khi user đổi các đoạn giữ tiếng gốc.
+    background_mtime = background.stat().st_mtime if background.exists() else 0.0
     if (
         full_audio.exists() and full_audio.stat().st_size > 0
         and full_audio.stat().st_mtime >= full_voice.stat().st_mtime
         and full_audio.stat().st_mtime >= instrumental_mtime
+        and full_audio.stat().st_mtime >= background_mtime
     ):
         if log_fn:
             log_fn("Đã có full_audio.m4a từ lần chạy trước — tái sử dụng (bỏ qua trộn nhạc).")
