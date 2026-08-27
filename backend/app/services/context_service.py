@@ -6,7 +6,6 @@ from pathlib import Path
 from app.config import settings
 from app.services.retry_utils import (
     gemini_retry,
-    gemini_call_rotating,
     configured_gemini_keys,
     _next_key,
     genai_generate_content_factory,
@@ -322,8 +321,9 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
                 "Chỉ chọn từ danh sách có sẵn, không tự đặt tên giọng mới."
             )
         # Dùng Chat API (client.chats.create().send_message) thay vì
-        # models.generate_content để tránh cảnh báo AFC của SDK và vẫn giữ
-        # key-rotation/retry qua gemini_call_rotating.
+        # models.generate_content để tránh cảnh báo AFC của SDK. Retry giữ
+        # nguyên qua gemini_retry, nhưng KHÔNG xoay key (file trên File Store
+        # khóa theo api_key đã upload → key khác sẽ 403).
         prompt = (
             f"Analyze these {len(uploaded_files)} context images from video '{video_id}'. "
             "Synthesize ALL images together to understand the full video context. "
@@ -342,14 +342,15 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
             + voice_instruction
         )
 
-        def _chat_factory(key: str):
-            from google import genai
-
-            client = genai.Client(api_key=key)
-            chat = client.chats.create(model=settings.gemini_model)
-            return chat.send_message
-
-        response = gemini_call_rotating(_chat_factory, [*uploaded_files, prompt])
+        # Reuse the SAME client/key used for the File-Store upload above.
+        # Gemini File Store is key-scoped, so the chat call MUST use the same
+        # api_key (rotating here would 403 on the uploaded files). Creating a
+        # throwaway client inside a factory and returning its bound method lets
+        # the client be garbage-collected before the request is sent, raising
+        # "Cannot send a request, as the client has been closed" (see
+        # retry_utils.genai_generate_content_factory docstring).
+        chat = client.chats.create(model=settings.gemini_model)
+        response = gemini_retry(chat.send_message)(*uploaded_files, prompt)
 
         context = response.text.strip()
     except Exception as e:
