@@ -289,6 +289,14 @@ export default function SettingsPage() {
   const [toolsInstalling, setToolsInstalling] = useState(false);
   const [toolsLogs, setToolsLogs] = useState<Array<{tool: string, status: string, message: string}>>([]);
   const [showToolsModal, setShowToolsModal] = useState(false);
+  const [fbAppId, setFbAppId] = useState("");
+  const [fbAppSecret, setFbAppSecret] = useState("");
+  const [fbPageId, setFbPageId] = useState("");
+  const [fbPageToken, setFbPageToken] = useState("");
+  const [fbApiVersion, setFbApiVersion] = useState("");
+  const [fbDefaultPublish, setFbDefaultPublish] = useState(false);
+  const [hasFacebook, setHasFacebook] = useState(false);
+  const [fbBusy, setFbBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -325,6 +333,13 @@ export default function SettingsPage() {
         setYtChannels(ytCh.channels || []);
         setTgConfig(tg);
         setHealth(h);
+        setFbAppId(cfg.facebook_app_id || "");
+        setFbAppSecret(cfg.facebook_app_secret || "");
+        setFbPageId(cfg.facebook_page_id || "");
+        setFbPageToken(cfg.facebook_page_access_token || "");
+        setFbApiVersion(cfg.facebook_graph_api_version || "");
+        setFbDefaultPublish(!!cfg.facebook_default_publish);
+        setHasFacebook(!!cfg.has_facebook_config);
       } catch {
         setError(t("error.backend"));
       } finally {
@@ -427,6 +442,33 @@ export default function SettingsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.fal.errSave"));
       setStatus("");
+    }
+  };
+
+  const handleSaveFacebook = async () => {
+    setError("");
+    setFbBusy(true);
+    try {
+      const res = await saveAppConfig({
+        facebook_app_id: fbAppId,
+        facebook_app_secret: fbAppSecret,
+        facebook_page_id: fbPageId,
+        facebook_page_access_token: fbPageToken,
+        facebook_graph_api_version: fbApiVersion,
+        facebook_default_publish: fbDefaultPublish,
+      });
+      if (res.error) {
+        setError(res.error);
+        setFbBusy(false);
+        return;
+      }
+      setHasFacebook(!!(fbAppId.trim() || fbPageToken.trim()));
+      setStatus(t("settings.facebook.saved"));
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("settings.facebook.saved"));
+    } finally {
+      setFbBusy(false);
     }
   };
 
@@ -1532,6 +1574,149 @@ export default function SettingsPage() {
                 )}
               </>
             )}
+          </div>
+        </div>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={460} className="md:col-span-2">
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                {t("settings.facebook.title")}
+              </p>
+              <span className="tag">
+                {hasFacebook
+                  ? t("settings.facebook.configured")
+                  : t("settings.facebook.notConfigured")}
+              </span>
+            </div>
+            <p className="text-[11px] text-ink-light mb-4">
+              {t("settings.facebook.desc")}{" "}
+              <span className="text-ink-light">
+                {t("settings.facebook.howto")}{" "}
+                <a
+                  href="https://developers.facebook.com/apps/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent hover:text-accent-light underline underline-offset-2"
+                >
+                  {t("settings.facebook.console")}
+                </a>{" "}
+                {t("settings.facebook.steps")}
+              </span>
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="text-[11px] text-ink-muted mb-1 block">
+                  {t("settings.facebook.appId")}
+                </label>
+                <input
+                  type="text"
+                  value={fbAppId}
+                  onChange={(e) => setFbAppId(e.target.value)}
+                  placeholder={t("settings.facebook.pasteAppId")}
+                  className="w-full input-field text-[12px] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-ink-muted mb-1 block">
+                  {t("settings.facebook.appSecret")}
+                </label>
+                <input
+                  type="password"
+                  value={fbAppSecret}
+                  onChange={(e) => setFbAppSecret(e.target.value)}
+                  placeholder={t("settings.facebook.pasteAppSecret")}
+                  className="w-full input-field text-[12px] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-ink-muted mb-1 block">
+                  {t("settings.facebook.pageId")}
+                </label>
+                <input
+                  type="text"
+                  value={fbPageId}
+                  onChange={(e) => setFbPageId(e.target.value)}
+                  placeholder={t("settings.facebook.pastePageId")}
+                  className="w-full input-field text-[12px] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-ink-muted mb-1 block">
+                  {t("settings.facebook.apiVersion")}
+                </label>
+                <input
+                  type="text"
+                  value={fbApiVersion}
+                  onChange={(e) => setFbApiVersion(e.target.value)}
+                  placeholder={t("settings.facebook.pasteVersion")}
+                  className="w-full input-field text-[12px] font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-[11px] text-ink-muted mb-1 block">
+                {t("settings.facebook.pageToken")}
+              </label>
+              <input
+                type="password"
+                value={fbPageToken}
+                onChange={(e) => setFbPageToken(e.target.value)}
+                placeholder={t("settings.facebook.pasteToken")}
+                className="w-full input-field text-[12px] font-mono"
+              />
+              <p className="text-[10px] text-ink-light mt-1">
+                {t("settings.facebook.serviceHint")}
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <ToggleField
+                label={t("settings.facebook.publish")}
+                value={fbDefaultPublish}
+                onChange={setFbDefaultPublish}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSaveFacebook}
+                disabled={fbBusy}
+                className="btn-island-primary text-[12px] !px-5 !py-2 disabled:opacity-50"
+              >
+                {fbBusy ? t("btn.saving") : t("settings.facebook.save")}
+              </button>
+            </div>
+
+            {/* Setup guide */}
+            <div className="mt-6 pt-4 border-t border-white/[0.08]">
+              <p className="text-[12px] font-semibold text-ink mb-3">
+                {t("settings.facebook.guide.title")}
+              </p>
+              <ol className="space-y-2.5">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <li
+                    key={n}
+                    className="flex items-start gap-3 text-[11px] text-ink-light leading-relaxed"
+                  >
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-accent/15 text-accent text-[10px] font-semibold flex items-center justify-center mt-0.5">
+                      {n}
+                    </span>
+                    <span>
+                      {t(`settings.facebook.guide.step${n}` as keyof Dict)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <p className="text-[10px] text-ink-light mt-3 italic">
+                {t("settings.facebook.guide.note")}
+              </p>
+            </div>
           </div>
         </div>
       </AnimatedBlock>

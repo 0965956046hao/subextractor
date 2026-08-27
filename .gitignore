@@ -12,6 +12,7 @@ __pycache__/
 *.token
 !test/*.token
 youtubeuploader/youtubeuploader
+tiktokuploader/tiktok-uploader
 # =========================
 # Tauri
 # =========================

@@ -689,6 +689,17 @@ export interface AppConfig {
   watermark_logo_name: string;
   watermark_presets: WatermarkPreset[];
   active_watermark_preset: string;
+  has_tiktok_config?: boolean;
+  tiktok_client_key?: string;
+  tiktok_client_secret?: string;
+  tiktok_redirect_uri?: string;
+  has_facebook_config?: boolean;
+  facebook_app_id?: string;
+  facebook_app_secret?: string;
+  facebook_page_id?: string;
+  facebook_page_access_token?: string;
+  facebook_graph_api_version?: string;
+  facebook_default_publish?: boolean;
 }
 
 export async function getAppConfig(): Promise<AppConfig> {
@@ -704,6 +715,15 @@ export async function saveAppConfig(body: {
   auto_context_enabled?: boolean;
   subtitle_style?: Partial<SubtitleStyle>;
   watermark_text?: string;
+  tiktok_client_key?: string;
+  tiktok_client_secret?: string;
+  tiktok_redirect_uri?: string;
+  facebook_app_id?: string;
+  facebook_app_secret?: string;
+  facebook_page_id?: string;
+  facebook_page_access_token?: string;
+  facebook_graph_api_version?: string;
+  facebook_default_publish?: boolean;
 }): Promise<{ status: string; error?: string; saved?: string[] }> {
   const res = await api.post("/config", body);
   return res.data;

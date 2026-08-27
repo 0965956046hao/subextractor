@@ -20,6 +20,10 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   const [fontSize, setFontSize] = useState(48);
   const [marginV, setMarginV] = useState(40);
   const [marginH, setMarginH] = useState(0);
+  const [textColor, setTextColor] = useState("#FFFFFF");
+  const [outlineColor, setOutlineColor] = useState("#000000");
+  const [outlineWidth, setOutlineWidth] = useState(0);
+  const [boxColor, setBoxColor] = useState("#000000");
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -30,7 +34,26 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   const dragRef = useRef<{ x: number; y: number; mv: number; mh: number } | null>(null);
 
   const fetchOverlay = useCallback(
-    async (fs: number, mv: number, mh: number, time: number, force?: boolean) => {
+    async (
+      fs: number,
+      mv: number,
+      mh: number,
+      time: number,
+      force?: boolean,
+      colOverride?: {
+        text_color: string;
+        outline_color: string;
+        outline_width: number;
+        box_color: string;
+      },
+    ) => {
+      const c =
+        colOverride ?? {
+          text_color: textColor,
+          outline_color: outlineColor,
+          outline_width: outlineWidth,
+          box_color: boxColor,
+        };
       if (!force && Math.abs(time - lastTimeRef.current) < 0.3) return;
       lastTimeRef.current = time;
       setLoading(true);
@@ -41,7 +64,15 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             region,
-            style: { font_size: fs, margin_v: mv, margin_h: mh },
+            style: {
+              font_size: fs,
+              margin_v: mv,
+              margin_h: mh,
+              text_color: c.text_color,
+              outline_color: c.outline_color,
+              outline_width: c.outline_width,
+              box_color: c.box_color,
+            },
             text: t("preview.sampleText"),
             time,
             format: "overlay",
@@ -59,7 +90,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         setLoading(false);
       }
     },
-    [videoId, region, t]
+    [videoId, region, t, textColor, outlineColor, outlineWidth, boxColor],
   );
 
   // Initial overlay at t=0, then re-render on slider changes (debounced).
@@ -102,6 +133,30 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     debounceRef.current = setTimeout(() => refresh(fontSize, marginV, next), 250);
   };
 
+  // Color controls: update state + re-render preview with the new palette.
+  const applyColors = (
+    patch: Partial<{
+      text_color: string;
+      outline_color: string;
+      outline_width: number;
+      box_color: string;
+    }>,
+  ) => {
+    const next = {
+      text_color: textColor,
+      outline_color: outlineColor,
+      outline_width: outlineWidth,
+      box_color: boxColor,
+      ...patch,
+    };
+    setTextColor(next.text_color);
+    setOutlineColor(next.outline_color);
+    setOutlineWidth(next.outline_width);
+    setBoxColor(next.box_color);
+    const time = videoRef.current?.currentTime ?? 0;
+    fetchOverlay(fontSize, marginV, marginH, time, true, next);
+  };
+
   const handleTimeUpdate = () => {
     const t = videoRef.current?.currentTime ?? 0;
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -113,7 +168,15 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   };
 
   const handleConfirm = () => {
-    onConfirmed({ font_size: fontSize, margin_v: marginV, margin_h: marginH });
+    onConfirmed({
+      font_size: fontSize,
+      margin_v: marginV,
+      margin_h: marginH,
+      text_color: textColor,
+      outline_color: outlineColor,
+      outline_width: outlineWidth,
+      box_color: boxColor,
+    });
   };
 
   // Drag the subtitle text directly on the video to reposition it.
@@ -267,6 +330,56 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             className="w-full accent-accent"
           />
         </label>
+
+        <div className="pt-3 border-t border-white/[0.06]">
+          <p className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em] mb-2.5">
+            {t("preview.colors")}
+          </p>
+          <div className="grid grid-cols-2 gap-x-5 gap-y-3">
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[12px] text-ink-light">{t("preview.textColor")}</span>
+              <input
+                type="color"
+                value={textColor}
+                onChange={(e) => applyColors({ text_color: e.target.value })}
+                className="w-10 h-8 rounded cursor-pointer bg-transparent"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[12px] text-ink-light">{t("preview.outlineColor")}</span>
+              <input
+                type="color"
+                value={outlineColor}
+                onChange={(e) => applyColors({ outline_color: e.target.value })}
+                className="w-10 h-8 rounded cursor-pointer bg-transparent"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[12px] text-ink-light">{t("preview.boxColor")}</span>
+              <input
+                type="color"
+                value={boxColor}
+                onChange={(e) => applyColors({ box_color: e.target.value })}
+                className="w-10 h-8 rounded cursor-pointer bg-transparent"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-[12px] text-ink-light flex items-center justify-between">
+                {t("preview.outlineWidth")}
+                <span className="text-[11px] font-mono text-accent font-semibold">{outlineWidth}px</span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={1}
+                value={outlineWidth}
+                onChange={(e) => applyColors({ outline_width: Number(e.target.value) })}
+                className="w-full accent-accent"
+              />
+            </label>
+          </div>
+        </div>
 
         <div className="flex items-center justify-end gap-2 pt-1">
           <button

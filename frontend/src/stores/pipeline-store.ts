@@ -157,6 +157,7 @@ export interface Pipeline {
   subtitleStyle: Partial<SubtitleStyle> | null;
   dubEngine: "google" | "capcut";
   dubVoice: string;
+  voiceLang: string;
   muteOriginal: boolean;
   originalGainDb: number;
   keepOriginalEnabled: boolean;
@@ -234,6 +235,8 @@ interface PipelineState {
     watermarkPreset?: string,
     removeWatermarkEnabled?: boolean,
     removeWatermarkRegions?: Region[],
+    region?: Region | null,
+    subtitleStyle?: SubtitleStyle | null,
     checkSubs?: boolean,
     checkVoice?: boolean,
     autoUploadYoutube?: boolean,
@@ -244,6 +247,7 @@ interface PipelineState {
     translateOn?: boolean,
     translateTarget?: string,
     dubOn?: boolean,
+    voiceLang?: string,
   ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
@@ -256,6 +260,8 @@ interface PipelineState {
     watermarkPreset?: string;
     removeWatermarkEnabled?: boolean;
     removeWatermarkRegions?: Region[] | null;
+    region?: Region | null;
+    subtitleStyle?: SubtitleStyle | null;
     checkSubs?: boolean;
     checkVoice?: boolean;
     autoUploadYoutube?: boolean;
@@ -265,6 +271,7 @@ interface PipelineState {
     translateOn?: boolean;
     translateTarget?: string;
     dubOn?: boolean;
+    voiceLang?: string;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -310,6 +317,8 @@ function newPipeline(
   watermarkPreset = "",
   removeWatermarkEnabled = false,
   removeWatermarkRegions: Region[] = [],
+  region: Region | null = null,
+  subtitleStyle: SubtitleStyle | null = null,
   checkSubs = false,
   checkVoice = false,
   autoUploadYoutube = false,
@@ -320,6 +329,7 @@ function newPipeline(
   translateOn = true,
   translateTarget = "vi",
   dubOn = true,
+  voiceLang = "",
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -355,11 +365,12 @@ function newPipeline(
     dubOn,
     contextOn: false,
     meta: null,
-    region: null,
+    region,
     regionMode,
-    subtitleStyle: null,
+    subtitleStyle,
     dubEngine: d.engine,
     dubVoice: d.voice,
+    voiceLang,
     muteOriginal: d.muteOriginal,
     originalGainDb: d.originalGainDb,
     keepOriginalEnabled: d.keepOriginalEnabled ?? false,
@@ -412,6 +423,8 @@ export const usePipelineStore = create<PipelineState>()(
         watermarkPreset = "",
         removeWatermarkEnabled = false,
         removeWatermarkRegions = [],
+        region: Region | null = null,
+        subtitleStyle: SubtitleStyle | null = null,
         checkSubs = false,
         checkVoice = false,
         autoUploadYoutube = false,
@@ -422,6 +435,7 @@ export const usePipelineStore = create<PipelineState>()(
         translateOn = true,
         translateTarget = "vi",
         dubOn = true,
+        voiceLang = "",
       ) => {
         const id = Math.random().toString(36).slice(2, 10);
         set((s) => ({
@@ -437,6 +451,8 @@ export const usePipelineStore = create<PipelineState>()(
               watermarkPreset,
               removeWatermarkEnabled,
               removeWatermarkRegions,
+              region,
+              subtitleStyle,
               checkSubs,
               checkVoice,
               autoUploadYoutube,
@@ -447,6 +463,7 @@ export const usePipelineStore = create<PipelineState>()(
               translateOn,
               translateTarget,
               dubOn,
+              voiceLang,
             ),
           ],
         }));
@@ -466,6 +483,8 @@ export const usePipelineStore = create<PipelineState>()(
           input.watermarkPreset ?? "",
           input.removeWatermarkEnabled ?? false,
           input.removeWatermarkRegions ?? [],
+          input.region ?? null,
+          input.subtitleStyle ?? null,
           input.checkSubs ?? false,
           input.checkVoice ?? false,
           input.autoUploadYoutube ?? false,
@@ -476,6 +495,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.translateOn ?? true,
           input.translateTarget ?? "vi",
           input.dubOn ?? true,
+          input.voiceLang ?? "",
         );
         // Uploaded file is already registered on the backend: skip resolve + merge
         // and start directly at region selection (step 2).

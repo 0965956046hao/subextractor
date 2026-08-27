@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { AnimatedBlock } from "@/lib/animation";
 import PageHeader from "@/components/layout/PageHeader";
 import { useI18n, type Dict } from "@/lib/i18n";
+import PipelineSavePanel from "@/components/PipelineSavePanel";
 import {
   getPipelineHealth,
   getProfilesCheck,
@@ -26,12 +27,16 @@ import {
   listYoutubeChannels,
   setActiveWatermarkPreset,
   chatgptLogin,
+  getPipelinePresets,
+  deletePipelinePreset,
   type PipelineHealth,
   type HealthCheckResult,
   type CapCutVoice,
   type VideoMeta,
   type WatermarkPreset,
   type Region,
+  type SubtitleStyle,
+  type PipelinePreset,
   type YouTubeChannelInfo,
 } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
@@ -283,6 +288,20 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
+  const [presetId, setPresetId] = useState<string>("");
+  const [pipelinePresets, setPipelinePresets] = useState<PipelinePreset[]>([]);
+  const [presetSeed, setPresetSeed] = useState<{
+    region: Region | null;
+    subtitleStyle: SubtitleStyle | null;
+    removeWatermarkRegions: Region[];
+    removeWatermarkEnabled: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    getPipelinePresets()
+      .then((r) => setPipelinePresets(r.presets))
+      .catch(() => setPipelinePresets([]));
+  }, []);
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
@@ -621,6 +640,39 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     pipelines[pipelines.length - 1] ??
     null;
 
+  const applyPreset = (cfg: Record<string, unknown>) => {
+    if (typeof cfg.srcLang === "string") setSrcLang(cfg.srcLang as any);
+    if (typeof cfg.regionMode === "string") setRegionMode(cfg.regionMode as "manual" | "auto");
+    if (typeof cfg.translateOn === "boolean") setTranslateOn(cfg.translateOn);
+    if (typeof cfg.translateTarget === "string") setTranslateTarget(cfg.translateTarget as any);
+    if (typeof cfg.dubOn === "boolean") setDubOn(cfg.dubOn);
+    if (typeof cfg.dubEngine === "string") setDubEngine(cfg.dubEngine as any);
+    if (typeof cfg.voiceLang === "string") setVoiceLang(cfg.voiceLang as any);
+    if (typeof cfg.dubVoice === "string") setDubVoice(cfg.dubVoice);
+    if (typeof cfg.muteOriginal === "boolean") setMuteOriginal(cfg.muteOriginal);
+    if (typeof cfg.keepOriginalEnabled === "boolean") setKeepOriginalEnabled(cfg.keepOriginalEnabled);
+    if (typeof cfg.originalGainDb === "number") setOriginalGainDb(cfg.originalGainDb);
+    if (typeof cfg.multiVoice === "boolean") setMultiVoice(cfg.multiVoice);
+    if (typeof cfg.autoFitSubs === "boolean") setAutoFitSubs(cfg.autoFitSubs);
+    if (typeof cfg.watermarkOn === "boolean") setWatermarkOn(cfg.watermarkOn);
+    if (typeof cfg.watermarkPreset === "string") setWatermarkPreset(cfg.watermarkPreset as any);
+    if (typeof cfg.removeWatermarkEnabled === "boolean") setRemoveWmEnabled(cfg.removeWatermarkEnabled);
+    if (typeof cfg.checkSubs === "boolean") setCheckSubs(cfg.checkSubs);
+    if (typeof cfg.checkVoice === "boolean") setCheckVoice(cfg.checkVoice);
+    if (typeof cfg.useFalThumbnail === "boolean") setUseFalThumbnail(cfg.useFalThumbnail);
+    if (typeof cfg.useGptThumbnail === "boolean") setUseGptThumbnail(cfg.useGptThumbnail);
+    if (typeof cfg.autoUploadYoutube === "boolean") setAutoUploadYoutube(cfg.autoUploadYoutube);
+    setPresetSeed({
+      region: (cfg.region as Region | null) ?? null,
+      subtitleStyle: (cfg.subtitleStyle as SubtitleStyle | null) ?? null,
+      removeWatermarkRegions: (cfg.removeWatermarkRegions as Region[]) ?? [],
+      removeWatermarkEnabled:
+        typeof cfg.removeWatermarkEnabled === "boolean"
+          ? cfg.removeWatermarkEnabled
+          : Array.isArray(cfg.removeWatermarkRegions) && cfg.removeWatermarkRegions.length > 0,
+    });
+  };
+
   const handleAdd = () => {
     const v = url.trim();
     if (!v) return;
@@ -642,8 +694,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       autoFitSubs,
       watermarkOn,
       watermarkOn ? watermarkPreset : "",
-      removeWmEnabled,
-      removeWmRegions,
+      presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
+      presetSeed?.removeWatermarkRegions ?? removeWmRegions,
+      presetSeed?.region ?? null,
+      presetSeed?.subtitleStyle ?? null,
       checkSubs,
       checkVoice,
       autoUploadYoutube,
@@ -654,6 +708,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateOn,
       translateTarget,
       dubOn,
+      voiceLang,
     );
     setUrl("");
     setSelectedId(id);
@@ -695,8 +750,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       autoFit: autoFitSubs,
       watermark: watermarkOn,
       watermarkPreset: watermarkOn ? watermarkPreset : "",
-      removeWatermarkEnabled: removeWmEnabled,
-      removeWatermarkRegions: removeWmRegions,
+      removeWatermarkEnabled: presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
+      removeWatermarkRegions: presetSeed?.removeWatermarkRegions ?? removeWmRegions,
+      region: presetSeed?.region ?? null,
+      subtitleStyle: presetSeed?.subtitleStyle ?? null,
+      voiceLang,
       checkSubs,
       checkVoice,
       autoUploadYoutube,
@@ -1080,6 +1138,38 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     ? tr("pipeline.regionAutoHint")
                     : tr("pipeline.regionManualHint")}
                 </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  className="btn-island flex-1"
+                  value={presetId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setPresetId(id);
+                    const p = pipelinePresets.find((x) => x.id === id);
+                    if (p) applyPreset(p.config);
+                  }}
+                >
+                  <option value="">{t("preset.select")}</option>
+                  {pipelinePresets.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                {presetId && (
+                  <button
+                    type="button"
+                    className="btn-island btn-island-icon"
+                    title={t("preset.delete")}
+                    onClick={async () => {
+                      await deletePipelinePreset(presetId);
+                      setPipelinePresets((prev) => prev.filter((x) => x.id !== presetId));
+                      setPresetId("");
+                      setPresetSeed(null);
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
               <div className="mt-4 border-t border-white/[0.07] pt-4">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1854,6 +1944,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               onStartNext={focusNewVideo}
               ytChannels={ytChannels}
               presets={presets}
+              onPresetSaved={() =>
+                getPipelinePresets()
+                  .then((r) => setPipelinePresets(r.presets))
+                  .catch(() => {})
+              }
             />
           </AnimatedBlock>
         ) : (
@@ -2377,6 +2472,7 @@ function DetailView({
   onStartNext,
   ytChannels,
   presets,
+  onPresetSaved,
 }: {
   pipeline: Pipeline;
   now: number;
@@ -2384,6 +2480,7 @@ function DetailView({
   onStartNext?: () => void;
   ytChannels: YouTubeChannelInfo[];
   presets: WatermarkPreset[];
+  onPresetSaved?: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -3034,6 +3131,10 @@ function DetailView({
               {p.videoId && (
                 <ContextImagesButton videoId={p.videoId} />
               )}
+              <PipelineSavePanel
+                p={p}
+                onSaved={() => onPresetSaved?.()}
+              />
               {p.updatedThumbnailUrl && (
                 <button
                   onClick={() =>

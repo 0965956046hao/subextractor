@@ -261,6 +261,44 @@ const dictionaries = {
     "settings.wm.errLogoDel": "Error deleting logo.",
     "settings.wm.newDefault": "New watermark set",
 
+    "settings.facebook.title": "Facebook Uploader",
+    "settings.facebook.desc":
+      "Meta Graph API credentials for the Go facebook-uploader. Used to publish videos & Reels to a Facebook Page.",
+    "settings.facebook.howto": "How to get them:",
+    "settings.facebook.console": "Meta for Developers → My Apps",
+    "settings.facebook.steps":
+      "→ create an app → add the 'Pages' product → copy the App ID and App Secret below.",
+    "settings.facebook.appId": "App ID",
+    "settings.facebook.appSecret": "App Secret",
+    "settings.facebook.pageId": "Page ID",
+    "settings.facebook.pageToken": "Page Access Token",
+    "settings.facebook.apiVersion": "Graph API version",
+    "settings.facebook.publish": "Publish immediately by default",
+    "settings.facebook.pasteAppId": "Paste App ID...",
+    "settings.facebook.pasteAppSecret": "Paste App Secret...",
+    "settings.facebook.pastePageId": "Paste Page ID...",
+    "settings.facebook.pasteToken": "Paste Page Access Token (optional)...",
+    "settings.facebook.pasteVersion": "e.g. v21.0",
+    "settings.facebook.configured": "Configured ✓",
+    "settings.facebook.notConfigured": "Not configured",
+    "settings.facebook.saved": "Facebook credentials saved!",
+    "settings.facebook.save": "Save Facebook credentials",
+    "settings.facebook.serviceHint":
+      "Save these then run the Go tool: facebook-uploader auth (to obtain a token) or paste a Page Access Token above.",
+    "settings.facebook.guide.title": "How to connect & upload",
+    "settings.facebook.guide.step1":
+      "On Meta for Developers, create an app and add the 'Pages' product. In Facebook Login → Settings, add the redirect URI http://localhost:8080/callback.",
+    "settings.facebook.guide.step2":
+      "Fill in App ID, App Secret and Page ID above, then Save.",
+    "settings.facebook.guide.step3":
+      "Run the Go tool: facebook-uploader auth — it opens your browser to log in and stores the token locally (never printed).",
+    "settings.facebook.guide.step4":
+      "Upload a video: facebook-uploader upload --video ./video.mp4 --description \"...\" --publish",
+    "settings.facebook.guide.step5":
+      "Or a Reel: facebook-uploader reel --video ./video.mp4 --description \"...\" --publish",
+    "settings.facebook.guide.note":
+      "Note: verify the current Meta Graph API version and required scopes before production use.",
+
     "settings.env.title": "9. Environment tools",
     "settings.env.desc":
       "Check and install bundled tools (FFmpeg, Demucs, YouTube Uploader) if not already present.",
@@ -1135,6 +1173,44 @@ const dictionaries = {
     "settings.wm.errLogo": "Lỗi tải logo.",
     "settings.wm.errLogoDel": "Lỗi xoá logo.",
     "settings.wm.newDefault": "Bộ watermark mới",
+
+    "settings.facebook.title": "Facebook Uploader",
+    "settings.facebook.desc":
+      "Thông tin xác thực Meta Graph API cho tool Go facebook-uploader. Dùng để đăng video & Reels lên Facebook Page.",
+    "settings.facebook.howto": "Cách lấy thông tin:",
+    "settings.facebook.console": "Meta for Developers → My Apps",
+    "settings.facebook.steps":
+      "→ tạo app → thêm sản phẩm 'Pages' → copy App ID và App Secret dán vào bên dưới.",
+    "settings.facebook.appId": "App ID",
+    "settings.facebook.appSecret": "App Secret",
+    "settings.facebook.pageId": "Page ID",
+    "settings.facebook.pageToken": "Page Access Token",
+    "settings.facebook.apiVersion": "Phiên bản Graph API",
+    "settings.facebook.publish": "Đăng ngay theo mặc định",
+    "settings.facebook.pasteAppId": "Dán App ID...",
+    "settings.facebook.pasteAppSecret": "Dán App Secret...",
+    "settings.facebook.pastePageId": "Dán Page ID...",
+    "settings.facebook.pasteToken": "Dán Page Access Token (tùy chọn)...",
+    "settings.facebook.pasteVersion": "vd. v21.0",
+    "settings.facebook.configured": "Đã cấu hình ✓",
+    "settings.facebook.notConfigured": "Chưa cấu hình",
+    "settings.facebook.saved": "Đã lưu thông tin Facebook!",
+    "settings.facebook.save": "Lưu thông tin Facebook",
+    "settings.facebook.serviceHint":
+      "Lưu ở đây rồi chạy tool Go: facebook-uploader auth (để lấy token) hoặc dán Page Access Token vào trên.",
+    "settings.facebook.guide.title": "Cách kết nối & upload",
+    "settings.facebook.guide.step1":
+      "Trên Meta for Developers, tạo app và thêm sản phẩm 'Pages'. Trong Facebook Login → Settings, thêm redirect URI http://localhost:8080/callback.",
+    "settings.facebook.guide.step2":
+      "Điền App ID, App Secret và Page ID vào trên, sau đó nhấn Lưu.",
+    "settings.facebook.guide.step3":
+      "Chạy tool Go: facebook-uploader auth — sẽ mở trình duyệt để đăng nhập và lưu token locally (không in ra màn hình).",
+    "settings.facebook.guide.step4":
+      "Upload video: facebook-uploader upload --video ./video.mp4 --description \"...\" --publish",
+    "settings.facebook.guide.step5":
+      "Hoặc Reel: facebook-uploader reel --video ./video.mp4 --description \"...\" --publish",
+    "settings.facebook.guide.note":
+      "Lưu ý: nên kiểm tra phiên bản Meta Graph API và quyền (scopes) hiện hành trước khi dùng thật.",
 
     "settings.env.title": "9. Công cụ môi trường",
     "settings.env.desc":
