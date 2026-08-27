@@ -21,9 +21,11 @@ export async function uploadVideo(
   file: File,
   onProgress?: (pct: number) => void,
   signal?: AbortSignal,
+  origin: "extract" | "pipeline" = "extract",
 ): Promise<string> {
   const form = new FormData();
   form.append("file", file);
+  form.append("origin", origin);
   const res = await api.post<{ video_id: string }>("/upload", form, {
     headers: { "Content-Type": "multipart/form-data" },
     // File video lớn có thể mất hàng chục phút để upload → timeout 120 phút.

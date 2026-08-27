@@ -676,7 +676,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     setUploadProgress(0);
     setUploadError(null);
     try {
-      const videoId = await uploadVideo(file, setUploadProgress);
+      const videoId = await uploadVideo(file, setUploadProgress, undefined, "pipeline");
       setUploaded({ videoId, name: file.name, size: file.size });
     } catch (e) {
       setUploadError(
