@@ -2711,28 +2711,34 @@ async function runPipeline(id: string, startStep = 4) {
       markStepStart(id, 10);
       appendLog(id, "Tạo meta (tiêu đề/mô tả/tags) từ ngữ cảnh...");
       try {
-        let md: any = null;
-        let mr: Response | null = null;
-        // Retry khi proxy frontend reset socket (ECONNRESET) trong lúc
-        // Gemini sinh meta chạy lâu. Tối đa 3 lần, nghỉ 1.5s giữa các lần.
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            mr = await fetch(`/api/meta/${videoId}`, { method: "POST" });
-            md = await mr.json();
-            if (mr.ok) break;
-          } catch {
-            md = null;
-          }
-          if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+        // Backend sinh meta chạy nền (Gemini 20-60s) → POST trả {status:"pending"}
+        // ngay lập tức. Ta fire POST rồi poll GET /api/meta đến khi meta.json có,
+        // tránh giữ kết nối HTTP lâu gây proxy reset socket (ECONNRESET).
+        try {
+          await fetch(`/api/meta/${videoId}`, { method: "POST" });
+        } catch {
+          /* fire-and-forget; vòng poll bên dưới tự phát hiện */
         }
-        if (mr?.ok && md?.meta) {
-          patch(id, { meta: md.meta });
-          appendLog(id, `Meta: ${md.meta.title || "(không có tiêu đề)"}`);
+        const deadline = Date.now() + 120000; // tối đa 2 phút chờ
+        let meta: any = null;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 2000));
+          try {
+            const r = await fetch(`/api/meta/${videoId}`);
+            const d = await r.json();
+            if (d?.meta && Object.keys(d.meta).length > 0) {
+              meta = d.meta;
+              break;
+            }
+          } catch {
+            /* tiếp tục poll */
+          }
+        }
+        if (meta) {
+          patch(id, { meta });
+          appendLog(id, `Meta: ${meta.title || "(không có tiêu đề)"}`);
         } else {
-          appendLog(
-            id,
-            `Không tạo được meta: ${md?.detail || "lỗi mạng/timeout"}`
-          );
+          appendLog(id, "Không tạo được meta (quá thời gian chờ).");
         }
       } catch {
         appendLog(id, "Bỏ qua tạo meta (lỗi).");
@@ -2930,7 +2936,15 @@ async function runPipeline(id: string, startStep = 4) {
       }
     };
 
-    await Promise.all([doMeta(), doThumbnail()]);
+    // 10. Tạo meta — chỉ cần khi bật tự động upload YouTube (meta dùng để
+    // đăng YouTube). Nếu tắt auto upload → bỏ qua bước này cho nhanh.
+    if (cur.autoUploadYoutube) {
+      await Promise.all([doMeta(), doThumbnail()]);
+    } else {
+      appendLog(id, "Bỏ qua tạo meta (tự động up YouTube tắt).");
+      markStepSkipped(id, 10);
+      await doThumbnail();
+    }
     if (abortAfterThumbnail) return;
 
     // 12. Upload YouTube (chỉ khi bật auto upload)

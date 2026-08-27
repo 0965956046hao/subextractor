@@ -1,10 +1,11 @@
 """Generate context images for videos that have NO source-provided thumbnails.
 
 YouTube imports and local uploads don't carry Douyin-style cover/scene images.
-For those, we sample the video itself: 1 frame every ``interval_sec`` seconds
-(up to ``max_frames``), then stitch the frames into a single contact-sheet
-image. That sheet becomes the context image uploaded to Gemini (via
-``context_service.generate_video_context``), so translation/meta steps get
+For those, we sample the video itself: **1 frame every ``interval_sec`` seconds
+(NO upper limit)**, then group the frames into sheets of ``frames_per_sheet``
+(scaled small + stitched). The more frames there are, the more context images
+(context sheets) are produced. All sheets are uploaded to Gemini (via
+``context_service.generate_video_context``) so translation/meta steps get
 visual context just like Douyin videos do.
 """
 
@@ -59,47 +60,54 @@ def _ffmpeg() -> str:
 def generate_context_frames(
     video_id: str,
     interval_sec: int = 30,
-    max_frames: int = 20,
+    frames_per_sheet: int = 20,
     force: bool = False,
-) -> Path | None:
-    """Sample frames every ``interval_sec`` s, stitch into one sheet image.
+) -> list[Path]:
+    """Sample 1 frame every ``interval_sec`` s (NO limit), then group frames into
+    sheets of ``frames_per_sheet`` (scaled small + stitched). The more frames, the
+    more context sheets are produced.
 
     Saves:
       - ``context/{video_id}/thumbnail.jpg`` — first sampled frame (cover)
-      - ``context/{video_id}/context_images/context_sheet.jpg`` — stitched sheet
+      - ``context/{video_id}/context_images/context_sheet_000.jpg`` … — one
+        stitched sheet per ``frames_per_sheet`` frames (ảnh bối cảnh)
 
-    Returns the sheet path, or ``None`` if it could not be generated.
-    Skips (returns existing sheet) when the sheet already exists unless ``force``.
+    Returns the list of sheet paths, or ``[]`` if generation failed.
+    Skips (returns existing sheets) when any sheet already exists unless ``force``.
     """
     video = _find_video_file(video_id)
     if not video or not video.exists():
-        return None
+        return []
 
     ctx_dir = settings.temp_dir / "context" / video_id
     sheet_dir = ctx_dir / "context_images"
-    sheet = sheet_dir / "context_sheet.jpg"
-    if sheet.exists() and not force:
-        logger.info("Context sheet already exists for %s, skipping", video_id)
-        return sheet
+    existing = sorted(sheet_dir.glob("context_sheet_*.jpg")) if sheet_dir.exists() else []
+    if existing and not force:
+        logger.info("Context sheets already exist for %s, skipping", video_id)
+        return existing
 
     duration = _probe_duration(video)
     if duration <= 0:
         logger.warning("Cannot probe duration for %s, skip frame context", video_id)
-        return None
+        return []
 
-    times = [i * interval_sec for i in range(max_frames) if i * interval_sec < duration]
-    if not times:
-        times = [0]
+    # Sample every interval_sec seconds, unlimited.
+    times: list[float] = []
+    t = 0.0
+    while t < duration:
+        times.append(t)
+        t += interval_sec
 
     tmp = ctx_dir / "_frames_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
+    sheets: list[Path] = []
     try:
         frames: list[Path] = []
-        for i, t in enumerate(times):
-            out = tmp / f"f{i:03d}.jpg"
+        for i, tt in enumerate(times):
+            out = tmp / f"f{i:05d}.jpg"
             proc = subprocess.run(
                 [
-                    _ffmpeg(), "-ss", str(t), "-i", str(video),
+                    _ffmpeg(), "-ss", str(tt), "-i", str(video),
                     "-frames:v", "1",
                     "-vf",
                     f"scale={_CELL_W}:{_CELL_H}",
@@ -115,7 +123,7 @@ def generate_context_frames(
 
         if not frames:
             logger.warning("No frames extracted for %s", video_id)
-            return None
+            return []
 
         ctx_dir.mkdir(parents=True, exist_ok=True)
         sheet_dir.mkdir(parents=True, exist_ok=True)
@@ -123,27 +131,31 @@ def generate_context_frames(
         # Cover = first sampled frame
         shutil.copyfile(frames[0], ctx_dir / "thumbnail.jpg")
 
-        # Stitch into a single contact-sheet image
-        rows = (len(frames) + _COLS - 1) // _COLS
-        proc = subprocess.run(
-            [
-                _ffmpeg(),
-                "-pattern_type", "glob", "-i", str(tmp / "f*.jpg"),
-                "-filter_complex",
-                f"tile={_COLS}x{rows}:padding=8:color=black",
-                "-y", str(sheet),
-            ],
-            capture_output=True,
-            timeout=60,
-        )
-        if not (sheet.exists() and sheet.stat().st_size > 0):
-            logger.warning("Stitch failed for %s: %s", video_id, proc.stderr[-300:])
-            return None
-
+        # Group frames into sheets of `frames_per_sheet`, stitch each group.
+        for si in range(0, len(frames), frames_per_sheet):
+            chunk = frames[si : si + frames_per_sheet]
+            rows = (len(chunk) + _COLS - 1) // _COLS
+            sheet = sheet_dir / f"context_sheet_{si // frames_per_sheet:03d}.jpg"
+            proc = subprocess.run(
+                [
+                    _ffmpeg(),
+                    "-pattern_type", "glob", "-i", str(tmp / "f*.jpg"),
+                    "-filter_complex",
+                    f"select='gte(n\\,{si})*lte(n\\,{si + len(chunk) - 1})',"
+                    f"tile={_COLS}x{rows}:padding=8:color=black",
+                    "-y", str(sheet),
+                ],
+                capture_output=True,
+                timeout=60,
+            )
+            if sheet.exists() and sheet.stat().st_size > 0:
+                sheets.append(sheet)
+            else:
+                logger.warning("Stitch %s failed: %s", sheet.name, proc.stderr[-300:])
         logger.info(
-            "Context sheet generated for %s: %d frames, %s",
-            video_id, len(frames), sheet,
+            "Context sheets generated for %s: %d frames → %d sheets",
+            video_id, len(frames), len(sheets),
         )
-        return sheet
+        return sheets
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

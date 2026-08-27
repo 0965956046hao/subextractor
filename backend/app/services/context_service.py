@@ -6,6 +6,7 @@ from pathlib import Path
 from app.config import settings
 from app.services.retry_utils import (
     gemini_retry,
+    gemini_call_rotating,
     configured_gemini_keys,
     _next_key,
     genai_generate_content_factory,
@@ -320,28 +321,35 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
                 "MỖI NHÂN VẬT CHỈ GÁN 1 GIỌNG DUY NHẤT. "
                 "Chỉ chọn từ danh sách có sẵn, không tự đặt tên giọng mới."
             )
-        fn = genai_generate_content_factory(api_key)
-        response = gemini_retry(fn)(
-            model=settings.gemini_model,
-            contents=[
-                *uploaded_files,
-                f"Analyze these {len(uploaded_files)} context images from video '{video_id}'. "
-                "Synthesize ALL images together to understand the full video context. "
-                "Describe in Vietnamese (4-6 sentences), including:\n"
-                "- Content type (phim cổ trang / hiện đại / hoạt hình / tài liệu / tutorial...)\n"
-                "- Time period and setting (bối cảnh lịch sử, không gian)\n"
-                "- Main characters: count, gender (nam/nữ), estimated age, voice characteristics "
-                "(cao/thấp, trầm/thanh, tốc độ nói, giọng già/trẻ), personality, relationships\n"
-                "- How characters address each other (xưng hô: huynh-đệ, anh-em, ngài-tiểu nhân, bạn-cậu...)\n"
-                "- Overall tone (nghiêm túc / hài hước / hành động / lãng mạn...)\n"
-                "- Any notable visual style, costumes, or recurring text on screen\n\n"
-                "Mô tả chi tiết GIỌNG NÓI của từng nhân vật chính (giới tính, độ tuổi, âm vực, "
-                "tính cách thể hiện qua giọng) để phục vụ việc chọn giọng đọc lồng tiếng phù hợp."
-                "Be specific and detailed. This context will be used to improve subtitle translation accuracy."
-                + hint_text
-                + voice_instruction,
-            ],
+        # Dùng Chat API (client.chats.create().send_message) thay vì
+        # models.generate_content để tránh cảnh báo AFC của SDK và vẫn giữ
+        # key-rotation/retry qua gemini_call_rotating.
+        prompt = (
+            f"Analyze these {len(uploaded_files)} context images from video '{video_id}'. "
+            "Synthesize ALL images together to understand the full video context. "
+            "Describe in Vietnamese (4-6 sentences), including:\n"
+            "- Content type (phim cổ trang / hiện đại / hoạt hình / tài liệu / tutorial...)\n"
+            "- Time period and setting (bối cảnh lịch sử, không gian)\n"
+            "- Main characters: count, gender (nam/nữ), estimated age, voice characteristics "
+            "(cao/thấp, trầm/thanh, tốc độ nói, giọng già/trẻ), personality, relationships\n"
+            "- How characters address each other (xưng hô: huynh-đệ, anh-em, ngài-tiểu nhân, bạn-cậu...)\n"
+            "- Overall tone (nghiêm túc / hài hước / hành động / lãng mạn...)\n"
+            "- Any notable visual style, costumes, or recurring text on screen\n\n"
+            "Mô tả chi tiết GIỌNG NÓI của từng nhân vật chính (giới tính, độ tuổi, âm vực, "
+            "tính cách thể hiện qua giọng) để phục vụ việc chọn giọng đọc lồng tiếng phù hợp."
+            "Be specific and detailed. This context will be used to improve subtitle translation accuracy."
+            + hint_text
+            + voice_instruction
         )
+
+        def _chat_factory(key: str):
+            from google import genai
+
+            client = genai.Client(api_key=key)
+            chat = client.chats.create(model=settings.gemini_model)
+            return chat.send_message
+
+        response = gemini_call_rotating(_chat_factory, [*uploaded_files, prompt])
 
         context = response.text.strip()
     except Exception as e:
