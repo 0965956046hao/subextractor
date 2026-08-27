@@ -126,6 +126,22 @@ def _download_and_register(url: str, source: str) -> dict:
         pass
 
     logger.info("%s import %s → %s (%s)", source, video_id, filename, video_path)
+
+    # YT import có không có ảnh bìa/bối cảnh từ nguồn → tự sinh context ảnh bằng
+    # cách chụp frame đều 30s, ghép thành 1 sheet để Gemini dùng làm ngữ cảnh.
+    # Chạy nền (không block response); generate_video_context sau đó sẽ đọc được.
+    try:
+        import threading
+        from app.services import frame_context
+
+        threading.Thread(
+            target=frame_context.generate_context_frames,
+            args=(video_id,),
+            daemon=True,
+        ).start()
+    except Exception as e:  # never break the import flow
+        logger.warning("Frame context gen failed for %s: %s", video_id, e)
+
     return {"video_id": video_id, "title": title, "filename": filename, "video_path": str(video_path)}
 
 

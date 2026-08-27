@@ -635,7 +635,9 @@ export default function TimelineCheckModal({
                 {entries.map((entry) => {
                   const isIssue = issueIndexes.has(entry.index);
                   const isRisk = riskIndexes.has(entry.index);
-                  const active = entry.index === activeIndex;
+                  const active =
+                    entry.index === activeIndex ||
+                    entry.index === activeEntry?.index;
                   const risk = riskByIndex.get(entry.index);
                   return (
                     <div
@@ -656,14 +658,14 @@ export default function TimelineCheckModal({
                           selectEntry(entry.index, entry.start);
                         }
                       }}
-                      className={`group w-full text-left px-3 py-2 cursor-pointer transition-colors relative ${
+                      className={`group w-full text-left px-3 py-2 cursor-pointer transition-colors relative border-l-2 ${
                         active
-                          ? "bg-accent-muted ring-1 ring-inset ring-accent/40"
+                          ? "bg-accent/20 ring-1 ring-inset ring-accent/60 border-accent"
                           : isIssue
-                            ? "bg-danger-muted"
+                            ? "bg-danger-muted border-transparent"
                             : isRisk
-                              ? "bg-warn-muted"
-                              : "hover:bg-white/[0.03]"
+                              ? "bg-warn-muted border-transparent"
+                              : "hover:bg-white/[0.03] border-transparent"
                       }`}
                     >
                       <button
