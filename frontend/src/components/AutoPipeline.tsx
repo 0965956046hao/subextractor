@@ -36,6 +36,7 @@ import {
 } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
 import WatermarkRegionSelector from "@/components/WatermarkRegionSelector";
+import KeepOriginalSelector from "@/components/KeepOriginalSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
 import VoiceCheckModal from "@/components/VoiceCheckModal";
@@ -286,6 +287,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
   const [muteOriginal, setMuteOriginal] = useState(false);
+  const [keepOriginalEnabled, setKeepOriginalEnabled] = useState(false);
   const [originalGainDb, setOriginalGainDb] = useState(12);
   const [multiVoice, setMultiVoice] = useState(false);
   const [autoFitSubs, setAutoFitSubs] = useState(false);
@@ -634,6 +636,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         voice: dubVoice,
         muteOriginal,
         originalGainDb,
+        keepOriginalEnabled,
         multiVoice: multiVoice && dubEngine === "capcut",
       },
       autoFitSubs,
@@ -688,7 +691,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       filename: uploaded.name,
       srcLang,
       regionMode,
-      dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb },
+      dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb, keepOriginalEnabled },
       autoFit: autoFitSubs,
       watermark: watermarkOn,
       watermarkPreset: watermarkOn ? watermarkPreset : "",
@@ -696,6 +699,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       removeWatermarkRegions: removeWmRegions,
       checkSubs,
       checkVoice,
+      autoUploadYoutube,
+      youtubeChannel: ytChannel,
       translateOn,
       translateTarget,
       dubOn,
@@ -1227,7 +1232,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       {tr("pipeline.originalVoiceMute")}
                     </button>
                     <button
-                      onClick={() => setMuteOriginal(false)}
+                      onClick={() => {
+                        setMuteOriginal(false);
+                        setKeepOriginalEnabled(false);
+                      }}
                       className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
                         !muteOriginal
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
@@ -1267,6 +1275,19 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           db: originalGainDb,
                         })}
                   </p>
+                )}
+                {muteOriginal && (
+                  <label className="mt-2 flex items-center gap-2.5 cursor-pointer w-fit">
+                    <input
+                      type="checkbox"
+                      checked={keepOriginalEnabled}
+                      onChange={(e) => setKeepOriginalEnabled(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    <span className="text-[11px] text-ink-muted">
+                      Chọn đoạn giữ tiếng gốc (pipeline sẽ dừng để bạn chọn trên timeline)
+                    </span>
+                  </label>
                 )}
 
                 <div className="mt-4 border-t border-white/[0.07] pt-4">
@@ -2377,6 +2398,7 @@ function DetailView({
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const confirmWatermarkRegions = usePipelineStore((s) => s.confirmWatermarkRegions);
+  const confirmKeepOriginal = usePipelineStore((s) => s.confirmKeepOriginal);
   const confirmThumbnailReview = usePipelineStore((s) => s.confirmThumbnailReview);
   const resolveThumbnailFallback = usePipelineStore((s) => s.resolveThumbnailFallback);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
@@ -2516,6 +2538,15 @@ function DetailView({
               onConfirm={(regions) => {
                 if (regions.length > 0) confirmWatermarkRegions(p.id, regions);
               }}
+            />
+          </div>
+        )}
+
+        {p.stage === "keep_original" && p.videoId && (
+          <div className="mb-5">
+            <KeepOriginalSelector
+              videoId={p.videoId}
+              onConfirm={(ranges) => confirmKeepOriginal(p.id, ranges)}
             />
           </div>
         )}

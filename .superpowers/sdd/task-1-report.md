@@ -1,46 +1,44 @@
-# Task 1 Report: Extend TelegramService with InlineKeyboard Methods
+# Task 1 Report: Helper chuẩn hoá ranges + `_mix_background_with_keep_ranges`
 
-**Status:** DONE  
-**Commit:** `b8cb18d` — `feat(telegram): add InlineKeyboard methods and callback routing`
+**Status:** DONE
 
-## What was done
+## What changed
 
-Extended `backend/app/services/telegram_service.py` with InlineKeyboard support and callback query routing, adding 5 new methods and modifying `_handle_update`.
+Modified **only** `backend/app/services/dub_service.py`, adding two pure helper functions verbatim from `.superpowers/sdd/task-1-brief.md`:
 
-### New methods added
+1. `_normalize_keep_ranges(ranges, duration: float) -> list[tuple[float, float]]`
+   - Accepts dicts with `"start"`/`"end"` keys (or None), coerces to float, skips malformed entries (`AttributeError/TypeError/ValueError`).
+   - Clamps start ≥ 0, clamps end ≤ duration (when duration > 0), drops segments < 0.05s.
+   - Sorts and merges overlapping / near-adjacent segments (gap < 0.05s).
+   - Caps result at 200 ranges.
 
-| Method | Signature | Returns |
-|--------|-----------|---------|
-| `send_message_with_keyboard` | `(chat_id, text, keyboard, parse_mode="HTML")` | `int \| None` (message_id) |
-| `edit_message` | `(chat_id, message_id, text, keyboard=None, parse_mode="HTML")` | `bool` |
-| `answer_callback_query` | `(callback_query_id, text="", show_alert=False)` | `bool` |
-| `register_callback_handler` | `(prefix, handler)` | `None` |
-| `_handle_callback_query` | `(callback_query)` | `None` (internal) |
+2. `_mix_background_with_keep_ranges(instrumental, original_wav, ranges, out_path) -> Path`
+   - Empty `ranges` → returns `instrumental` unchanged.
+   - Coverage ≥ 98% of audio duration → returns `original_wav` unchanged.
+   - Otherwise runs FFmpeg: mutes the original wav (`volume=0`) except inside `between(t,start,end)` enable windows, then `amix` with the Demucs instrumental (`duration=first`, `normalize=0`), AAC 192k → `out_path`.
+   - FFmpeg invocation goes through the existing module-level helper `_run_ffmpeg` (no re-import); duration via existing imported `_get_audio_duration`.
 
-Plus `_handle_douyin_command` — a bridge method that lazily imports `telegram_bot` and delegates to `_handle_douyin()`.
+## Exact insertion location
 
-### Callback routing architecture
+Inserted between `_mix_background_with_voice` and `_db_to_volume`:
+- Before edit: `_mix_background_with_voice` ended at line 292 (`return out_path`); `def _db_to_volume` started at line 295.
+- After edit: new functions occupy lines **295–352** (`_normalize_keep_ranges` at 295–315, `_mix_background_with_keep_ranges` at 318–352); `def _db_to_volume` now starts at line **356**.
+- Diff stat: `@@ -292,6 +292,65 @@` — 59 added lines, 0 removed lines.
 
-- `self._callback_handlers: dict[str, callable]` stores prefix → handler mappings
-- `_handle_callback_query` matches the **longest prefix** first (e.g. `douyin:config:` beats `douyin:`)
-- `_handle_update` now checks for `callback_query` **before** `message` — callback queries take priority
-- Unmatched callbacks get a no-op `answerCallbackQuery` to dismiss the spinner
-- Handler errors are caught and the user sees a toast: "❌ Có lỗi xảy ra."
+No other files were modified. (Working tree also contains pre-existing unrelated diffs — `.superpowers/sdd/task-1-brief.md`, `frontend/.env.local`, dirty `youtubeuploader` submodule — untouched by this task.) No test files created, no git commit performed, per repo rules.
 
-### Key design decisions
+## Verification
 
-1. **Longest-prefix matching** — allows fine-grained handlers like `douyin:lang:` without blocking coarser `douyin:` handlers
-2. **Lazy import of `telegram_bot`** — avoids circular imports; ImportError is caught and produces a user-friendly fallback message
-3. **`keyboard=None` default in `edit_message`** — omits `reply_markup` from the API call when None, preserving the existing keyboard
-4. **`show_alert` parameter** — supports both toast notifications and modal alerts from `answer_callback_query`
+Command:
+```
+cd backend && .venv/bin/python -m py_compile app/services/dub_service.py
+```
 
-## Test summary
+Output: *(none)* — exit code **0**, as expected.
 
-- ✅ `python -c "from app.services.telegram_service import TelegramService"` — clean import
-- ✅ AST parse: all 26 methods verified present, no syntax errors
-- ✅ New attributes: `_callback_handlers` initialized as empty dict in `__init__`
-- No unit tests (none exist in the repo per AGENTS.md)
+## Self-review vs brief
 
-## Concerns
-
-None. All methods follow existing patterns (httpx via `_get_http()`, `logger.warning()` for errors, `TELEGRAM_API` constant, async).
+Re-read `git diff backend/app/services/dub_service.py` line-by-line against the brief's code block:
+- Function names, parameter lists/order, type hints, return types: identical.
+- Logic (clamp/merge/cap thresholds 0.05s & cap 200; empty-ranges and ≥98% short-circuits; `volume=0:enable='...'` filter graph; amix params; aac 192k): identical.
+- Uses existing helpers only — no new imports or redefinitions added.

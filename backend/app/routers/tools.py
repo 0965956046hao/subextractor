@@ -2135,6 +2135,9 @@ async def dub_subtitles(video_id: str, request: Request):
     tts_voice = body.get("voice", "")
     mute_original = bool(body.get("mute_original", True))
     multi_voice = bool(body.get("multi_voice", False))
+    keep_ranges = body.get("keep_ranges") or []
+    if not isinstance(keep_ranges, list):
+        keep_ranges = []
     try:
         original_gain_db = float(body.get("original_gain_db", 0.0))
     except (TypeError, ValueError):
@@ -2190,11 +2193,13 @@ async def dub_subtitles(video_id: str, request: Request):
         "mute_original": mute_original,
         "original_gain_db": original_gain_db,
         "multi_voice": multi_voice,
+        "keep_ranges": keep_ranges,
     }
     ws_clients.setdefault(job_id, [])
     logger.info(
-        "dub job %s: queued for %s (engine=%s, voice=%s, mute_original=%s, gain_db=%s)",
+        "dub job %s: queued for %s (engine=%s, voice=%s, mute_original=%s, gain_db=%s, keep_ranges=%d)",
         job_id, video_id, tts_engine, tts_voice, mute_original, original_gain_db,
+        len(keep_ranges),
     )
     await queue.put(job_id)
     return {"job_id": job_id, "status": "queued", "phase": "dub", "progress": 0, "error": None, "logs": []}
@@ -2555,6 +2560,8 @@ async def update_pipeline_state(
         new_state["voice_check"] = prev["voice_check"]
     if prev.get("watermark_confirm"):
         new_state["watermark_confirm"] = prev["watermark_confirm"]
+    if prev.get("keep_original_confirm"):
+        new_state["keep_original_confirm"] = prev["keep_original_confirm"]
     pipeline_states[video_id] = new_state
     return {"ok": True, "video_id": video_id}
 
@@ -2639,5 +2646,26 @@ async def update_voice_check(
     else:
         raise HTTPException(400, "action must be wait|continue")
     ps["voice_check"] = vc
+    pipeline_states[video_id] = ps
+    return {"ok": True, "video_id": video_id}
+
+
+# ── POST /api/pipeline/{video_id}/keep-original ──
+
+@router.post("/api/pipeline/{video_id}/keep-original")
+async def update_keep_original(
+    video_id: str,
+    body: dict,
+    pipeline_states: dict = Depends(get_pipeline_states),
+):
+    """Xác nhận các đoạn giữ tiếng gốc từ tab khác / Telegram Mini App.
+    Body: {"confirmed": true, "ranges": [{"start": 1.2, "end": 5.0}, ...]}."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    ps = pipeline_states.get(video_id) or {}
+    ps["keep_original_confirm"] = {
+        "confirmed": bool(body.get("confirmed")),
+        "ranges": body.get("ranges") or [],
+    }
     pipeline_states[video_id] = ps
     return {"ok": True, "video_id": video_id}

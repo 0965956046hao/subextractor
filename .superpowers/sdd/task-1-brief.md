@@ -1,44 +1,81 @@
-# Task 1: Extend TelegramService with InlineKeyboard Methods
+### Task 1: Backend — helper chuẩn hoá ranges + hàm trộn `_mix_background_with_keep_ranges`
 
-## Context
-This is the first task in building the Telegram Douyin bot feature. The existing `TelegramService` in `backend/app/services/telegram_service.py` handles polling, messaging, and video sending via raw httpx calls to Telegram Bot API. We need to add InlineKeyboard support for the config UI.
+**Files:**
+- Modify: `backend/app/services/dub_service.py` (thêm 2 hàm sau `_mix_background_with_voice`, kết thúc ~dòng 277)
 
-## Requirements
-Add three new methods to `TelegramService`:
+**Interfaces:**
+- Produces:
+  - `_normalize_keep_ranges(ranges: list | None, duration: float) -> list[tuple[float, float]]` — sort, gộp overlap/gần kề (<0.05s), clamp `[0, duration]`, bỏ đoạn <0.05s, cap 200.
+  - `_mix_background_with_keep_ranges(instrumental: Path, original_wav: Path, ranges: list[tuple[float,float]], out_path: Path) -> Path` — trả về path nền đã trộn; nếu `ranges` rỗng trả `instrumental`; nếu phủ ≥98% duration trả `original_wav`.
 
-### 1. `send_message_with_keyboard(chat_id, text, keyboard, parse_mode="HTML") -> int | None`
-- Sends a message with InlineKeyboard buttons
-- Returns `message_id` on success, None on failure
-- `keyboard` is `list[list[dict]]` — each inner list is a row of buttons
-- Each button dict has `text` and `callback_data` keys
+- [ ] **Step 1: Thêm 2 hàm vào `dub_service.py`**
 
-### 2. `edit_message(chat_id, message_id, text, keyboard=None, parse_mode="HTML") -> bool`
-- Edits an existing message and optionally updates its InlineKeyboard
-- Returns True on success
-- Used to update ✅ marks when user clicks config buttons
+Chèn ngay SAU hàm `_mix_background_with_voice` (sau dòng `return out_path` của nó, trước `def _db_to_volume`):
 
-### 3. `answer_callback_query(callback_query_id, text="", show_alert=False) -> bool`
-- Answers an inline keyboard callback query to stop the loading spinner
-- Returns True on success
+```python
+def _normalize_keep_ranges(ranges, duration: float) -> list[tuple[float, float]]:
+    """Sort + gộp overlap/gần kề, clamp theo duration, cap 200 đoạn."""
+    cleaned: list[tuple[float, float]] = []
+    for r in ranges or []:
+        try:
+            s = max(0.0, float(r.get("start", 0.0)))
+            e = float(r.get("end", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if duration > 0:
+            e = min(e, duration)
+        if e - s < 0.05:
+            continue
+        cleaned.append((s, e))
+    cleaned.sort()
+    merged: list[tuple[float, float]] = []
+    for s, e in cleaned:
+        if merged and s <= merged[-1][1] + 0.05:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged[:200]
 
-### 4. Callback routing
-- Add `_callback_handlers: dict[str, callable]` attribute (prefix → handler)
-- Add `register_callback_handler(prefix, handler)` method
-- Add `_handle_callback_query(callback_query)` method that routes by data prefix
-- Modify `_handle_update()` to handle `callback_query` in addition to `message`
-- Add `/douyin` command routing to `telegram_bot._handle_douyin()`
 
-## Files
-- Modify: `backend/app/services/telegram_service.py`
+def _mix_background_with_keep_ranges(
+    instrumental: Path,
+    original_wav: Path,
+    ranges: list[tuple[float, float]],
+    out_path: Path,
+) -> Path:
+    """Nhạc nền Demucs + tiếng gốc chỉ bật trong `ranges` (volume-enable).
 
-## Interfaces
-- Produces: `send_message_with_keyboard()`, `edit_message()`, `answer_callback_query()`, `register_callback_handler()`
+    Trả về path nền dùng cho bước mix với full_voice. ranges rỗng → dùng
+    instrumental nguyên bản; phủ ≥98% video → dùng tiếng gốc nguyên bản.
+    """
+    if not ranges:
+        return instrumental
+    dur = _get_audio_duration(original_wav)
+    covered = sum(e - s for s, e in ranges)
+    if dur > 0 and covered >= dur * 0.98:
+        return original_wav
+    enable = "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in ranges)
+    fc = (
+        f"[1:a]volume=0:enable='{enable}'[kept];"
+        "[0:a][kept]amix=inputs=2:duration=first:normalize=0[out]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(instrumental),
+        "-i", str(original_wav),
+        "-filter_complex", fc,
+        "-map", "[out]",
+        "-c:a", "aac", "-b:a", "192k",
+        str(out_path),
+    ]
+    _run_ffmpeg(cmd)
+    return out_path
+```
 
-## Constraints
-- No new Python dependencies
-- Use existing httpx client pattern
-- Follow existing code style (async methods, httpx, logging)
-- All Telegram API calls go through the shared `_get_http()` client
+- [ ] **Step 2: Verify syntax**
 
-## Report
-Write your report to: `/Users/phantrongtinh/Documents/video/subextractor/.superpowers/sdd/task-1-report.md`
+Run: `cd backend && .venv/bin/python -m py_compile app/services/dub_service.py`
+Expected: exit 0, không output.
+
+---
+
