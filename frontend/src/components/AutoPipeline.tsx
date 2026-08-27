@@ -1,59 +1,57 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { AnimatedBlock } from "@/lib/animation";
-import PageHeader from "@/components/layout/PageHeader";
-import { useI18n, type Dict } from "@/lib/i18n";
-import PipelineSavePanel from "@/components/PipelineSavePanel";
-import {
-  getPipelineHealth,
-  getProfilesCheck,
-  clearTempData,
-  getCapCutVoices,
-  capCutPreview,
-  getGoogleTtsVoices,
-  googleTtsPreview,
-  getFrameUrl,
-  getVideoUrl,
-  listVideos,
-  deleteVideo,
-  getAppConfig,
-  uploadVideo,
-  getDownloadUrl,
-  getContextImages,
-  type ContextImages,
-  getDubbedDownloadUrl,
-  listYoutubeChannels,
-  setActiveWatermarkPreset,
-  chatgptLogin,
-  getPipelinePresets,
-  deletePipelinePreset,
-  type PipelineHealth,
-  type HealthCheckResult,
-  type CapCutVoice,
-  type VideoMeta,
-  type WatermarkPreset,
-  type Region,
-  type SubtitleStyle,
-  type PipelinePreset,
-  type YouTubeChannelInfo,
-} from "@/lib/api";
-import RegionSelector from "@/components/RegionSelector";
-import WatermarkRegionSelector from "@/components/WatermarkRegionSelector";
 import KeepOriginalSelector from "@/components/KeepOriginalSelector";
+import PageHeader from "@/components/layout/PageHeader";
+import PipelineSavePanel from "@/components/PipelineSavePanel";
+import PreviewModal from "@/components/PreviewModal";
+import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
 import VoiceCheckModal from "@/components/VoiceCheckModal";
-import PreviewModal from "@/components/PreviewModal";
+import WatermarkRegionSelector from "@/components/WatermarkRegionSelector";
+import { AnimatedBlock } from "@/lib/animation";
 import {
-  usePipelineStore,
+  capCutPreview,
+  chatgptLogin,
+  clearTempData,
+  deletePipelinePreset,
+  deleteVideo,
+  getAppConfig,
+  getCapCutVoices,
+  getContextImages,
+  getDownloadUrl,
+  getDubbedDownloadUrl,
+  getFrameUrl,
+  getGoogleTtsVoices,
+  getPipelineHealth,
+  getPipelinePresets,
+  getProfilesCheck,
+  googleTtsPreview,
+  listVideos,
+  listYoutubeChannels,
+  setActiveWatermarkPreset,
+  uploadVideo,
+  type CapCutVoice,
+  type ContextImages,
+  type HealthCheckResult,
+  type PipelineHealth,
+  type PipelinePreset,
+  type Region,
+  type SubtitleStyle,
+  type VideoMeta,
+  type WatermarkPreset,
+  type YouTubeChannelInfo,
+} from "@/lib/api";
+import { useI18n, type Dict } from "@/lib/i18n";
+import {
+  DEFAULT_REGION,
   STEPS,
   STEP_STAGE,
-  DEFAULT_REGION,
   fmtElapsed,
+  usePipelineStore,
   type Pipeline,
 } from "@/stores/pipeline-store";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type TFunc = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -642,26 +640,36 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
 
   const applyPreset = (cfg: Record<string, unknown>) => {
     if (typeof cfg.srcLang === "string") setSrcLang(cfg.srcLang as any);
-    if (typeof cfg.regionMode === "string") setRegionMode(cfg.regionMode as "manual" | "auto");
+    if (typeof cfg.regionMode === "string")
+      setRegionMode(cfg.regionMode as "manual" | "auto");
     if (typeof cfg.translateOn === "boolean") setTranslateOn(cfg.translateOn);
-    if (typeof cfg.translateTarget === "string") setTranslateTarget(cfg.translateTarget as any);
+    if (typeof cfg.translateTarget === "string")
+      setTranslateTarget(cfg.translateTarget as any);
     if (typeof cfg.dubOn === "boolean") setDubOn(cfg.dubOn);
     if (typeof cfg.dubEngine === "string") setDubEngine(cfg.dubEngine as any);
     if (typeof cfg.voiceLang === "string") setVoiceLang(cfg.voiceLang as any);
     if (typeof cfg.dubVoice === "string") setDubVoice(cfg.dubVoice);
-    if (typeof cfg.muteOriginal === "boolean") setMuteOriginal(cfg.muteOriginal);
-    if (typeof cfg.keepOriginalEnabled === "boolean") setKeepOriginalEnabled(cfg.keepOriginalEnabled);
-    if (typeof cfg.originalGainDb === "number") setOriginalGainDb(cfg.originalGainDb);
+    if (typeof cfg.muteOriginal === "boolean")
+      setMuteOriginal(cfg.muteOriginal);
+    if (typeof cfg.keepOriginalEnabled === "boolean")
+      setKeepOriginalEnabled(cfg.keepOriginalEnabled);
+    if (typeof cfg.originalGainDb === "number")
+      setOriginalGainDb(cfg.originalGainDb);
     if (typeof cfg.multiVoice === "boolean") setMultiVoice(cfg.multiVoice);
     if (typeof cfg.autoFitSubs === "boolean") setAutoFitSubs(cfg.autoFitSubs);
     if (typeof cfg.watermarkOn === "boolean") setWatermarkOn(cfg.watermarkOn);
-    if (typeof cfg.watermarkPreset === "string") setWatermarkPreset(cfg.watermarkPreset as any);
-    if (typeof cfg.removeWatermarkEnabled === "boolean") setRemoveWmEnabled(cfg.removeWatermarkEnabled);
+    if (typeof cfg.watermarkPreset === "string")
+      setWatermarkPreset(cfg.watermarkPreset as any);
+    if (typeof cfg.removeWatermarkEnabled === "boolean")
+      setRemoveWmEnabled(cfg.removeWatermarkEnabled);
     if (typeof cfg.checkSubs === "boolean") setCheckSubs(cfg.checkSubs);
     if (typeof cfg.checkVoice === "boolean") setCheckVoice(cfg.checkVoice);
-    if (typeof cfg.useFalThumbnail === "boolean") setUseFalThumbnail(cfg.useFalThumbnail);
-    if (typeof cfg.useGptThumbnail === "boolean") setUseGptThumbnail(cfg.useGptThumbnail);
-    if (typeof cfg.autoUploadYoutube === "boolean") setAutoUploadYoutube(cfg.autoUploadYoutube);
+    if (typeof cfg.useFalThumbnail === "boolean")
+      setUseFalThumbnail(cfg.useFalThumbnail);
+    if (typeof cfg.useGptThumbnail === "boolean")
+      setUseGptThumbnail(cfg.useGptThumbnail);
+    if (typeof cfg.autoUploadYoutube === "boolean")
+      setAutoUploadYoutube(cfg.autoUploadYoutube);
     setPresetSeed({
       region: (cfg.region as Region | null) ?? null,
       subtitleStyle: (cfg.subtitleStyle as SubtitleStyle | null) ?? null,
@@ -669,7 +677,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       removeWatermarkEnabled:
         typeof cfg.removeWatermarkEnabled === "boolean"
           ? cfg.removeWatermarkEnabled
-          : Array.isArray(cfg.removeWatermarkRegions) && cfg.removeWatermarkRegions.length > 0,
+          : Array.isArray(cfg.removeWatermarkRegions) &&
+            cfg.removeWatermarkRegions.length > 0,
     });
   };
 
@@ -746,12 +755,20 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       filename: uploaded.name,
       srcLang,
       regionMode,
-      dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb, keepOriginalEnabled },
+      dub: {
+        engine: dubEngine,
+        voice: dubVoice,
+        muteOriginal,
+        originalGainDb,
+        keepOriginalEnabled,
+      },
       autoFit: autoFitSubs,
       watermark: watermarkOn,
       watermarkPreset: watermarkOn ? watermarkPreset : "",
-      removeWatermarkEnabled: presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
-      removeWatermarkRegions: presetSeed?.removeWatermarkRegions ?? removeWmRegions,
+      removeWatermarkEnabled:
+        presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
+      removeWatermarkRegions:
+        presetSeed?.removeWatermarkRegions ?? removeWmRegions,
       region: presetSeed?.region ?? null,
       subtitleStyle: presetSeed?.subtitleStyle ?? null,
       voiceLang,
@@ -1036,9 +1053,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           className="btn-island-secondary btn-xs"
                         >
                           {tr("pipeline.changeVideo")}
-                    </button>
-                  </div>
-                </div>
+                        </button>
+                      </div>
+                    </div>
                   ) : uploadError ? (
                     <div className="w-full rounded-xl border border-danger/20 bg-danger-muted px-4 py-4">
                       <p className="text-[13px] font-medium text-danger">
@@ -1152,7 +1169,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 >
                   <option value="">{t("preset.select")}</option>
                   {pipelinePresets.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
                   ))}
                 </select>
                 {presetId && (
@@ -1162,7 +1181,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     title={t("preset.delete")}
                     onClick={async () => {
                       await deletePipelinePreset(presetId);
-                      setPipelinePresets((prev) => prev.filter((x) => x.id !== presetId));
+                      setPipelinePresets((prev) =>
+                        prev.filter((x) => x.id !== presetId),
+                      );
                       setPresetId("");
                       setPresetSeed(null);
                     }}
@@ -1375,7 +1396,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       className="accent-accent"
                     />
                     <span className="text-[11px] text-ink-muted">
-                      Chọn đoạn giữ tiếng gốc (pipeline sẽ dừng để bạn chọn trên timeline)
+                      Chọn đoạn giữ tiếng gốc (pipeline sẽ dừng để bạn chọn trên
+                      timeline)
                     </span>
                   </label>
                 )}
@@ -1783,7 +1805,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         onChange={(e) => setYtChannel(e.target.value)}
                         className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
                       >
-                        <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
+                        <option value="">
+                          {tr("pipeline.youtubeChannelDefault")}
+                        </option>
                         {ytChannels.map((ch) => (
                           <option key={ch.id} value={ch.id}>
                             {ch.name}
@@ -2253,9 +2277,9 @@ function PipelineRow({
                     </button>
                   </div>
                 </>
-                )}
-              </div>
+              )}
             </div>
+          </div>
         </div>
       )}
     </div>
@@ -2413,22 +2437,13 @@ function ThumbnailReviewActions({
 
   return (
     <>
-      <button
-        onClick={onAccept}
-        className="btn-island-primary btn-sm"
-      >
+      <button onClick={onAccept} className="btn-island-primary btn-sm">
         Chấp nhận
       </button>
-      <button
-        onClick={() => setShowRegen(!showRegen)}
-        className="btn-warn"
-      >
+      <button onClick={() => setShowRegen(!showRegen)} className="btn-warn">
         Tạo lại
       </button>
-      <button
-        onClick={onSkip}
-        className="btn-island-secondary btn-sm"
-      >
+      <button onClick={onSkip} className="btn-island-secondary btn-sm">
         Bỏ qua
       </button>
       {showRegen && (
@@ -2494,10 +2509,16 @@ function DetailView({
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
-  const confirmWatermarkRegions = usePipelineStore((s) => s.confirmWatermarkRegions);
+  const confirmWatermarkRegions = usePipelineStore(
+    (s) => s.confirmWatermarkRegions,
+  );
   const confirmKeepOriginal = usePipelineStore((s) => s.confirmKeepOriginal);
-  const confirmThumbnailReview = usePipelineStore((s) => s.confirmThumbnailReview);
-  const resolveThumbnailFallback = usePipelineStore((s) => s.resolveThumbnailFallback);
+  const confirmThumbnailReview = usePipelineStore(
+    (s) => s.confirmThumbnailReview,
+  );
+  const resolveThumbnailFallback = usePipelineStore(
+    (s) => s.resolveThumbnailFallback,
+  );
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
@@ -2506,7 +2527,8 @@ function DetailView({
   const openVoiceCheck = usePipelineStore((s) => s.openVoiceCheck);
   const closeVoiceCheck = usePipelineStore((s) => s.closeVoiceCheck);
   const updatePipeline = usePipelineStore((s) => s.updatePipeline);
-  const clearRemoveWmRegion = (id: string) => updatePipeline(id, { removeWatermarkRegions: [] });
+  const clearRemoveWmRegion = (id: string) =>
+    updatePipeline(id, { removeWatermarkRegions: [] });
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -2605,7 +2627,8 @@ function DetailView({
             {p.removeWatermarkRegions.length > 0 && (
               <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200">
                 <p className="text-[11px] font-semibold text-danger mb-2">
-                  {tr("pipeline.removeWatermark")} — {tr("pipeline.removeWatermarkActive")}
+                  {tr("pipeline.removeWatermark")} —{" "}
+                  {tr("pipeline.removeWatermarkActive")}
                 </p>
                 <div className="flex items-center gap-3">
                   <span className="text-[11px] text-green-600">
@@ -2724,11 +2747,17 @@ function DetailView({
                 onClick={() => chatgptLogin()}
                 className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
               >
-                <span className="tracking-tight">{tr("pipeline.chatgptOpenProfile")}</span>
+                <span className="tracking-tight">
+                  {tr("pipeline.chatgptOpenProfile")}
+                </span>
               </button>
               <button
                 onClick={() => {
-                  updatePipeline(p.id, { needChatgptLogin: false, status: "running", stage: "done" });
+                  updatePipeline(p.id, {
+                    needChatgptLogin: false,
+                    status: "running",
+                    stage: "done",
+                  });
                   rerunPipeline(p.id, 12);
                 }}
                 className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
@@ -2780,210 +2809,221 @@ function DetailView({
         <div className="relative">
           <div className="absolute left-[11px] top-6 bottom-6 w-[2px] bg-white/[0.08]" />
           <div className="space-y-1">
-          {STEPS.map((s, i) => {
-            const done = i < activeStep || p.status === "done";
-            const isFailed =
-              p.status === "error" && failedStep != null && i === failedStep;
-            const active = i === activeStep && p.status !== "done" && !isFailed;
-            const start = p.stepStarts[i];
-            const end = p.stepEnds[i];
-            const skipped = p.stepSkipped[i];
-            const stepPct = p.stepProgress[i] ?? (done || isFailed ? 100 : 0);
-            let stepTime: string | null = null;
-            if (skipped) stepTime = tr("pipeline.skipped");
-            else if (start != null && end != null)
-              stepTime = fmtElapsed(end - start);
-            else if (start != null) stepTime = fmtElapsed(now - start);
+            {STEPS.map((s, i) => {
+              const done = i < activeStep || p.status === "done";
+              const isFailed =
+                p.status === "error" && failedStep != null && i === failedStep;
+              const active =
+                i === activeStep && p.status !== "done" && !isFailed;
+              const start = p.stepStarts[i];
+              const end = p.stepEnds[i];
+              const skipped = p.stepSkipped[i];
+              const stepPct = p.stepProgress[i] ?? (done || isFailed ? 100 : 0);
+              let stepTime: string | null = null;
+              if (skipped) stepTime = tr("pipeline.skipped");
+              else if (start != null && end != null)
+                stepTime = fmtElapsed(end - start);
+              else if (start != null) stepTime = fmtElapsed(now - start);
 
-            return (
-              <div key={s.label} className="flex items-center gap-3 relative">
-                <div
-                  className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    skipped
-                      ? "bg-white/[0.05] text-ink-light"
-                      : isFailed
-                        ? "bg-danger-muted text-danger"
-                        : done
-                          ? "bg-success/15 text-success"
-                          : active
-                            ? "bg-accent-muted text-accent"
-                            : "bg-white/[0.05] text-ink-light"
-                  }`}
-                >
-                  {skipped ? (
-                    <span className="text-[11px]">–</span>
-                  ) : isFailed ? (
-                    <svg
-                      className="w-3.5 h-3.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  ) : done ? (
-                    <IconCheck className="w-3.5 h-3.5" />
-                  ) : active ? (
-                    <IconSpinner className="w-3.5 h-3.5" />
-                  ) : (
-                    <span className="text-[11px] font-mono">{i + 1}</span>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p
-                      className={`text-[13px] font-medium ${isFailed ? "text-danger" : done || active ? "text-ink" : "text-ink-light"}`}
-                    >
-                      {STEP_LABEL_KEYS[i] ? tr(STEP_LABEL_KEYS[i]) : s.label}
-                    </p>
-                    <span
-                      className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${
-                        skipped
-                          ? "text-ink-light"
-                          : isFailed
-                            ? "text-danger"
-                            : done
-                              ? "text-success"
-                              : active
-                                ? "text-accent"
-                                : "text-ink-light"
-                      }`}
-                    >
-                      {skipped
-                        ? "—"
+              return (
+                <div key={s.label} className="flex items-center gap-3 relative">
+                  <div
+                    className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      skipped
+                        ? "bg-white/[0.05] text-ink-light"
                         : isFailed
-                          ? tr("pipeline.errorLabel")
-                          : `${stepPct}%`}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-ink-light">
-                    {isFailed || active
-                      ? stepDetail(p, tr)
-                      : STEP_DETAIL_KEYS[i]
-                        ? tr(STEP_DETAIL_KEYS[i])
-                        : s.detail}
-                  </p>
-                  {i === 11 && p.autoUploadYoutube && (active || done) && (
-                    <div className="mt-2 flex items-center gap-2 flex-wrap">
-                      <span className="text-[11px] text-ink-light flex-shrink-0">
-                        {tr("pipeline.youtubeChannel")}
-                      </span>
-                      <select
-                        value={p.youtubeChannel || ""}
-                        onChange={(e) => updatePipeline(p.id, { youtubeChannel: e.target.value })}
-                        className="input-field max-w-[200px] !py-1 !text-[12px]"
-                      >
-                        <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
-                        {ytChannels.map((ch) => (
-                          <option key={ch.id} value={ch.id}>
-                            {ch.name}
-                          </option>
-                        ))}
-                      </select>
-                      {p.watermark && (
-                        <>
-                          <span className="text-[11px] text-ink-light flex-shrink-0">
-                            {tr("pipeline.watermarkSet")}
-                          </span>
-                          <select
-                            value={p.watermarkPreset || ""}
-                            onChange={async (e) => {
-                              const presetId = e.target.value;
-                              // Lưu active preset về backend trước (giống Settings),
-                              // rồi mới cập nhật pipeline + tiếp tục luồng.
-                              if (presetId) {
-                                try {
-                                  await setActiveWatermarkPreset(presetId);
-                                } catch {
-                                  // ignore — vẫn áp cho lần chạy hiện tại
-                                }
-                              }
-                              updatePipeline(p.id, { watermarkPreset: presetId });
-                            }}
-                            className="input-field max-w-[200px] !py-1 !text-[12px]"
-                          >
-                            <option value="">{tr("pipeline.watermarkNone")}</option>
-                            {presets.map((pr) => (
-                              <option key={pr.id} value={pr.id}>
-                                {pr.name}
-                              </option>
-                            ))}
-                          </select>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  {(active || done) && !skipped && (
-                    <div className="mt-1.5 h-1 rounded-full bg-white/[0.08] overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ${
-                          done ? "bg-success" : "bg-accent"
-                        }`}
-                        style={{ width: `${stepPct}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {active && (
-                    <span className="text-[11px] font-mono text-ink-light tabular-nums">
-                      {stepPct}%
-                    </span>
-                  )}
-                  {stepTime && (
-                    <span
-                      className={`text-[11px] font-mono tabular-nums ${
-                        skipped
-                          ? "text-ink-light"
-                          : isFailed
-                            ? "text-danger"
+                          ? "bg-danger-muted text-danger"
+                          : done
+                            ? "bg-success/15 text-success"
                             : active
-                              ? "text-accent"
-                              : "text-success"
-                      }`}
-                    >
-                      {stepTime}
-                    </span>
-                  )}
-                  {canRerun && (i >= 4 || Boolean(p.url)) && (
-                    <button
-                      onClick={() => rerunPipeline(p.id, i === 12 ? 9 : i)}
-                      title={
-                        i === 12
-                          ? tr("pipeline.rerunFrom", {
-                              label: tr("pipeline.step.label.mux"),
-                            })
-                          : tr("pipeline.rerunFrom", {
-                              label: STEP_LABEL_KEYS[i]
-                                ? tr(STEP_LABEL_KEYS[i])
-                                : s.label,
-                            })
-                      }
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
-                    >
+                              ? "bg-accent-muted text-accent"
+                              : "bg-white/[0.05] text-ink-light"
+                    }`}
+                  >
+                    {skipped ? (
+                      <span className="text-[11px]">–</span>
+                    ) : isFailed ? (
                       <svg
-                        className="w-3 h-3"
+                        className="w-3.5 h-3.5"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
-                        strokeWidth={1.5}
+                        strokeWidth={2}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
-                        <path d="M3 3v5h5" />
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
-                      {tr("pipeline.rerun")}
-                    </button>
-                  )}
+                    ) : done ? (
+                      <IconCheck className="w-3.5 h-3.5" />
+                    ) : active ? (
+                      <IconSpinner className="w-3.5 h-3.5" />
+                    ) : (
+                      <span className="text-[11px] font-mono">{i + 1}</span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p
+                        className={`text-[13px] font-medium ${isFailed ? "text-danger" : done || active ? "text-ink" : "text-ink-light"}`}
+                      >
+                        {STEP_LABEL_KEYS[i] ? tr(STEP_LABEL_KEYS[i]) : s.label}
+                      </p>
+                      <span
+                        className={`text-[11px] font-mono tabular-nums flex-shrink-0 ${
+                          skipped
+                            ? "text-ink-light"
+                            : isFailed
+                              ? "text-danger"
+                              : done
+                                ? "text-success"
+                                : active
+                                  ? "text-accent"
+                                  : "text-ink-light"
+                        }`}
+                      >
+                        {skipped
+                          ? "—"
+                          : isFailed
+                            ? tr("pipeline.errorLabel")
+                            : `${stepPct}%`}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-ink-light">
+                      {isFailed || active
+                        ? stepDetail(p, tr)
+                        : STEP_DETAIL_KEYS[i]
+                          ? tr(STEP_DETAIL_KEYS[i])
+                          : s.detail}
+                    </p>
+                    {i === 11 && p.autoUploadYoutube && (active || done) && (
+                      <div className="mt-2 flex items-center gap-2 flex-wrap">
+                        <span className="text-[11px] text-ink-light flex-shrink-0">
+                          {tr("pipeline.youtubeChannel")}
+                        </span>
+                        <select
+                          value={p.youtubeChannel || ""}
+                          onChange={(e) =>
+                            updatePipeline(p.id, {
+                              youtubeChannel: e.target.value,
+                            })
+                          }
+                          className="input-field max-w-[200px] !py-1 !text-[12px]"
+                        >
+                          <option value="">
+                            {tr("pipeline.youtubeChannelDefault")}
+                          </option>
+                          {ytChannels.map((ch) => (
+                            <option key={ch.id} value={ch.id}>
+                              {ch.name}
+                            </option>
+                          ))}
+                        </select>
+                        {p.watermark && (
+                          <>
+                            <span className="text-[11px] text-ink-light flex-shrink-0">
+                              {tr("pipeline.watermarkSet")}
+                            </span>
+                            <select
+                              value={p.watermarkPreset || ""}
+                              onChange={async (e) => {
+                                const presetId = e.target.value;
+                                // Lưu active preset về backend trước (giống Settings),
+                                // rồi mới cập nhật pipeline + tiếp tục luồng.
+                                if (presetId) {
+                                  try {
+                                    await setActiveWatermarkPreset(presetId);
+                                  } catch {
+                                    // ignore — vẫn áp cho lần chạy hiện tại
+                                  }
+                                }
+                                updatePipeline(p.id, {
+                                  watermarkPreset: presetId,
+                                });
+                              }}
+                              className="input-field max-w-[200px] !py-1 !text-[12px]"
+                            >
+                              <option value="">
+                                {tr("pipeline.watermarkNone")}
+                              </option>
+                              {presets.map((pr) => (
+                                <option key={pr.id} value={pr.id}>
+                                  {pr.name}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {(active || done) && !skipped && (
+                      <div className="mt-1.5 h-1 rounded-full bg-white/[0.08] overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            done ? "bg-success" : "bg-accent"
+                          }`}
+                          style={{ width: `${stepPct}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {active && (
+                      <span className="text-[11px] font-mono text-ink-light tabular-nums">
+                        {stepPct}%
+                      </span>
+                    )}
+                    {stepTime && (
+                      <span
+                        className={`text-[11px] font-mono tabular-nums ${
+                          skipped
+                            ? "text-ink-light"
+                            : isFailed
+                              ? "text-danger"
+                              : active
+                                ? "text-accent"
+                                : "text-success"
+                        }`}
+                      >
+                        {stepTime}
+                      </span>
+                    )}
+                    {canRerun && (i >= 4 || Boolean(p.url)) && (
+                      <button
+                        onClick={() => rerunPipeline(p.id, i === 12 ? 9 : i)}
+                        title={
+                          i === 12
+                            ? tr("pipeline.rerunFrom", {
+                                label: tr("pipeline.step.label.mux"),
+                              })
+                            : tr("pipeline.rerunFrom", {
+                                label: STEP_LABEL_KEYS[i]
+                                  ? tr(STEP_LABEL_KEYS[i])
+                                  : s.label,
+                              })
+                        }
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
+                      >
+                        <svg
+                          className="w-3 h-3"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
+                          <path d="M3 3v5h5" />
+                        </svg>
+                        {tr("pipeline.rerun")}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
           </div>
         </div>
 
@@ -3128,13 +3168,8 @@ function DetailView({
                   </span>
                 </a>
               )}
-              {p.videoId && (
-                <ContextImagesButton videoId={p.videoId} />
-              )}
-              <PipelineSavePanel
-                p={p}
-                onSaved={() => onPresetSaved?.()}
-              />
+              {p.videoId && <ContextImagesButton videoId={p.videoId} />}
+              <PipelineSavePanel p={p} onSaved={() => onPresetSaved?.()} />
               {p.updatedThumbnailUrl && (
                 <button
                   onClick={() =>
@@ -3311,7 +3346,15 @@ function DetailView({
             <div className="double-bezel-inner p-5 sm:p-6">
               <div className="flex items-start gap-3 mb-3">
                 <div className="w-9 h-9 rounded-full bg-violet-500/15 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-5 h-5 text-violet-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    className="w-5 h-5 text-violet-300"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M11 5L6 9H2v6h4l5 4V5z" />
                     <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
                   </svg>
@@ -3336,7 +3379,15 @@ function DetailView({
                   onClick={() => openVoiceCheck(p.id)}
                   className="btn-island-primary btn-sm"
                 >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    className="w-3.5 h-3.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M11 5L6 9H2v6h4l5 4V5z" />
                     <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
                   </svg>
@@ -3381,7 +3432,6 @@ function DetailView({
     </div>
   );
 }
-
 
 function ContextImagesButton({ videoId }: { videoId: string }) {
   const { t } = useI18n();

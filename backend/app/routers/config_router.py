@@ -2,6 +2,7 @@ import json
 import logging
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -89,6 +90,11 @@ class WatermarkPresetCreate(BaseModel):
 class WatermarkPresetUpdate(BaseModel):
     name: str | None = None
     text: str | None = None
+
+
+class PipelinePresetCreate(BaseModel):
+    name: str = ""
+    config: dict = {}
 
 
 # ── Watermark presets (mỗi bộ = 1 cặp text + logo) ──
@@ -224,6 +230,7 @@ async def get_config():
             for p in presets
         ],
         "active_watermark_preset": _active_preset_id(cfg),
+        "pipeline_presets": cfg.get("pipeline_presets") or [],
     }
 
 
@@ -281,6 +288,46 @@ async def save_config(body: SaveConfigRequest):
     _write_config(cfg)
     logger.info("User config saved to %s", CONFIG_FILE)
     return {"status": "ok", "saved": list(cfg.keys())}
+
+
+# ── Pipeline config presets ──
+
+@router.get("/api/config/pipeline-presets")
+async def list_pipeline_presets():
+    """List saved pipeline configuration presets."""
+    cfg = _read_config()
+    return {"presets": cfg.get("pipeline_presets") or []}
+
+
+@router.post("/api/config/pipeline-presets")
+async def create_pipeline_preset(body: PipelinePresetCreate):
+    """Save the current pipeline config under a name."""
+    cfg = _read_config()
+    presets = cfg.setdefault("pipeline_presets", [])
+    preset_id = f"pp_{uuid.uuid4().hex[:8]}"
+    name = (body.name or "").strip() or f"Preset {len(presets) + 1}"
+    preset = {
+        "id": preset_id,
+        "name": name,
+        "config": body.config if isinstance(body.config, dict) else {},
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    presets.append(preset)
+    _write_config(cfg)
+    return {"id": preset_id, "name": name}
+
+
+@router.delete("/api/config/pipeline-presets/{preset_id}")
+async def delete_pipeline_preset(preset_id: str):
+    """Delete a saved pipeline preset by id."""
+    cfg = _read_config()
+    presets = cfg.get("pipeline_presets") or []
+    new = [p for p in presets if p.get("id") != preset_id]
+    if len(new) == len(presets):
+        raise HTTPException(status_code=404, detail="Preset not found")
+    cfg["pipeline_presets"] = new
+    _write_config(cfg)
+    return {"status": "ok", "removed": True}
 
 
 @router.post("/api/config/watermark/presets")

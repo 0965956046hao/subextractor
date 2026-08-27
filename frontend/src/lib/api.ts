@@ -729,6 +729,37 @@ export async function saveAppConfig(body: {
   return res.data;
 }
 
+export interface PipelinePreset {
+  id: string;
+  name: string;
+  config: Record<string, unknown>;
+  created_at?: string;
+}
+
+export async function getPipelinePresets(): Promise<{
+  presets: PipelinePreset[];
+}> {
+  const res = await api.get<{ presets: PipelinePreset[] }>(
+    "/config/pipeline-presets",
+  );
+  return res.data;
+}
+
+export async function createPipelinePreset(
+  name: string,
+  config: Record<string, unknown>,
+): Promise<{ id: string; name: string }> {
+  const res = await api.post<{ id: string; name: string }>(
+    "/config/pipeline-presets",
+    { name, config },
+  );
+  return res.data;
+}
+
+export async function deletePipelinePreset(id: string): Promise<void> {
+  await api.delete(`/config/pipeline-presets/${id}`);
+}
+
 export async function uploadWatermarkLogo(
   file: File,
 ): Promise<{ status: string; watermark_logo_name?: string }> {

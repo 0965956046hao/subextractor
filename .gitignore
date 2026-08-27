@@ -11,6 +11,7 @@ __pycache__/
 !test/*.json
 *.token
 !test/*.token
+facebookuploader/facebook-uploader
 youtubeuploader/youtubeuploader
 tiktokuploader/tiktok-uploader
 # =========================
