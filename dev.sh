@@ -61,6 +61,17 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# Đảm bảo .next của frontend là bản DEV, không phải bản production.
+# `npm run build` ghi artifact production (output: standalone) vào frontend/.next
+# rồi copy sang .next-prod (dùng bởi `npm run start`). Nếu .next còn standalone,
+# `next dev` sẽ chạy trên .next bẩn → HTML reference đường dẫn CSS production
+# (/_next/static/css/app/layout.css?v=...) mà dev server không phục vụ → 404,
+# giao diện mất CSS. Xoá .next để next dev build lại sạch.
+if [ -d "$FRONTEND/.next/standalone" ]; then
+  echo "==> Removing polluted production .next (standalone) so next dev serves CSS correctly"
+  rm -rf "$FRONTEND/.next"
+fi
+
 echo "==> Starting capcut-tts-api service  http://localhost:8100"
 (cd "$CAPCUT" && exec "$BACKEND/.venv/bin/python" -m service.main) &
 CAPCUT_PID=$!
