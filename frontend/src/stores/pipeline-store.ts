@@ -841,7 +841,20 @@ export const usePipelineStore = create<PipelineState>()(
           resolve.resolve(action);
         }
         // Restored pipeline (page reload): no live runner → finish step 6 and resume dub.
-        if (!liveRunners.has(id)) {
+        // Guard: never resume a pipeline that is already done/errored.
+        if (
+          !liveRunners.has(id) &&
+          (s.status === "running" || s.status === "queued")
+        ) {
+          console.error(
+            "[PIPELINE-DEBUG] resolveTimelineCheck resume-enqueue",
+            id,
+            "resumeStep",
+            s.resumeStep,
+            "status",
+            s.status,
+            new Error().stack,
+          );
           markStepEnd(id, 7);
           patch(id, { timelineCheck: null });
           enqueue(id, s.resumeStep ?? 8);
@@ -872,7 +885,19 @@ export const usePipelineStore = create<PipelineState>()(
           voiceCheckWaiters.delete(id);
           w.resolve(action);
         }
-        if (!liveRunners.has(id)) {
+        if (
+          !liveRunners.has(id) &&
+          (s.status === "running" || s.status === "queued")
+        ) {
+          console.error(
+            "[PIPELINE-DEBUG] resolveVoiceCheck resume-enqueue",
+            id,
+            "resumeStep",
+            s.resumeStep,
+            "status",
+            s.status,
+            new Error().stack,
+          );
           markStepEnd(id, 7);
           patch(id, { voiceCheck: null });
           enqueue(id, s.resumeStep ?? 8);
@@ -2037,6 +2062,15 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
 // Executed one video at a time via the sequential queue.
 async function runPipeline(id: string, startStep = 4) {
+  console.error(
+    "[PIPELINE-DEBUG] runPipeline start",
+    id,
+    "startStep",
+    startStep,
+    "status",
+    usePipelineStore.getState().pipelines.find((x) => x.id === id)?.status,
+    new Error().stack,
+  );
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   const videoId = cur.videoId;
@@ -2882,6 +2916,21 @@ async function runPipeline(id: string, startStep = 4) {
       const runFalThumbnail = async () => {
         appendLog(id, "Cập nhật thumbnail (fal.ai)...");
         try {
+          // Idempotent: reuse existing FAL thumbnail for this videoId instead of
+          // re-triggering fal.ai (which wastes credits on a re-run).
+          try {
+            const pre = await fetch(`/api/thumbnail/${videoId}/status`)
+              .then((r) => r.json())
+              .catch(() => null);
+            if (pre?.status === "done" && pre?.thumbnail_url) {
+              patch(id, { updatedThumbnailUrl: pre.thumbnail_url });
+              appendLog(id, `Thumbnail đã có sẵn (fal): ${pre.thumbnail_url}`);
+              markStepEnd(id, 11);
+              return;
+            }
+          } catch {
+            /* ignore — fall through to regeneration */
+          }
           await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
 
           const deadline = Date.now() + 180_000;
