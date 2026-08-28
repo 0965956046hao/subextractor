@@ -37,16 +37,27 @@ async def list_context_images(video_id: str):
 
 
 @router.post("/api/thumbnail/{video_id}")
-async def start_thumbnail(video_id: str):
-    """Start fal.ai thumbnail generation in background; poll /status for result."""
+async def start_thumbnail(video_id: str, force: bool = False):
+    """Start fal.ai thumbnail generation in background; poll /status for result.
+
+    When ``force`` is True an existing thumbnail is regenerated (used when the
+    user explicitly requests a fresh image, e.g. switching from a failed ChatGPT
+    attempt to FAL) instead of idempotently reusing the stale file.
+    """
     from app.services.fal_service import update_thumbnail as do_update
 
     out_path = settings.temp_dir / "thumb" / video_id / "thumbnail.png"
 
     with _thumb_lock:
-        if out_path.exists():
+        if out_path.exists() and not force:
             _thumb_jobs[video_id] = {"status": "done", "error": None}
             return {"status": "done", "thumbnail_url": f"/api/thumbnail/{video_id}"}
+        if out_path.exists() and force:
+            # Drop the stale image so the new generation is actually performed.
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
         _thumb_jobs[video_id] = {"status": "processing", "error": None}
 
     def _run():

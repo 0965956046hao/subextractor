@@ -44,7 +44,7 @@ function waitForProfileRelease(profileDir: string, maxWaitMs = 5000): void {
   }
 }
 
-const LOGIN_TIMEOUT_MS = 35_000;
+const LOGIN_TIMEOUT_MS = 120_000;
 const GENERATE_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATE_TIMEOUT || "240000");
 
 /** Reuse an already-running visible Chrome (shared profile) or launch a new one. */
@@ -112,9 +112,10 @@ export async function closeBrowser(handle: BrowserHandle): Promise<void> {
 }
 
 /**
- * True when the chat composer is present (logged in). A visible sign-in CTA
- * decides "definitely not logged in"; otherwise we poll up to LOGIN_TIMEOUT for
- * the composer in case Cloudflare / the initial load is slow.
+ * True once the chat composer is present (i.e. logged in). We poll up to
+ * LOGIN_TIMEOUT_MS — the first time Chrome opens the user is almost certainly
+ * NOT logged in yet, so we must keep waiting (not bail) while they sign in.
+ * Only return false after the full window elapses with no composer.
  *
  * NOTE: do not use page.waitForFunction with tri-state string returns here —
  * waitForFunction resolves on the first truthy value, so a still-loading page
@@ -125,14 +126,8 @@ export async function isChatGptLoggedIn(page: Page): Promise<boolean> {
   while (Date.now() < deadline) {
     const composer = await page.$("#prompt-textarea").catch(() => null);
     if (composer) return true;
-    const loginCta = await page
-      .evaluate(() =>
-        Array.from(document.querySelectorAll("a,button")).some((n) =>
-          /log\s*in|sign\s*in/i.test((n.textContent || "").trim()),
-        ),
-      )
-      .catch(() => false);
-    if (loginCta) return false;
+    // A sign-in CTA means "not logged in *yet*" — the user may be mid-login, so
+    // we keep polling instead of bailing. Return false only after the deadline.
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
@@ -143,13 +138,37 @@ export async function attachImage(page: Page, imagePath: string): Promise<void> 
   await page.waitForSelector("#prompt-textarea", { timeout: 30_000 });
   // Prefer the image-specific input (#upload-photos). The generic #upload-files
   // attaches the file as a plain document and ChatGPT won't see it as an image.
-  const input = (
-    (await page.$("#upload-photos")) ||
-    (await page.$("#upload-files"))
-  ) as ElementHandle<HTMLInputElement> | null;
-  if (!input) throw new Error("Không tìm thấy input đính kèm ảnh");
+  // ChatGPT mounts the file input lazily. Find it by the stable
+  // `input[type="file"]` selector first, falling back to the legacy ids; if it
+  // isn't in the DOM yet, click the "+"/attach button to reveal it.
+  let input = (await page.$("input[type='file']")) as ElementHandle<HTMLInputElement> | null;
+  if (!input) {
+    const attachBtn =
+      (await page.$("button[aria-label*='Attach']")) ||
+      (await page.$("[data-testid='add-attachment-button']")) ||
+      (await page.$("button[aria-label*='Add']"));
+    if (attachBtn) {
+      await attachBtn.click().catch(() => {});
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    input = (await page.$("input[type='file']")) as ElementHandle<HTMLInputElement> | null;
+  }
+  if (!input) {
+    input = ((await page.$("#upload-photos")) ||
+      (await page.$("#upload-files"))) as ElementHandle<HTMLInputElement> | null;
+  }
+  if (!input) throw new Error("Không tìm thấy input đính kèm ảnh trên ChatGPT");
   await input.uploadFile(imagePath);
-  // Give the composer a moment to show the attachment before typing.
+  // Confirm the file was actually accepted by the input before typing.
+  await page
+    .waitForFunction(
+      (el) =>
+        !!(el as HTMLInputElement).files && (el as HTMLInputElement).files!.length > 0,
+      { timeout: 10000 },
+      input,
+    )
+    .catch(() => {});
+  // Give the composer a moment to render the attachment preview before typing.
   await new Promise((r) => setTimeout(r, 2000));
 }
 

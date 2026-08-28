@@ -2941,25 +2941,31 @@ async function runPipeline(id: string, startStep = 4, force = false) {
       }
 
       // FAL flow, tách riêng để dùng lại khi ChatGPT không trả ảnh.
-      const runFalThumbnail = async () => {
+      const runFalThumbnail = async (force = false) => {
         appendLog(id, "Cập nhật thumbnail (fal.ai)...");
         try {
           // Idempotent: reuse existing FAL thumbnail for this videoId instead of
-          // re-triggering fal.ai (which wastes credits on a re-run).
-          try {
-            const pre = await fetch(`/api/thumbnail/${videoId}/status`)
-              .then((r) => r.json())
-              .catch(() => null);
-            if (pre?.status === "done" && pre?.thumbnail_url) {
-              patch(id, { updatedThumbnailUrl: pre.thumbnail_url });
-              appendLog(id, `Thumbnail đã có sẵn (fal): ${pre.thumbnail_url}`);
-              markStepEnd(id, 11);
-              return;
+          // re-triggering fal.ai (which wastes credits on a re-run). When `force`
+          // is set (user explicitly asked for a fresh image, e.g. switching from a
+          // failed ChatGPT attempt to FAL), skip reuse and regenerate for real.
+          if (!force) {
+            try {
+              const pre = await fetch(`/api/thumbnail/${videoId}/status`)
+                .then((r) => r.json())
+                .catch(() => null);
+              if (pre?.status === "done" && pre?.thumbnail_url) {
+                patch(id, { updatedThumbnailUrl: pre.thumbnail_url });
+                appendLog(id, `Thumbnail đã có sẵn (fal): ${pre.thumbnail_url}`);
+                markStepEnd(id, 11);
+                return;
+              }
+            } catch {
+              /* ignore — fall through to regeneration */
             }
-          } catch {
-            /* ignore — fall through to regeneration */
           }
-          await fetch(`/api/thumbnail/${videoId}`, { method: "POST" });
+          await fetch(`/api/thumbnail/${videoId}?force=${force}`, {
+            method: "POST",
+          });
 
           const deadline = Date.now() + 180_000;
           let thumbUrl: string | null = null;
@@ -3061,9 +3067,10 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             markStepSkipped(id, 11);
             return;
           }
-          // "fal" → chạy FAL (nếu có key, ngược lại bỏ qua).
+          // "fal" → chạy FAL (nếu có key, ngược lại bỏ qua). Force regenerate so
+          // we don't reuse a stale thumbnail and upload YouTube too early.
           if (hasFalKey) {
-            await runFalThumbnail();
+            await runFalThumbnail(true);
           } else {
             appendLog(id, "Không có FAL key — bỏ qua cập nhật thumbnail.");
             markStepSkipped(id, 11);
