@@ -7,6 +7,7 @@ The config is a small state machine with sub-screens:
 - ``main``     — overview of all options + "Chọn giọng"/"Chọn preset"/"Chọn kênh" buttons
 - ``voices``   — paginated voice picker (CapCut/Google, per voice language)
 - ``presets``  — watermark preset picker
+- ``pipresets`` — pipeline config preset picker
 - ``channels`` — YouTube channel picker
 
 Callback data conventions:
@@ -61,9 +62,10 @@ class DouyinConfig:
     thumbnail: str = "none"         # none | fal | gpt
     auto_upload_youtube: bool = False
     youtube_channel: str = ""
+    pipeline_preset: str = ""       # pipeline config preset id (overrides below)
     message_id: int | None = None
     # ── UI state ──
-    screen: str = "main"            # main | voices | presets | channels
+    screen: str = "main"            # main | voices | presets | pipresets | channels
     page: int = 0                   # pagination for list screens
 
 
@@ -111,6 +113,15 @@ def _get_presets() -> list[dict]:
         return _presets()
     except Exception as e:
         logger.warning("Watermark presets fetch failed: %s", e)
+        return []
+
+
+def _get_pipeline_presets() -> list[dict]:
+    try:
+        from app.routers.config_router import _pipeline_presets
+        return _pipeline_presets()
+    except Exception as e:
+        logger.warning("Pipeline presets fetch failed: %s", e)
         return []
 
 
@@ -204,6 +215,13 @@ def _build_config_text(config: DouyinConfig, voices: list[dict]) -> str:
             "",
         )
 
+    pp_name = ""
+    if config.pipeline_preset:
+        pp_name = next(
+            (p.get("name", "") for p in _get_pipeline_presets() if p.get("id") == config.pipeline_preset),
+            "",
+        )
+
     gain_line = ""
     if config.original_voice == "keep":
         gain_line = f"\nGiảm giọng gốc: <b>-{int(config.original_gain_db)} dB</b>"
@@ -244,6 +262,8 @@ def _build_config_text(config: DouyinConfig, voices: list[dict]) -> str:
         f"Giọng đọc: {'<b>Bật ✅</b>' if config.check_voice else 'Tắt'}\n\n"
         "━━━ <b>Thumbnail</b> ━━━\n"
         f"{mark(config.thumbnail, 'none', 'Không')} · {mark(config.thumbnail, 'fal', 'FAL')} · {mark(config.thumbnail, 'gpt', 'ChatGPT')}\n\n"
+        "━━━ <b>Preset pipeline</b> ━━━\n"
+        f"{pp_name or 'Không'}\n\n"
         "━━━ <b>YouTube</b> ━━━\n"
         f"{yt_line}"
     )
@@ -298,6 +318,15 @@ def _build_main_keyboard(config: DouyinConfig) -> list[list[dict]]:
     ]
     if config.watermark == "preset":
         rows.append([_btn("📋 Chọn preset watermark", "tgcfg:screen:presets")])
+
+    pp_label = "🗂 Chọn preset pipeline"
+    if config.pipeline_preset:
+        pp_name = next(
+            (p.get("name", "") for p in _get_pipeline_presets() if p.get("id") == config.pipeline_preset),
+            "",
+        )
+        pp_label = f"🗂 {pp_name or 'Preset'}" + " ✅"
+    rows.append([_btn(pp_label, "tgcfg:screen:pipresets")])
     rows += [
         [_flip_btn("Xoá WM", "remove_watermark", config.remove_watermark)],
         [_flip_btn("Check timeline", "check_subs", config.check_subs),
@@ -353,6 +382,19 @@ def _build_presets_keyboard(config: DouyinConfig, presets: list[dict]) -> list[l
     return rows
 
 
+def _build_pipeline_presets_keyboard(config: DouyinConfig, presets: list[dict]) -> list[list[dict]]:
+    rows: list[list[dict]] = []
+    for p in presets:
+        mark = " ✅" if p.get("id") == config.pipeline_preset else ""
+        rows.append([_btn(f"{p.get('name', p.get('id', ''))}{mark}", f"tgcfg:pipeline_preset:{p.get('id')}")])
+    if not rows:
+        rows.append([_btn("Không có preset", "tgcfg:noop")])
+    if config.pipeline_preset:
+        rows.append([_btn("❌ Bỏ chọn preset", "tgcfg:pipeline_preset:")])
+    rows.append([_btn("⬅ Quay lại", "tgcfg:screen:main")])
+    return rows
+
+
 def _build_channels_keyboard(config: DouyinConfig, channels: list[dict]) -> list[list[dict]]:
     rows: list[list[dict]] = []
     rows.append([_btn("Mặc định", "tgcfg:youtube_channel:")])
@@ -368,6 +410,8 @@ def _build_config_keyboard(config: DouyinConfig, voices: list[dict]) -> list[lis
         return _build_voices_keyboard(config, voices)
     if config.screen == "presets":
         return _build_presets_keyboard(config, _get_presets())
+    if config.screen == "pipresets":
+        return _build_pipeline_presets_keyboard(config, _get_pipeline_presets())
     if config.screen == "channels":
         return _build_channels_keyboard(config, _get_channels())
     return _build_main_keyboard(config)
@@ -503,6 +547,8 @@ class TelegramBot:
                 pass
         elif field == "watermark_preset":
             config.watermark_preset = value
+        elif field == "pipeline_preset":
+            config.pipeline_preset = value
         elif field == "youtube_channel":
             config.youtube_channel = value
         elif field in _BOOL_FIELDS:
@@ -581,6 +627,7 @@ class TelegramBot:
             "thumbnail": config.thumbnail,
             "auto_upload_youtube": config.auto_upload_youtube,
             "youtube_channel": config.youtube_channel,
+            "pipeline_preset": config.pipeline_preset,
         }
 
         try:

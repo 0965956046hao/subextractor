@@ -1222,6 +1222,81 @@ def _srt_preview(srt_content: str, max_lines: int = 8) -> str:
     return "\n".join(preview) if preview else "Không có phụ đề"
 
 
+async def _apply_pipeline_preset(job: dict) -> str | None:
+    """If ``pipeline_preset`` is set, load that preset and merge its config
+    into the job dict (overriding individually-selected options).
+
+    Returns the preset name if applied, else None.
+    """
+    pid = job.get("pipeline_preset")
+    if not pid:
+        return None
+    try:
+        from app.routers.config_router import _pipeline_presets
+        preset = next((p for p in _pipeline_presets() if p.get("id") == pid), None)
+    except Exception as e:
+        logger.warning("Pipeline preset load failed: %s", e)
+        preset = None
+    if not preset:
+        logger.warning("Pipeline preset %s not found", pid)
+        return None
+
+    cfg = preset.get("config") or {}
+    if cfg.get("srcLang"):
+        job["src_lang"] = cfg["srcLang"]
+    if cfg.get("regionMode"):
+        job["region_mode"] = cfg["regionMode"]
+    if cfg.get("translateOn") is not None:
+        job["translate_on"] = bool(cfg["translateOn"])
+    if cfg.get("translateTarget"):
+        job["translate_target"] = cfg["translateTarget"]
+    if cfg.get("dubOn") is not None:
+        job["dub_on"] = bool(cfg["dubOn"])
+    if cfg.get("dubEngine"):
+        job["dub_engine"] = cfg["dubEngine"]
+    if cfg.get("dubVoice"):
+        job["dub_voice"] = cfg["dubVoice"]
+    if cfg.get("voiceLang"):
+        job["voice_lang"] = cfg["voiceLang"]
+    # Original-voice mapping: mute > keep > mute(default)
+    if cfg.get("muteOriginal"):
+        job["original_voice"] = "mute"
+    elif cfg.get("keepOriginalEnabled"):
+        job["original_voice"] = "keep"
+    if "originalGainDb" in cfg and cfg["originalGainDb"] is not None:
+        try:
+            job["original_gain_db"] = float(cfg["originalGainDb"])
+        except (TypeError, ValueError):
+            pass
+    if cfg.get("multiVoice") is not None:
+        job["multi_voice"] = bool(cfg["multiVoice"])
+    if cfg.get("autoFitSubs") is not None:
+        job["auto_fit"] = bool(cfg["autoFitSubs"])
+    if cfg.get("watermarkOn"):
+        job["watermark"] = "preset"
+    if cfg.get("watermarkPreset"):
+        job["watermark_preset"] = cfg["watermarkPreset"]
+    if cfg.get("removeWatermarkEnabled") is not None:
+        job["remove_watermark"] = bool(cfg["removeWatermarkEnabled"])
+    if cfg.get("checkSubs") is not None:
+        job["check_subs"] = bool(cfg["checkSubs"])
+    if cfg.get("checkVoice") is not None:
+        job["check_voice"] = bool(cfg["checkVoice"])
+    if cfg.get("useFalThumbnail"):
+        job["thumbnail"] = "fal"
+    elif cfg.get("useGptThumbnail"):
+        job["thumbnail"] = "gpt"
+    if cfg.get("autoUploadYoutube") is not None:
+        job["auto_upload_youtube"] = bool(cfg["autoUploadYoutube"])
+    if cfg.get("region"):
+        job["region"] = cfg["region"]
+    if cfg.get("subtitleStyle"):
+        job["subtitle_style"] = cfg["subtitleStyle"]
+    if cfg.get("removeWatermarkRegions"):
+        job["remove_watermark_regions"] = cfg["removeWatermarkRegions"]
+    return preset.get("name", "")
+
+
 async def run_telegram_auto_job(
     jobs: dict,
     ws_clients: dict,
@@ -1243,6 +1318,13 @@ async def run_telegram_auto_job(
     loop = asyncio.get_event_loop()
 
     try:
+        # ── Apply pipeline config preset (overrides individual options) ──
+        if job.get("pipeline_preset"):
+            pp_name = await _apply_pipeline_preset(job)
+            if pp_name:
+                logger.info("telegram_auto job %s: applied pipeline preset %s", job_id, pp_name)
+                await _tg_send(chat_id, f"🗂 Đã áp dụng preset pipeline: <b>{pp_name}</b>")
+
         job["status"] = "processing"
         job["phase"] = "resolving"
 

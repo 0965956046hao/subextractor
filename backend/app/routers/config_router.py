@@ -133,6 +133,12 @@ def _preset(preset_id: str) -> dict | None:
     return next((p for p in _presets() if p.get("id") == preset_id), None)
 
 
+def _pipeline_presets() -> list[dict]:
+    """All saved pipeline configuration presets (each: {id, name, config})."""
+    cfg = _read_config()
+    return cfg.get("pipeline_presets") or []
+
+
 def _active_preset_id(cfg: dict | None = None) -> str:
     cfg = cfg or _migrate_presets(_read_config())
     active = cfg.get("active_watermark_preset")

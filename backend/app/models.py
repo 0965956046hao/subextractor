@@ -90,6 +90,7 @@ class TelegramAutoRequest(BaseModel):
     thumbnail: str = "none"
     auto_upload_youtube: bool = False
     youtube_channel: str = ""
+    pipeline_preset: str = ""
 
 
 class PipelineState(BaseModel):

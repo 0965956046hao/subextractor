@@ -638,7 +638,7 @@ export const usePipelineStore = create<PipelineState>()(
         if (step <= 3) {
           runPrep(id, step);
         } else {
-          enqueue(id, step);
+          enqueue(id, step, true);
         }
       },
       confirmRegion: (id, region) => {
@@ -1491,7 +1491,22 @@ function pollBackendTimelineDecision(
   });
 }
 
-function enqueue(id: string, startStep = 0) {
+function enqueue(id: string, startStep = 0, force = false) {
+  const s = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+  // Guard: never (re)start a pipeline that already finished/failed unless the
+  // caller explicitly forces it (user clicked "re-run"). This prevents stray
+  // resume/confirm handlers from restarting a completed pipeline (e.g. re-uploading
+  // to YouTube after "Hoàn tất!").
+  if (!force && s && (s.status === "done" || s.status === "error")) {
+    console.error(
+      "[PIPELINE-DEBUG] enqueue BLOCKED (already done/error):",
+      id,
+      "startStep",
+      startStep,
+      new Error().stack,
+    );
+    return;
+  }
   queue.push({ id, startStep });
   processQueue();
 }
@@ -2061,7 +2076,20 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
 
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
 // Executed one video at a time via the sequential queue.
-async function runPipeline(id: string, startStep = 4) {
+async function runPipeline(id: string, startStep = 4, force = false) {
+  const _guard = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  // Guard: a finished/failed pipeline must not restart on its own. Only an
+  // explicit re-run (force=true) may do so.
+  if (!force && _guard && (_guard.status === "done" || _guard.status === "error")) {
+    console.error(
+      "[PIPELINE-DEBUG] runPipeline BLOCKED (already done/error):",
+      id,
+      "startStep",
+      startStep,
+      new Error().stack,
+    );
+    return;
+  }
   console.error(
     "[PIPELINE-DEBUG] runPipeline start",
     id,
