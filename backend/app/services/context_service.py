@@ -350,7 +350,7 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
         # "Cannot send a request, as the client has been closed" (see
         # retry_utils.genai_generate_content_factory docstring).
         chat = client.chats.create(model=settings.gemini_model)
-        response = gemini_retry(chat.send_message)(*uploaded_files, prompt)
+        response = gemini_retry(chat.send_message)([*uploaded_files, prompt])
 
         context = response.text.strip()
     except Exception as e:
