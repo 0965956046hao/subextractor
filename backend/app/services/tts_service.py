@@ -335,7 +335,7 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
     - 1 MP3 per entry, placed in ``tts/{video_id}/{voice_key}/{index:04d}.mp3``
     - failures → silent placeholder to keep entry alignment
     """
-    from app.services.capcut_tts_client import generate_segments_to_dir
+    from app.services.capcut_tts_client import generate_segments_to_dir, warmup_capcut
 
     voice_key = voice_name.replace("-", "_")
     out_dir = settings.temp_dir / "tts" / video_id / voice_key
@@ -396,6 +396,16 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         def cb(done: int, total_: int):
             if progress_callback:
                 progress_callback(done, total_)
+
+        # Warm-up: sinh 1 đoạn demo để làm ấm SDK CapCut / health-check service,
+        # tránh các dòng đầu batch chính bị fail do cold-start. Nếu warm-up lỗi
+        # vẫn tiếp tục gen chính (chỉ ghi log cảnh báo).
+        warmed = warmup_capcut(voice_name, rate=rate)
+        if log_fn:
+            log_fn(
+                f"  Warm-up CapCut: {'OK' if warmed else 'không thành công (vẫn thử gen chính)'}",
+                level="info" if warmed else "warning",
+            )
 
         try:
             written = generate_segments_to_dir(
@@ -491,7 +501,7 @@ def synthesize_srt_capcut_multi(
     contract as `synthesize_srt_capcut` — so the rest of the dubbing pipeline
     (`combine_tts_mp3`, mix, mux) is unchanged.
     """
-    from app.services.capcut_tts_client import generate_segments_to_dir
+    from app.services.capcut_tts_client import generate_segments_to_dir, warmup_capcut
 
     voice_key = default_voice.replace("-", "_")
     out_dir = settings.temp_dir / "tts" / video_id / voice_key
@@ -511,6 +521,18 @@ def synthesize_srt_capcut_multi(
 
     if log_fn:
         log_fn(f"Nhiều giọng: tổng hợp {total} dòng bằng {len(groups)} giọng CapCut khác nhau...")
+
+    # Warm-up CapCut trước khi gửi các batch giọng (làm ấm SDK / health-check),
+    # tránh các dòng đầu của mỗi batch bị fail do cold-start.
+    try:
+        warmed = warmup_capcut(default_voice, rate=rate)
+        if log_fn:
+            log_fn(
+                f"  Warm-up CapCut: {'OK' if warmed else 'không thành công (vẫn thử gen chính)'}",
+                level="info" if warmed else "warning",
+            )
+    except Exception as e:
+        logger.warning("CapCut warmup error: %s", e)
 
     import re
 
