@@ -60,7 +60,7 @@ def enqueue_job(
     region: dict,
     fps: int | None = None,
     lang: str = "ch",
-    ocr_type: str = "apple",
+    ocr_type: str = "paddle",
     start_time: float | None = None,
     end_time: float | None = None,
 ) -> dict:
@@ -384,7 +384,7 @@ async def run_job(
         region = job["region"]
         target_fps = job.get("fps") or settings.extract_fps or None
         lang = job.get("lang") or settings.ocr_lang
-        ocr_type = job.get("ocr_type") or "apple"
+        ocr_type = job.get("ocr_type") or "paddle"
 
         ocr_engine = ocr_engines.get(ocr_type)
         if not ocr_engine:

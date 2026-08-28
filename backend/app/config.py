@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5
+    ocr_device: str = "gpu"  # paddle: "gpu" | "cpu" (STE_ocr_device)
     job_timeout: int = 0  # giây; 0 = không giới hạn thời gian xử lý job
 
     # Parallel OCR: chia timeline video thành N đoạn và OCR đồng thời N đoạn.

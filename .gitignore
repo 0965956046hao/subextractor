@@ -1,5 +1,6 @@
 backend/temp/
 backend/.venv/
+.venv/
 frontend/node_modules/
 frontend/build/
 frontend/.next/

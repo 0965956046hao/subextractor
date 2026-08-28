@@ -18,7 +18,7 @@ class AppleOCREngine(BaseOCREngine):
 
     Requires macOS with
     ``pip install pyobjc-framework-Vision pyobjc-framework-Cocoa pyobjc-framework-Quartz``.
-    Frameworks are imported lazily so the app still boots (with RapidOCR)
+    Frameworks are imported lazily so the app still boots (with PaddleOCR)
     when pyobjc is missing — instantiation raises a clear error in that case.
     """
 

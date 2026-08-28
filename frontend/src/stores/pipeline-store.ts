@@ -913,12 +913,12 @@ function detectOcrLang(sourceLang: string): string {
   return "latin";
 }
 
-function detectOcrType(): "apple" | "rapid" {
+function detectOcrType(): "apple" | "paddle" {
   if (typeof navigator !== "undefined") {
     const ua = navigator.platform || navigator.userAgent || "";
     if (/Mac|iPhone|iPad/i.test(ua)) return "apple";
   }
-  return "rapid";
+  return "paddle";
 }
 
 export function langLabel(code: string): string {
@@ -1730,7 +1730,7 @@ async function runPrep(id: string, startStep = 0) {
           originalName,
           srcLang: sourceLang,
           ocrLang,
-          ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
+          ocrEngine: ocrType === "apple" ? "Apple Vision" : "PaddleOCR",
         });
         appendLog(
           id,
@@ -1761,7 +1761,7 @@ async function runPrep(id: string, startStep = 0) {
           originalName,
           srcLang: sourceLang,
           ocrLang,
-          ocrEngine: ocrType === "apple" ? "Apple Vision" : "RapidOCR",
+          ocrEngine: ocrType === "apple" ? "Apple Vision" : "PaddleOCR",
         });
         appendLog(
           id,

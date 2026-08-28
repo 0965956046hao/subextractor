@@ -31,7 +31,7 @@ def _download_name(video_id: str, ext: str) -> str:
     original = _original_name(video_id)
     if original:
         stem = Path(original).stem or original
-        return f"{stem}.original.{ext}"
+        return f"{stem}.{ext}"
     return f"subtitles.{ext}"
 
 

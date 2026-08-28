@@ -3,7 +3,7 @@
 ## Tech Stack
 - **Backend:** Python 3.10+, FastAPI, Uvicorn, Pydantic v2
 - **Frontend:** Next.js 14+, TypeScript, Tailwind CSS (App Router)
-- **OCR:** RapidOCR (`lang='ch'` — Simplified Chinese) *hoặc* Apple Vision OCR (`VNRecognizeTextRequest` trên macOS) — người dùng chọn engine ở frontend (`ocr_type: rapid | apple`)
+- **OCR:** PaddleOCR (PaddlePaddle, `lang='ch'` — Simplified Chinese) *hoặc* Apple Vision OCR (`VNRecognizeTextRequest` trên macOS) — người dùng chọn engine ở frontend (`ocr_type: paddle | apple`)
 - **Video:** OpenCV `VideoCapture` (in-memory frame streaming) + FFmpeg
 - **Text diff:** `rapidfuzz` (Levenshtein ratio, threshold ~0.85)
 - **Config:** `pydantic-settings` (env vars + .env, prefix `STE_`)
@@ -28,7 +28,8 @@ SubTitleExtractor/
 │   │   ├── services/
 │   │   │   ├── __init__.py
 │   │   │   ├── video_processor.py  # OpenCV frame streaming, crop, dhash
-│   │   │   ├── ocr_engine.py       # BaseOCREngine (cache chung) + RapidOCR wrapper
+│   │   │   ├── ocr_engine.py       # BaseOCREngine (cache chung, dHash)
+│   │   │   ├── paddle_ocr_engine.py # PaddleOCR wrapper (default engine)
 │   │   │   ├── apple_ocr_engine.py # Apple Vision OCR wrapper (pyobjc, macOS)
 │   │   │   └── subtitle_generator.py # SRT generation, merge
 │   │   └── worker.py             # Background job runner + WS notify
@@ -74,10 +75,10 @@ Frames are read via OpenCV `VideoCapture` in-memory, cropped to region, and OCR'
 `POST /api/process` returns immediately with a `job_id`. Background worker processes the video and pushes progress via WebSocket.
 
 ### OCR caching
-dHash comparison between consecutive frames: if crop hash differs by ≤5 bits, the previous OCR text is reused. Avoids redundant OCR calls on near-identical frames. Cache logic lives in `BaseOCREngine` — shared by RapidOCR and Apple Vision engines.
+dHash comparison between consecutive frames: if crop hash differs by ≤5 bits, the previous OCR text is reused. Avoids redundant OCR calls on near-identical frames. Cache logic lives in `BaseOCREngine` — shared by PaddleOCR and Apple Vision engines.
 
 ### Dual OCR engines
-`POST /api/process` nhận `ocr_type: "rapid" | "apple"`. Worker chọn engine từ `app.state.ocr_engines` dict (`main.py` khởi tạo cả hai; Apple engine bị disable nếu thiếu pyobjc). Cả hai engine implement cùng interface: `ocr_image(np.ndarray) -> str`, `set_lang()`, `ocr_region_cached()`, `log_stats()`.
+`POST /api/process` nhận `ocr_type: "paddle" | "apple"`. Worker chọn engine từ `app.state.ocr_engines` dict (`main.py` khởi tạo cả hai; Apple engine bị disable nếu thiếu pyobjc). Cả hai engine implement cùng interface: `ocr_image(np.ndarray) -> str`, `set_lang()`, `ocr_region_cached()`, `log_stats()`.
 
 ### Upload streaming
 File chunks are streamed to disk incrementally (64KB buffer), not loaded into memory. No size limit (or set `STE_max_upload_size` to override).
@@ -85,7 +86,8 @@ File chunks are streamed to disk incrementally (64KB buffer), not loaded into me
 ## Run Commands
 ```bash
 # Convenience: starts capcut-tts-api service (:8100) + backend (uvicorn :8000) + frontend (Next.js :3000)
-./dev.sh
+./dev.sh              # Linux / macOS / Windows-Git Bash (tự detect venv Scripts/bin)
+.\dev.ps1             # Windows PowerShell (khuyên dùng trên Windows; start frontend foreground, tự cleanup khi thoát)
 
 # Or individually:
 cd capcut-tts-api && ../backend/.venv/bin/python -m service.main    # CapCut TTS service :8100
@@ -99,12 +101,12 @@ There are **no tests, no linters, no formatters, no CI** in this repo.
 The old prototype files at `backend/` root level still exist and are **not the entry point**:
 - `backend/main.py`, `backend/config.py`, `backend/ocr_engine.py`, `backend/video_processor.py`, `backend/subtitle_generator.py`
 
-These import PaddleOCR directly (not RapidOCR), use `os.path`, have no job queue. **Do NOT reference or modify them.** The real app lives under `backend/app/`.
+These import PaddleOCR directly (no BaseOCREngine wrapper), use `os.path`, have no job queue. **Do NOT reference or modify them.** The real app lives under `backend/app/`.
 
 ## Tech Stack
 - **Backend:** Python 3.10+, FastAPI, Uvicorn, Pydantic v2, pydantic-settings (`STE_` prefix, env file)
 - **Frontend:** Next.js 14 (App Router), TypeScript, Tailwind CSS 3
-- **OCR:** RapidOCR (langs: `ch`, `en`, `latin`) + Apple Vision (macOS only, langs: `zh-Hans`, `en-US`, `vi-VN`)
+- **OCR:** PaddleOCR (langs: `ch`, `en`, `latin`) + Apple Vision (macOS only, langs: `zh-Hans`, `en-US`, `vi-VN`)
 - **Video:** OpenCV `VideoCapture` (in-memory frames, no temp JPGs) + FFmpeg
 - **Text diff:** `rapidfuzz` (Levenshtein ratio, threshold ~0.85)
 - **Job Queue:** Single `asyncio.Queue` + `ThreadPoolExecutor(max_workers=1)` — processes ONE job at a time, no Redis
@@ -124,7 +126,8 @@ backend/
 │   │   └── download.py      # GET /api/download/{id}?format=srt|txt, GET /api/srt/{id}
 │   ├── services/
 │   │   ├── video_processor.py   # OpenCV frame generator, crop, dHash, get_first_frame
-│   │   ├── ocr_engine.py        # BaseOCREngine (dHash cache ≤5 bits diff, max 15 streak) + OCREngine (RapidOCR)
+│   │   ├── ocr_engine.py        # BaseOCREngine (dHash cache ≤5 bits diff, max 15 streak)
+│   │   ├── paddle_ocr_engine.py # PaddleOCR wrapper (default engine, CPU/GPU)
 │   │   ├── apple_ocr_engine.py  # Apple Vision OCR (pyobjc; disabled at startup if unavailable)
 │   │   └── subtitle_generator.py # SRT generation, noise filtering, merge, flash detection
 │   └── worker.py             # Background worker: enqueue_job, process_job_sync (run_in_executor), WS notify
@@ -195,7 +198,7 @@ OpenCV `VideoCapture` → in-memory frames → crop → OCR on numpy arrays. Onl
 `POST /api/dub/{video_id}` nhận `{engine: "google" | "capcut", voice}`. `dub_service.build_full_audio` chọn `synthesize_srt` (Google) hoặc `synthesize_srt_capcut` (gọi `capcut_tts_client` → HTTP tới service `capcut-tts-api` port 8100, mỗi entry 1 task, download MP3 về `tts/{video_id}/{voice_key}/{index:04d}.mp3`). Cả 2 đều giữ nguyên luồng sau: `combine_tts_mp3` → Demucs mix → mux. `pipeline_health()`: cần Gemini + ít nhất 1 engine dub sẵn sàng (`dub_engines`).
 
 ### OCR caching via dHash
-`BaseOCREngine.ocr_region_cached()`: if consecutive frame crop hashes differ by ≤5 bits, reuse previous OCR text. Max streak: 15 frames (configurable). Shared by both RapidOCR and Apple Vision engines.
+`BaseOCREngine.ocr_region_cached()`: if consecutive frame crop hashes differ by ≤5 bits, reuse previous OCR text. Max streak: 15 frames (configurable). Shared by both PaddleOCR and Apple Vision engines.
 
 ### Single-threaded worker
 One `ThreadPoolExecutor(max_workers=1)` in `worker.py`. Jobs queue via `asyncio.Queue`, processed sequentially. OCR runs in executor to avoid blocking event loop. `_notify_sync` bridges sync code → async WebSocket.
@@ -212,6 +215,13 @@ One `ThreadPoolExecutor(max_workers=1)` in `worker.py`. Jobs queue via `asyncio.
 
 ### Config (`backend/app/config.py`)
 All env vars prefixed with `STE_`. Module-level `settings.temp_dir.mkdir(…)` runs at **import time** — creates `temp/`, `temp/videos/`, `temp/frames/`, `temp/srt/`, `temp/tts_preview/`. Do NOT add more import-time side effects.
+
+### PaddleOCR GPU (`STE_ocr_device`, default `gpu`)
+PaddleOCR chạy trên GPU theo mặc định. Trên Windows RTX 50-series (Blackwell) bản `paddlepaddle` CPU/GPU chuẩn từ PyPI không hỗ trợ — cài GPU từ index chính thức:
+```bash
+pip install paddlepaddle-gpu>=3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
+```
+Đổi về CPU bằng env `STE_ocr_device=cpu` (nếu GPU init lỗi engine vẫn cần CPU fallback).
 
 ### User config (`backend/app/routers/config_router.py`)
 `GET/POST /api/config` reads/writes `temp/user_config.json`: `gemini_api_key`, `google_tts_credentials`, `auto_context_enabled`, and `subtitle_style` (font, size, colors, outline, bold/italic, box bg, radius, margin). `get_subtitle_style()` merges defaults (`DEFAULT_SUBTITLE_STYLE`) + stored values, coercing types — used by `hardcode_service` (both ASS and Pillow burn paths). Frontend settings UI lives at `/settings` (gear button in AutoPipeline header).

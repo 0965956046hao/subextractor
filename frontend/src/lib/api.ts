@@ -162,18 +162,18 @@ export const OCR_LANGS: { value: OcrLang; label: string; hint: string }[] = [
   { value: "en", label: "lang.en", hint: "ocr.en.hint" },
 ];
 
-export type OcrType = "rapid" | "apple";
+export type OcrType = "paddle" | "apple";
 
 export const OCR_TYPES: { value: OcrType; label: string; hint: string }[] = [
+  { value: "paddle", label: "ocr.type.paddle", hint: "ocr.type.paddle.hint" },
   { value: "apple", label: "ocr.type.apple", hint: "ocr.type.apple.hint" },
-  { value: "rapid", label: "ocr.type.rapid", hint: "ocr.type.rapid.hint" },
 ];
 
 export async function startProcess(
   videoId: string,
   region: Region,
   lang: OcrLang = "ch",
-  ocrType: OcrType = "apple",
+  ocrType: OcrType = "paddle",
   signal?: AbortSignal,
   startTime?: number | null,
   endTime?: number | null,

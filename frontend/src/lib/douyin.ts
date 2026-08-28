@@ -10,9 +10,31 @@ import puppeteer, {
 } from "puppeteer-core";
 import { resolveProfileDir } from "./subtitle-profile";
 
-export const CHROME_PATH =
-  process.env.CHROME_PATH ||
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+function defaultChromePath(): string {
+  switch (process.platform) {
+    case "win32": {
+      const candidates = [
+        process.env.LOCALAPPDATA &&
+          path.join(
+            process.env.LOCALAPPDATA,
+            "Google",
+            "Chrome",
+            "Application",
+            "chrome.exe"
+          ),
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      ].filter(Boolean) as string[];
+      return candidates.find((p) => fs.existsSync(p)) || candidates[0];
+    }
+    case "darwin":
+      return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    default:
+      return "/usr/bin/google-chrome";
+  }
+}
+
+export const CHROME_PATH = process.env.CHROME_PATH || defaultChromePath();
 
 export const CDP_URL = process.env.DOUYIN_CDP_URL || "http://localhost:9222";
 

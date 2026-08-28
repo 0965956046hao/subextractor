@@ -265,7 +265,7 @@ export default function ResultPage({
   videoId,
   region,
   lang = "ch",
-  ocrType = "apple",
+  ocrType = "paddle",
   startTime,
   onReset,
   onDone,

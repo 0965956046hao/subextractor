@@ -2,11 +2,11 @@ import asyncio
 
 from fastapi import Request, HTTPException
 
-from app.services.ocr_engine import OCREngine
+from app.services.paddle_ocr_engine import PaddleOCREngine
 
 
-def get_ocr_engine(request: Request) -> OCREngine:
-    engine: OCREngine | None = request.app.state.ocr_engine
+def get_ocr_engine(request: Request) -> PaddleOCREngine:
+    engine: PaddleOCREngine | None = request.app.state.ocr_engine
     if engine is None:
         raise HTTPException(503, "OCR engine not initialized")
     return engine

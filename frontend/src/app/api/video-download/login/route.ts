@@ -10,6 +10,10 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const LOGIN_TIMEOUT = Number(process.env.DOUYIN_LOGIN_TIMEOUT || 120000);
+
+const SESSION_COOKIE_RE = /sessionid|sid_guard/;
+
 export async function POST() {
   let handle: BrowserHandle;
   try {
@@ -26,6 +30,7 @@ export async function POST() {
     );
   }
 
+  let loggedIn = false;
   try {
     const page = await handle.browser.newPage();
     await loadCookies(page);

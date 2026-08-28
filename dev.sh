@@ -4,6 +4,7 @@
 #   ./dev.sh                 # backend chạy --reload (tiện dev)
 #   STE_NO_RELOAD=1 ./dev.sh # backend KHÔNG --reload (job dài 2-4h: tránh reloader
 #                            #   tự kill/restart worker giữa chừng & che mất traceback)
+#   ./dev.ps1                # Windows PowerShell — khuyên dùng trên Windows
 
 set -e
 
@@ -13,6 +14,22 @@ FRONTEND="$ROOT/frontend"
 CAPCUT="$ROOT/capcut-tts-api"
 DS2API="$ROOT/ds2api"
 DS2API_PORT="${DS2API_PORT:-5001}"
+
+# Detect Windows (Git Bash / MSYS2 / Cygwin) để chọn đường dẫn venv đúng
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+  *) IS_WINDOWS=0 ;;
+esac
+
+if [ "$IS_WINDOWS" = "1" ]; then
+  VENV_BIN="$BACKEND/.venv/Scripts"
+  PYTHON="$VENV_BIN/python.exe"
+  UVICORN="$VENV_BIN/uvicorn.exe"
+else
+  VENV_BIN="$BACKEND/.venv/bin"
+  PYTHON="$VENV_BIN/python"
+  UVICORN="$VENV_BIN/uvicorn"
+fi
 
 # Giải phóng các port cũ TRƯỚC KHI START.
 # Nếu còn instance dev.sh cũ (uvicorn :8000 / next :3000 / capcut :8100 /
@@ -73,7 +90,7 @@ if [ -d "$FRONTEND/.next/standalone" ]; then
 fi
 
 echo "==> Starting capcut-tts-api service  http://localhost:8100"
-(cd "$CAPCUT" && exec "$BACKEND/.venv/bin/python" -m service.main) &
+(cd "$CAPCUT" && exec "$PYTHON" -m service.main) &
 CAPCUT_PID=$!
 
 # Backend: mặc định --reload (tiện dev). Khi chạy job dài (OCR/dub 2-4h) đặt
@@ -90,22 +107,29 @@ fi
 (
   cd "$BACKEND"
   ulimit -n 4096 2>/dev/null || true
-  exec .venv/bin/uvicorn app.main:app $RELOAD_FLAG --port 8000
+  exec "$UVICORN" app.main:app $RELOAD_FLAG --port 8000
 ) &
 BACKEND_PID=$!
 
-echo "==> Starting ds2api  http://localhost:${DS2API_PORT}"
-(cd "$DS2API" && {
-  [ -x ./ds2api ] || go build -o ds2api ./cmd/ds2api
-  exec env DS2API_ADMIN_KEY="${DS2API_ADMIN_KEY:-test-admin}" PORT="${DS2API_PORT}" ./ds2api
-}) &
-DS2API_PID=$!
+if [ -d "$DS2API" ]; then
+  DS2API_BIN="./ds2api"
+  [ "$IS_WINDOWS" = "1" ] && DS2API_BIN="./ds2api.exe"
+  echo "==> Starting ds2api  http://localhost:${DS2API_PORT}"
+  (cd "$DS2API" && {
+    [ -x "$DS2API_BIN" ] || go build -o "$DS2API_BIN" ./cmd/ds2api
+    exec env DS2API_ADMIN_KEY="${DS2API_ADMIN_KEY:-test-admin}" PORT="${DS2API_PORT}" "$DS2API_BIN"
+  }) &
+  DS2API_PID=$!
+else
+  echo "==> Skipping ds2api (no $DS2API directory)"
+fi
 
-# Chặn macOS ngủ hệ thống khi màn hình tắt, để job OCR/dub xử lý qua đêm không bị treo.
-# -i: chặn idle system sleep (battery + AC), -s: chặn system sleep (AC),
-# -w: tự thoát khi backend dừng. Display vẫn được phép tắt để tiết kiệm pin.
-caffeinate -i -s -w "$BACKEND_PID" &
-CAFFEINATE_PID=$!
+# Chỉ macOS: chặn hệ thống ngủ khi màn hình tắt, để job OCR/dub xử lý qua đêm không bị treo.
+# Display vẫn được phép tắt để tiết kiệm pin. Windows bỏ qua (dùng powercfg nếu cần).
+if [ "$IS_WINDOWS" = "0" ] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -s -w "$BACKEND_PID" &
+  CAFFEINATE_PID=$!
+fi
 
 echo "==> Starting frontend http://localhost:3000"
 (cd "$FRONTEND" && exec npm run dev)

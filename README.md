@@ -20,7 +20,7 @@ Trích xuất phụ đề (subtitle) từ video bằng OCR: upload video, chọn
 
 - **Python** 3.10+
 - **Node.js** 18+
-- **macOS** 12+ — *chỉ bắt buộc* khi dùng Apple Vision; RapidOCR chạy mọi nền tảng
+- **macOS** 12+ — *chỉ bắt buộc* khi dùng Apple Vision; PaddleOCR chạy mọi nền tảng (GPU/CPU)
 - **FFmpeg** — khuyên dùng; backend dùng OpenCV `VideoCapture` để đọc frame
 
 ## Quick Start

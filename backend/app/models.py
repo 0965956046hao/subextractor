@@ -10,7 +10,7 @@ class Region(BaseModel):
     y2: float = Field(ge=0, le=1)
 
 
-OcrType = Literal["rapid", "apple"]
+OcrType = Literal["paddle", "apple"]
 
 
 class ProcessRequest(BaseModel):
@@ -18,7 +18,7 @@ class ProcessRequest(BaseModel):
     region: Region
     fps: int | None = None
     lang: str = "ch"
-    ocr_type: OcrType = "apple"
+    ocr_type: OcrType = "paddle"
     start_time: float | None = None  # Skip frames before this timestamp (seconds)
     end_time: float | None = None    # Stop at this timestamp (seconds)
 

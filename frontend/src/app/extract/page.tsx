@@ -165,8 +165,9 @@ export default function ExtractPage() {
   const [videoId, setVideoId] = useState<string>("");
   const [region, setRegion] = useState<Region | null>(null);
   const [lang, setLang] = useState<OcrLang>("ch");
-  const [ocrType, setOcrType] = useState<OcrType>("apple");
+  const [ocrType, setOcrType] = useState<OcrType>("paddle");
   const [startTime, setStartTime] = useState<number | undefined>(undefined);
+  const [autoContext, setAutoContext] = useState(true);
 
   useEffect(() => {
     const v = new URLSearchParams(window.location.search).get("video_id");
