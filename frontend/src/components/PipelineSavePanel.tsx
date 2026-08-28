@@ -61,14 +61,14 @@ export default function PipelineSavePanel({
   return (
     <div className="flex items-center gap-2">
       <input
-        className="btn-island flex-1"
+        className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/20"
         placeholder={t("preset.namePlaceholder")}
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
       <button
         type="button"
-        className="btn-island btn-island-primary"
+        className="shrink-0 rounded-xl border border-white/[0.09] bg-accent/90 px-3 py-2 text-[12px] font-medium text-white hover:bg-accent cursor-pointer disabled:opacity-50"
         disabled={busy}
         onClick={async () => {
           setBusy(true);
