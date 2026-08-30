@@ -99,10 +99,16 @@ def _ensure_free_space(need_gb: float, label: str = "bước xử lý"):
     """Dừng sớm (RuntimeError) nếu ổ đĩa chứa temp sắp đầy, thay vì ghi đến khi
     đầy rồi bị OS kill (từng gây vòng lặp tử thần sinh file 70-80GB trên clip dài)."""
     try:
-        st = os.statvfs(settings.temp_dir)
+        if hasattr(os, 'statvfs'):
+            st = os.statvfs(settings.temp_dir)
+            free_gb = st.f_bavail * st.f_frsize / (1024 ** 3)
+        else:
+            # Windows: use shutil.disk_usage
+            import shutil
+            total, used, free = shutil.disk_usage(settings.temp_dir)
+            free_gb = free / (1024 ** 3)
     except OSError:
         return
-    free_gb = st.f_bavail * st.f_frsize / (1024 ** 3)
     if free_gb < need_gb:
         raise RuntimeError(
             f"Ổ đĩa sắp đầy ({free_gb:.1f}GB trống) — không đủ {need_gb:.0f}GB cho {label}. "
@@ -128,9 +134,7 @@ def combine_tts_mp3(
     # Thu thập candidate, đo duration song song.
     candidates = []
     for i, entry in enumerate(entries):
-        if i >= len(audio_files):
-            break
-        af = audio_files[i]
+        af = audio_files[i] if i < len(audio_files) else None
         if not af or not af.exists() or af.stat().st_size == 0:
             continue
         candidates.append((i, entry, af))
@@ -664,6 +668,12 @@ def build_full_audio(
     vocals_wav = out_dir / "separated" / "htdemucs" / "audio" / "vocals.wav"
     if vocals_wav.exists():
         vocals_wav.unlink(missing_ok=True)
+
+    # Verify full_audio.m4a was created
+    if not full_audio.exists() or full_audio.stat().st_size == 0:
+        raise RuntimeError(f"full_audio.m4a was not created at {full_audio}")
+    if log_fn:
+        log_fn(f"Đã tạo full_audio.m4a ({full_audio.stat().st_size} bytes)")
     return full_audio
 
 

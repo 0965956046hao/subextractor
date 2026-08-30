@@ -1586,9 +1586,30 @@ async def run_telegram_auto_job(
             }
             await run_dub_job(jobs, ws_clients, dub_job_id)
             if jobs[dub_job_id].get("status") == "done":
+                # Verify the dubbed audio file was actually created
+                from app.config import settings
+                full_audio_path = settings.temp_dir / "tts" / video_id / "full_audio.m4a"
+                if not full_audio_path.exists() or full_audio_path.stat().st_size == 0:
+                    error_msg = f"Dub job reported done but full_audio.m4a not found at {full_audio_path}"
+                    logger.error("Auto pipeline: %s", error_msg)
+                    jobs[dub_job_id]["status"] = "error"
+                    jobs[dub_job_id]["error"] = error_msg
+                    await _tg_send(chat_id, f"❌ {error_msg}")
+                    if job.get("auto_dub"):
+                        job["status"] = "error"
+                        job["error"] = error_msg
+                        await _tg_send(chat_id, "🛑 Dừng pipeline do thiếu file audio lồng tiếng.")
+                        return
                 await _tg_send(chat_id, "✅ Lồng tiếng xong!")
             else:
-                await _tg_send(chat_id, f"⚠️ Lồng tiếng thất bại: {jobs[dub_job_id].get('error', 'unknown')}")
+                error_msg = jobs[dub_job_id].get('error', 'unknown')
+                await _tg_send(chat_id, f"❌ Lồng tiếng thất bại: {error_msg}")
+                # If dub was enabled but failed, don't continue to hardcode without audio
+                if job.get("auto_dub"):
+                    job["status"] = "error"
+                    job["error"] = f"Lồng tiếng thất bại: {error_msg}"
+                    await _tg_send(chat_id, "🛑 Dừng pipeline do lồng tiếng thất bại (auto_dub=bật).")
+                    return
 
             # Voice check — duyệt giọng đọc từng dòng qua Mini App (mode=voice)
             if job.get("check_voice"):
@@ -1634,6 +1655,7 @@ async def run_telegram_auto_job(
             "auto_fit": job.get("auto_fit", True),
             "region": region,
             "style": selected_style,
+            "require_dub_audio": job.get("auto_dub", True),
         }
         await run_hardcode_job(jobs, ws_clients, hc_job_id)
         if jobs[hc_job_id].get("status") == "done":

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.services.paddle_ocr_engine import PaddleOCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
-from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation
+from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation, profiles
 from app.worker import worker_loop
 
 logging.basicConfig(
@@ -36,11 +36,7 @@ async def lifespan(app: FastAPI):
     logger.info("")
     logger.info("Initializing OCR engines...")
     pool_size = max(1, settings.ocr_parallel_parts)
-    # Chia đều cores cho các engine trong pool để engine song song không
-    # giành CPU nhau (PaddleOCR mặc định dùng nhiều core).
-    import os
-    per_engine_threads = max(1, (os.cpu_count() or 4) // pool_size)
-    paddle_engines = [PaddleOCREngine(intra_threads=per_engine_threads) for _ in range(pool_size)]
+    paddle_engines = [PaddleOCREngine() for _ in range(pool_size)]
     ocr_engine = paddle_engines[0]
     app.state.ocr_engine = ocr_engine
     ocr_engines: dict = {"paddle": paddle_engines}
@@ -133,6 +129,7 @@ app.include_router(env_tools.router)
 app.include_router(image.router)
 app.include_router(telegram_auto.router)
 app.include_router(annotation.router)
+app.include_router(profiles.router)
 
 
 @app.get("/api/health")

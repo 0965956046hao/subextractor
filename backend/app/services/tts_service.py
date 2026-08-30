@@ -324,6 +324,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         if silenced:
             ok_note += f" {silenced} dòng giống dòng trước ≥80% (chèn khoảng lặng)."
         log_fn(ok_note, level="success" if silenced == 0 else "warning")
+
     return [p for p in audio_files if p is not None]
 
 

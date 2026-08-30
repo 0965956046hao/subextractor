@@ -359,11 +359,15 @@ def _has_drawtext_filter() -> bool:
 # Font finder (macOS)
 # ---------------------------------------------------------------------------
 
+import platform
+
 _FONT_DIRS = [
     "/System/Library/Fonts/Supplemental",
     "/System/Library/Fonts",
     "/Library/Fonts",
 ]
+if platform.system() == "Windows":
+    _FONT_DIRS.append(r"C:\Windows\Fonts")
 
 
 def _find_font(family: str = "Arial", bold: bool = False, italic: bool = False) -> str | None:
@@ -416,9 +420,23 @@ def _escape_drawtext(text: str) -> str:
     return text.replace("\\", "\\\\").replace(":", "\\:")
 
 
-def _escape_fontfile(path: str) -> str:
-    """Escape a font file path for drawtext's ``fontfile`` option value."""
-    return path.replace("\\", "\\\\").replace(":", "\\:")
+def _escape_fontfile(path: str | None) -> str:
+    """Escape a font file path for drawtext's ``fontfile`` option value.
+
+    On Windows, the drive letter colon (e.g., ``C:``) must be escaped as ``C\\:``
+    for the filter graph parser. Backslashes are converted to forward slashes
+    (FFmpeg accepts them on Windows) to avoid further escaping issues.
+    """
+    if not path:
+        return ""
+    # Convert to forward slashes first (works on Windows in FFmpeg)
+    path = path.replace("\\", "/")
+    # Escape the drive letter colon for filter graph parser: C: -> C\\:
+    if len(path) >= 2 and path[1] == ":":
+        path = path[0] + "\\:" + path[2:]
+    # Escape any remaining colons (shouldn't be any in valid font paths)
+    path = path.replace(":", "\\:")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +605,45 @@ def run_hardcode_sync(
     ass_path.write_text(ass_content, encoding="utf-8")
     _log(f"Đã tạo file ASS phụ đề ({len(parse_srt(srt_content))} dòng) — chuẩn bị encode...")
 
+    # ── Fontconfig setup for Windows ─────────────────────────────────────────
+    # On Windows, libass uses fontconfig which needs a config file to find system fonts.
+    # Create a minimal fonts.conf pointing to C:\Windows\Fonts and set FONTCONFIG_FILE.
+    fontconfig_file = None
+    if platform.system() == "Windows":
+        import tempfile
+        fontconfig_dir = Path(tempfile.gettempdir()) / "subextractor_fontconfig"
+        fontconfig_dir.mkdir(exist_ok=True)
+        fontconfig_file = fontconfig_dir / "fonts.conf"
+        if not fontconfig_file.exists():
+            fontconfig_file.write_text("""<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>C:/Windows/Fonts</dir>
+  <cachedir>C:/Windows/Fonts</cachedir>
+  <config>
+    <blank>
+      <blank>0x0020</blank>
+      <blank>0x00A0</blank>
+      <blank>0x2000</blank>
+      <blank>0x2001</blank>
+      <blank>0x2002</blank>
+      <blank>0x2003</blank>
+      <blank>0x2004</blank>
+      <blank>0x2005</blank>
+      <blank>0x2006</blank>
+      <blank>0x2007</blank>
+      <blank>0x2008</blank>
+      <blank>0x2009</blank>
+      <blank>0x200A</blank>
+      <blank>0x202F</blank>
+      <blank>0x205F</blank>
+      <blank>0x3000</blank>
+    </blank>
+  </config>
+</fontconfig>
+""", encoding="utf-8")
+        logger.info("Created fontconfig at %s", fontconfig_file)
+
     # FFmpeg subtitles filter: run from the ASS file's directory so a plain
     # filename (no special chars) can be passed — avoids escaping issues.
     ass_dir = str(ass_path.parent)
@@ -600,6 +657,11 @@ def run_hardcode_sync(
         return p.exists() and p.stat().st_size > 0 and _get_duration(str(p)) > 0
 
     audio_src: Path | None = None
+    logger.info("hardcode job %s: looking for dubbed audio at %s", job_id, full_audio_path)
+    logger.info("  exists=%s, size=%s, valid=%s", 
+                full_audio_path.exists(), 
+                full_audio_path.stat().st_size if full_audio_path.exists() else 0,
+                _valid_audio(full_audio_path))
     if _valid_audio(full_audio_path):
         audio_src = full_audio_path
         logger.info("hardcode job %s: using dubbed audio (%s)", job_id, audio_src.name)
@@ -613,6 +675,7 @@ def run_hardcode_sync(
         # Video Douyin (đã merge) là video-only → fallback về audio gốc tải trong
         # bước merge (merged/{merge_id}_audio.mp4) để không mất tiếng.
         merge_audio = _merge_audio_path(video_id)
+        logger.info("hardcode job %s: merge_audio path=%s, exists=%s", job_id, merge_audio, merge_audio.exists() if merge_audio else False)
         if merge_audio and _valid_audio(merge_audio):
             audio_src = merge_audio
             logger.info("hardcode job %s: using original merged audio (%s)", job_id, audio_src.name)
@@ -625,6 +688,14 @@ def run_hardcode_sync(
                 "warning",
             )
     use_external_audio = audio_src is not None
+
+    # If dub audio was required (auto_dub=True in pipeline) but not found, fail hard
+    # instead of silently falling back to original audio.
+    if job.get("require_dub_audio") and audio_src != full_audio_path:
+        raise RuntimeError(
+            f"Dub audio required but not found at {full_audio_path}. "
+            f"Run the dub step first and ensure it completes successfully."
+        )
 
     # ── Watermark (logo + scrolling text) ──────────────────────────────────
     has_libass = _has_subtitles_filter()
@@ -684,7 +755,8 @@ def run_hardcode_sync(
 
         # Subtitles (libass)
         if has_libass:
-            fc_parts.append(f"[{last_out}]subtitles={ass_fn_esc}[sub]")
+            subtitles_opt = f"subtitles={ass_fn_esc}"
+            fc_parts.append(f"[{last_out}]{subtitles_opt}[sub]")
             last_out = "sub"
 
         # Logo overlay
@@ -692,8 +764,11 @@ def run_hardcode_sync(
             logo_path = watermark["logo_path"]
             logo_h = max(36, th // 7)
             logo_margin = int(logo_h // 2.5)
+            # For movie filter, use forward slashes on Windows to avoid
+            # drive letter colon issues. FFmpeg accepts forward slashes on Windows.
+            movie_path = logo_path.replace("\\", "/") if platform.system() == "Windows" else logo_path
             fc_parts.append(
-                f"movie={_escape_fontfile(logo_path)},scale=-1:{logo_h}[logo]"
+                f"movie={movie_path},scale=-1:{logo_h}[logo]"
             )
             fc_parts.append(
                 f"[{last_out}][logo]overlay={logo_margin}:{logo_margin}[vlogo]"
@@ -702,11 +777,18 @@ def run_hardcode_sync(
 
         # Scrolling text drawtext
         if has_scroll:
-            font_path = _find_font(
-                (style or get_subtitle_style()).get("font_family", "Arial"),
-                (style or get_subtitle_style()).get("bold"),
-                (style or get_subtitle_style()).get("italic"),
-            )
+            font_family = (style or get_subtitle_style()).get("font_family", "Arial")
+            font_bold = (style or get_subtitle_style()).get("bold", False)
+            font_italic = (style or get_subtitle_style()).get("italic", False)
+            font_path = _find_font(font_family, font_bold, font_italic)
+            
+            # On Windows, use 'fontfile' with escaped path.
+            # 'font=Arial' (GDI) causes Access Violation (0xC0000005) in this FFmpeg build.
+            # With FONTCONFIG_FILE set, fontfile works correctly.
+            if font_path:
+                font_opt = f"fontfile={_escape_fontfile(font_path)}:"
+            else:
+                font_opt = ""
             font_size = max(30, int(th * 0.04))
             gap = max(12, int(th * 0.022))
             dur = total_dur if total_dur and total_dur > 0 else 1.0
@@ -749,7 +831,7 @@ def run_hardcode_sync(
             )
             fc_parts.append(
                 f"[{last_out}]drawtext="
-                f"fontfile={_escape_fontfile(font_path)}:"
+                f"{font_opt}"
                 f"fontsize={font_size}:"
                 f"fontcolor=white@0.6:"
                 f"text={esc_text}:"
@@ -820,12 +902,18 @@ def run_hardcode_sync(
     logger.info("hardcode job %s: %s", job_id, " ".join(shlex.quote(str(p)) for p in cmd))
     _log("Khởi động FFmpeg encode phụ đề cứng...")
 
+    # ── Prepare environment with fontconfig for Windows ──────────────────────
+    env = os.environ.copy()
+    if fontconfig_file:
+        env["FONTCONFIG_FILE"] = str(fontconfig_file)
+
     # ── Run FFmpeg with progress tracking ──────────────────────────────────
     proc = subprocess.Popen(
         cmd,
         cwd=ass_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
     )
 
     last_progress = 0
