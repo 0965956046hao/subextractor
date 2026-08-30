@@ -152,6 +152,46 @@ def postprocess_entries(
     return merged
 
 
+def expand_subtitle_timings(
+    entries: list[tuple[float, float, str]],
+    expand_start: float = 0.3,
+    expand_end: float = 0.3,
+) -> list[tuple[float, float, str]]:
+    """Mở rộng thời gian hiển thị phụ đề: trừ `expand_start` từ start, cộng `expand_end` vào end.
+
+    Giới hạn mở rộng để không chồng lấn với phụ đề liền kề:
+    - start không được < end của phụ đề trước
+    - end không được > start của phụ đề sau
+    """
+    if not entries:
+        return entries
+
+    expanded = []
+    for i, (start, end, text) in enumerate(entries):
+        new_start = max(0.0, start - expand_start)
+        new_end = end + expand_end
+
+        # Không chồng lấn với phụ đề trước
+        if i > 0:
+            prev_end = expanded[i - 1][1]
+            if new_start < prev_end:
+                new_start = prev_end
+
+        # Không chồng lấn với phụ đề sau (cần peek phía trước)
+        if i < len(entries) - 1:
+            next_start = entries[i + 1][0]
+            if new_end > next_start:
+                new_end = next_start
+
+        # Đảm bảo start < end (ít nhất 0.05s)
+        if new_end - new_start < 0.05:
+            new_end = new_start + 0.05
+
+        expanded.append((new_start, new_end, text))
+
+    return expanded
+
+
 def generate_srt_entries(
     frames: Iterable[tuple[object, float]],
     ocr_engine,

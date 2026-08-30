@@ -354,6 +354,10 @@ def process_job_sync(
         "info",
     )
 
+    # Mở rộng thời gian hiển thị phụ đề: +0.3s trước, +0.3s sau (tránh chồng lấn)
+    from app.services.subtitle_generator import expand_subtitle_timings
+    entries = expand_subtitle_timings(entries, expand_start=0.3, expand_end=0.3)
+
     srt_content = format_srt(entries)
     t2 = time.time()
     logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)

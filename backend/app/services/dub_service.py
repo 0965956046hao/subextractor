@@ -151,19 +151,56 @@ def combine_tts_mp3(
         probed = list(ex.map(_probe, candidates))
 
     # Build items: (af, start, end, tempo_chain)
+    # Logic: only speed up voice if it overlaps next subtitle > 0.3s (or if last subtitle)
+    # Chỉ tăng tốc khi cần thiết: overlap với subtitle kế tiếp > 0.3s.
     items: List[tuple] = []
-    for i, entry, af, mp3_dur in probed:
+    for idx, (i, entry, af, mp3_dur) in enumerate(probed):
         srt_dur = entry.end - entry.start
-        tempo = ""
-        if srt_dur > 0 and mp3_dur > srt_dur * 1.02:
-            speed = min(mp3_dur / srt_dur, MAX_TEMPO)
-            chain = []
-            while speed > 2.0:
-                chain.append("atempo=2.0")
-                speed /= 2.0
-            chain.append(f"atempo={speed:.4f}")
-            tempo = ",".join(chain) + ","
+        # Tìm entry kế tiếp để kiểm tra overlap
+        next_entry = entries[idx + 1] if idx + 1 < len(entries) else None
+        next_start = next_entry.start if next_entry else None
 
+        tempo = ""
+        if srt_dur > 0 and mp3_dur > 0:
+            # Trường hợpsubtitle cuối: đảm bảo voice kết thúc <= sub end
+            if next_entry is None:
+                # Last subtitle: nếu voice dài hơn sub end, cần speed up
+                if mp3_dur > entry.end - entry.start:
+                    speed = min(mp3_dur / (entry.end - entry.start), MAX_TEMPO)
+                    chain = []
+                    while speed > 2.0:
+                        chain.append("atempo=2.0")
+                        speed /= 2.0
+                    chain.append(f"atempo={speed:.4f}")
+                    tempo = ",".join(chain) + ","
+                # else: giữ mặc định, voice tự nhiên kết thúc trước/sau sub end nhưng ở cùng video
+            else:
+                # Có subtitle kế tiếp: kiểm tra overlap giữa voice hiện tại và subtitle sau
+                # Tính overlap mặc định (tempo = "")
+                default_overlap = max(0, mp3_dur - (next_start - entry.start))
+                # Nếu overlap <= 0.3s ở tốc độ mặc định: giữ nguyên tempo = ""
+                if default_overlap <= 0.3:
+                    tempo = ""
+                else:
+                    # Overlap > 0.3s: tăng tốc chỉ đủ để overlap còn lại = 0.3s
+                    # Cần: sau speed-up, phần voice overlap với next_start chỉ còn 0.3s
+                    # mp3_dur / speed là voice sau speed-up.
+                    # Chúng ta muốn: (mp3_dur / speed) - (next_start - entry.start) = 0.3
+                    # => mp3_dur / speed = (next_start - entry.start) + 0.3
+                    # => speed = mp3_dur / ((next_start - entry.start) + 0.3)
+                    # nhưng speed cũng không được vượt quá MAX_TEMPO và phải >= 1.0
+                    target_dur = (next_start - entry.start) + 0.3
+                    if target_dur > 0:
+                        speed = min(mp3_dur / target_dur, MAX_TEMPO)
+                        speed = max(speed, 1.0)  # không giảm tốc dưới 1x
+                        if speed > 1.0:
+                            chain = []
+                            while speed > 2.0:
+                                chain.append("atempo=2.0")
+                                speed /= 2.0
+                            chain.append(f"atempo={speed:.4f}")
+                            tempo = ",".join(chain) + ","
+                        # else: 1.0 < speed <= 1.02 → coi như không có overlap cần xử lý, giữ mặc định
         delay_ms = int(entry.start * 1000)
         tempo_label = tempo.rstrip(",") if tempo else "-"
         logger.info(
