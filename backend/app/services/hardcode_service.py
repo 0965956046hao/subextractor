@@ -804,6 +804,10 @@ def run_hardcode_sync(
         cmd += ["-map", f"[{last_out}]"]
     else:
         cmd += ["-vf", ",".join(vf_parts)]
+        # Map video (qua -vf) rõ ràng. ffmpeg TẮT tự động chọn stream ngay khi
+        # có bất kỳ -map nào → nếu chỉ map audio, video sẽ bị drop và file đầu
+        # ra chỉ có tiếng không có hình.
+        cmd += ["-map", "0:v"]
 
     # Audio mapping
     if use_external_audio:
