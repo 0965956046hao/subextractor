@@ -30,10 +30,35 @@ class Settings(BaseSettings):
     # Parallel OCR: chia timeline video thành N đoạn và OCR đồng thời N đoạn.
     # 1 = tắt (xử lý tuần tự như cũ). N > 1 = chạy N luồng OCR song song.
     # Mỗi đoạn dùng 1 engine riêng (RapidOCR load N model vào RAM).
-    ocr_parallel_parts: int = 4
+    ocr_parallel_parts: int = 10
     # Chồng lấn giữa 2 đoạn liền kề (giây) để sub nằm ngay biên không bị cắt đôi;
     # phần trùng được gộp lại khi merge kết quả.
     ocr_parallel_overlap: float = 2.0
+
+    # ── Heatmap ROI optimization (PaddleOCR only, sequential mode) ──
+    # Tự động tinh region phụ đề dựa trên phân bố OCR results trên toàn video.
+    # - roi_heatmap_sample_fps: số frame mẫu mỗi giây (mặc định 5 ≈ mỗi 0.2s, tiết kiệm time).
+    # - roi_heatmap_density_threshold: ngưỡng mật độ box (0-1). Vùng phải có density >= threshold
+    #    (ví dụ 0.5 nghĩa là region cần có >= 50% so sánh với max_box_count mới được coi hot).
+    # - roi_heatmap_min_box_ratio: kích thước vùng ROI tối thiểu so với kích thước frame (đơn vị tỷ lệ 0-1).
+    # - roi_heatmap_min_box_ratio: kích thước vùng ROI tối thiểu so với kích thước frame (đơn vị tỷ lệ 0-1).
+    #   Ví dụ 0.01 = 1% diện tích frame. Tránh chọn vùng quá nhỏ là nhiễu.
+    # - roi_heatmap_enable: bật/tắt feature (mặc định True).
+    roi_heatmap_sample_fps: int = 15
+    roi_heatmap_density_threshold: float = 0.5
+    roi_heatmap_min_box_ratio: float = 0.01
+    roi_heatmap_enable: bool = True
+
+# ── Contrast-based noise filter (cho Pass 2 OCR chính thức) ──
+    # Mục tiêu: lọc box có độ tương kontra giữa chữ và viền/below thấp,
+    # thường thấy ở phụ đề có chất lượng kém hoặc văn bản lấn vào texture nền.
+    # - Sử dụng Otsu thresholding để tách 2 cụm màu, tínhcontrast = chênh lệch mean luminance.
+    # - Ngưỡngcontrast tối thiểu (ocr_contrast_threshold) - box dưới ngưỡng coi là "cần kiểm tra".
+    # - Không dùng làm pass/fail cứng - thay vào đó tạo confidence score kết hợp cùng heatmap mass (pass 1).
+    # - ocr_contrast_threshold: ngưỡngcontrast tối thiểu (0-255, default 200). Dưới ngưỡng = cần lo lường.
+    # - ocr_contrast_weight: trọng sốcontrast trong confidence tổng (0-1, default 0.8).
+    ocr_contrast_threshold: int = 200
+    ocr_contrast_weight: float = 0.8
 
     # Gemini translation
     gemini_api_key: str = ""
@@ -45,7 +70,7 @@ class Settings(BaseSettings):
     fal_key: str = ""
     # CapCut TTS gen-voice service (capcut-tts-api, FastAPI :8100)
     capcut_tts_url: str = "http://127.0.0.1:8100"
-    capcut_tts_default_voice: str = "BV421_vivn_streaming"
+    capcut_tts_default_voice: str = "BV074_streaming_dsp"
     capcut_tts_default_rate: str = "1.0"
     capcut_tts_timeout: int = 600
 

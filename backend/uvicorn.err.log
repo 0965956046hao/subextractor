@@ -1,0 +1,177 @@
+INFO:     Will watch for changes in these directories: ['D:\\Git\\subextractor\\backend']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [21936] using WatchFiles
+INFO:     Started server process [21384]
+INFO:     Waiting for application startup.
+22:36:03 [INFO] SubTitle Extractor v2 starting...
+22:36:03 [INFO] 
+22:36:03 [INFO]   temp_dir: D:\Git\subextractor\backend\temp
+22:36:03 [INFO]   extract_fps: 15 (~15 fps)
+22:36:03 [INFO]   ocr_lang: ch
+22:36:03 [INFO] 
+22:36:03 [INFO] Initializing OCR engines...
+22:36:03 [INFO]   RapidOCR lang=ch box_thresh=0.30 text_score=0.50
+22:36:03 [INFO]   Loading RapidOCR engine for lang=ch …
+[32m[INFO] 2026-08-17 22:36:03,276 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 22:36:03,339 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-17 22:36:03,339 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-17 22:36:03,389 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 22:36:03,390 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-17 22:36:03,391 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-17 22:36:03,437 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 22:36:03,460 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+[32m[INFO] 2026-08-17 22:36:03,461 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+22:36:03 [INFO]   Warming up OCR model (first inference)...
+[33m[WARNING] 2026-08-17 22:36:05,165 [RapidOCR] main.py:132: The text detection result is empty[0m
+22:36:05 [INFO]   Warm-up done in 1.5s
+22:36:05 [INFO]   RapidOCR engine ready
+22:36:05 [WARNING] Apple Vision OCR disabled: Apple Vision OCR requires macOS + pyobjc. Install with: pip install pyobjc-framework-Vision pyobjc-framework-Cocoa pyobjc-framework-Quartz
+22:36:05 [INFO]   PaddleOCR lang=ch det_db_thresh=0.30
+22:36:06 [INFO]   Loading PaddleOCR engine for lang=ch …
+INFO: Could not find files for the given pattern(s).
+D:\Git\subextractor\backend\.venv\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-OCRv6_medium_det', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\ADMIN\.paddlex\official_models\PP-OCRv6_medium_det`.[0m
+[32mCreating model: ('PP-OCRv6_medium_rec', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\ADMIN\.paddlex\official_models\PP-OCRv6_medium_rec`.[0m
+22:36:07 [INFO]   Warming up PaddleOCR model (first inference)...
+22:36:08 [INFO]   Warm-up done in 0.2s
+22:36:08 [INFO]   PaddleOCR engine ready
+22:36:08 [INFO] 
+22:36:08 [INFO] Server ready  >>>  http://localhost:8000
+22:36:08 [INFO] 
+22:36:08 [INFO] Worker loop started
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\services\dub_service.py', 'app\routers\video_merge.py', 'app\routers\upload.py', 'app\routers\google_tts.py', 'app\routers\download.py', 'app\services\align_service.py', 'app\services\__init__.py', 'app\__init__.py', 'config.py', 'app\routers\capcut.py', 'app\routers\process.py', 'app\services\srt_utils.py', 'app\routers\video.py', 'app\services\health_service.py', 'app\services\tts_service.py', 'app\dependencies.py', 'app\main.py', 'app\routers\__init__.py', 'app\services\risk_check_service.py', 'app\models.py', 'app\worker.py', 'app\config.py', 'app\routers\youtube.py', 'app\routers\tools.py', 'video_processor.py', 'app\services\subtitle_generator.py', 'app\services\translation_service.py', 'app\routers\config_router.py', 'app\services\job_utils.py', 'app\services\video_processor.py', 'app\services\ocr_engine.py', 'app\services\media_utils.py', 'app\services\hardcode_service.py', 'ocr_engine.py', 'app\services\capcut_tts_client.py', 'app\services\context_service.py', 'app\services\retry_utils.py', 'subtitle_generator.py', 'app\routers\health.py', 'app\services\export_service.py', 'app\services\apple_ocr_engine.py', 'app\services\paddle_ocr_engine.py', 'app\routers\video_download.py', 'main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+23:36:16 [INFO] Shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [21384]
+WARNING:  WatchFiles detected changes in 'app\services\dub_service.py', 'app\routers\video_merge.py', 'app\routers\upload.py', 'app\routers\google_tts.py', 'app\routers\download.py', 'app\services\align_service.py', 'app\services\__init__.py', 'app\__init__.py', 'config.py', 'app\routers\capcut.py', 'app\routers\process.py', 'app\services\srt_utils.py', 'app\routers\video.py', 'app\services\health_service.py', 'app\services\tts_service.py', 'app\dependencies.py', 'app\main.py', 'app\routers\__init__.py', 'app\services\risk_check_service.py', 'app\models.py', 'app\worker.py', 'app\config.py', 'app\routers\youtube.py', 'app\routers\tools.py', 'video_processor.py', 'app\services\subtitle_generator.py', 'app\services\translation_service.py', 'app\services\job_utils.py', 'app\routers\config_router.py', 'app\services\video_processor.py', 'app\services\ocr_engine.py', 'app\services\media_utils.py', 'app\services\hardcode_service.py', 'ocr_engine.py', 'app\services\capcut_tts_client.py', 'app\services\context_service.py', 'app\services\retry_utils.py', 'subtitle_generator.py', 'app\routers\health.py', 'app\services\export_service.py', 'app\services\apple_ocr_engine.py', 'app\services\paddle_ocr_engine.py', 'app\routers\video_download.py', 'main.py'. Reloading...
+INFO:     Started server process [17312]
+INFO:     Waiting for application startup.
+23:36:18 [INFO] SubTitle Extractor v2 starting...
+23:36:18 [INFO] 
+23:36:18 [INFO]   temp_dir: D:\Git\subextractor\backend\temp
+23:36:18 [INFO]   extract_fps: 15 (~15 fps)
+23:36:18 [INFO]   ocr_lang: ch
+23:36:18 [INFO] 
+23:36:18 [INFO] Initializing OCR engines...
+23:36:18 [INFO]   RapidOCR lang=ch box_thresh=0.30 text_score=0.50
+23:36:18 [INFO]   Loading RapidOCR engine for lang=ch …
+[32m[INFO] 2026-08-17 23:36:18,072 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 23:36:18,151 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-17 23:36:18,151 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-17 23:36:18,207 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 23:36:18,208 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-17 23:36:18,209 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-17 23:36:18,266 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 23:36:18,312 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+[32m[INFO] 2026-08-17 23:36:18,312 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+23:36:18 [INFO]   Warming up OCR model (first inference)...
+[33m[WARNING] 2026-08-17 23:36:20,000 [RapidOCR] main.py:132: The text detection result is empty[0m
+23:36:20 [INFO]   Warm-up done in 1.6s
+23:36:20 [INFO]   RapidOCR engine ready
+23:36:20 [WARNING] Apple Vision OCR disabled: Apple Vision OCR requires macOS + pyobjc. Install with: pip install pyobjc-framework-Vision pyobjc-framework-Cocoa pyobjc-framework-Quartz
+23:36:20 [INFO]   PaddleOCR lang=ch det_db_thresh=0.30
+23:36:22 [INFO]   Loading PaddleOCR engine for lang=ch …
+INFO: Could not find files for the given pattern(s).
+D:\Git\subextractor\backend\.venv\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-OCRv6_medium_det', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\ADMIN\.paddlex\official_models\PP-OCRv6_medium_det`.[0m
+[32mCreating model: ('PP-OCRv6_medium_rec', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\ADMIN\.paddlex\official_models\PP-OCRv6_medium_rec`.[0m
+23:36:24 [INFO]   Warming up PaddleOCR model (first inference)...
+23:36:25 [INFO]   Warm-up done in 0.8s
+23:36:25 [INFO]   PaddleOCR engine ready
+23:36:25 [INFO] 
+23:36:25 [INFO] Server ready  >>>  http://localhost:8000
+23:36:25 [INFO] 
+23:36:25 [INFO] Worker loop started
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+23:36:25 [INFO] Shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [17312]
+INFO:     Started server process [22916]
+INFO:     Waiting for application startup.
+23:36:27 [INFO] SubTitle Extractor v2 starting...
+23:36:27 [INFO] 
+23:36:27 [INFO]   temp_dir: D:\Git\subextractor\backend\temp
+23:36:27 [INFO]   extract_fps: 15 (~15 fps)
+23:36:27 [INFO]   ocr_lang: ch
+23:36:27 [INFO] 
+23:36:27 [INFO] Initializing OCR engines...
+23:36:27 [INFO]   RapidOCR lang=ch box_thresh=0.30 text_score=0.50
+23:36:27 [INFO]   Loading RapidOCR engine for lang=ch …
+[32m[INFO] 2026-08-17 23:36:27,204 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 23:36:27,277 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-17 23:36:27,278 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-17 23:36:27,330 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 23:36:27,331 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-17 23:36:27,332 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-17 23:36:27,397 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-17 23:36:27,421 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+[32m[INFO] 2026-08-17 23:36:27,421 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+23:36:27 [INFO]   Warming up OCR model (first inference)...
+[33m[WARNING] 2026-08-17 23:36:29,179 [RapidOCR] main.py:132: The text detection result is empty[0m
+23:36:29 [INFO]   Warm-up done in 1.6s
+23:36:29 [INFO]   RapidOCR engine ready
+23:36:29 [WARNING] Apple Vision OCR disabled: Apple Vision OCR requires macOS + pyobjc. Install with: pip install pyobjc-framework-Vision pyobjc-framework-Cocoa pyobjc-framework-Quartz
+23:36:29 [INFO]   PaddleOCR lang=ch det_db_thresh=0.30
+23:36:32 [INFO]   Loading PaddleOCR engine for lang=ch …
+INFO: Could not find files for the given pattern(s).
+D:\Git\subextractor\backend\.venv\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-OCRv6_medium_det', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\ADMIN\.paddlex\official_models\PP-OCRv6_medium_det`.[0m
+[32mCreating model: ('PP-OCRv6_medium_rec', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\ADMIN\.paddlex\official_models\PP-OCRv6_medium_rec`.[0m
+23:36:34 [INFO]   Warming up PaddleOCR model (first inference)...
+23:36:35 [INFO]   Warm-up done in 0.8s
+23:36:35 [INFO]   PaddleOCR engine ready
+23:36:35 [INFO] 
+23:36:35 [INFO] Server ready  >>>  http://localhost:8000
+23:36:35 [INFO] 
+23:36:35 [INFO] Worker loop started
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\services\dub_service.py', 'app\routers\video_merge.py', 'app\routers\upload.py', 'app\routers\google_tts.py', 'app\routers\download.py', 'app\services\align_service.py', 'app\routers\process.py', 'config.py', 'app\routers\capcut.py', 'app\services\srt_utils.py', 'app\routers\video.py', 'app\services\health_service.py', 'app\services\tts_service.py', 'app\dependencies.py', 'app\main.py', 'app\services\risk_check_service.py', 'app\models.py', 'app\worker.py', 'app\config.py', 'app\routers\youtube.py', 'app\routers\tools.py', 'video_processor.py', 'app\services\subtitle_generator.py', 'app\services\translation_service.py', 'app\routers\config_router.py', 'app\services\job_utils.py', 'app\services\video_processor.py', 'app\services\ocr_engine.py', 'app\services\media_utils.py', 'app\services\hardcode_service.py', 'ocr_engine.py', 'app\services\capcut_tts_client.py', 'app\services\context_service.py', 'app\services\retry_utils.py', 'subtitle_generator.py', 'app\routers\health.py', 'app\services\export_service.py', 'app\services\apple_ocr_engine.py', 'app\routers\video_download.py', 'main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+00:24:02 [INFO] Shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [22916]
+INFO:     Started server process [8456]
+INFO:     Waiting for application startup.
+00:24:04 [INFO] SubTitle Extractor v2 starting...
+00:24:04 [INFO] 
+00:24:04 [INFO]   temp_dir: D:\Git\subextractor\backend\temp
+00:24:04 [INFO]   extract_fps: 15 (~15 fps)
+00:24:04 [INFO]   ocr_lang: ch
+00:24:04 [INFO] 
+00:24:04 [INFO] Initializing OCR engines...
+00:24:04 [INFO]   RapidOCR lang=ch box_thresh=0.30 text_score=0.50
+00:24:04 [INFO]   Loading RapidOCR engine for lang=ch …
+[32m[INFO] 2026-08-18 00:24:04,877 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-18 00:24:04,969 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-18 00:24:04,969 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_det_small.onnx[0m
+[32m[INFO] 2026-08-18 00:24:05,020 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-18 00:24:05,023 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-18 00:24:05,024 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\ch_ppocr_mobile_v2.0_cls_mobile.onnx[0m
+[32m[INFO] 2026-08-18 00:24:05,091 [RapidOCR] base.py:23: Using engine_name: onnxruntime[0m
+[32m[INFO] 2026-08-18 00:24:05,149 [RapidOCR] download_file.py:60: File exists and is valid: D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+[32m[INFO] 2026-08-18 00:24:05,150 [RapidOCR] main.py:63: Using D:\Git\subextractor\backend\.venv\Lib\site-packages\rapidocr\models\PP-OCRv6_rec_small.onnx[0m
+00:24:05 [INFO]   Warming up OCR model (first inference)...
+[33m[WARNING] 2026-08-18 00:24:06,828 [RapidOCR] main.py:132: The text detection result is empty[0m
+00:24:06 [INFO]   Warm-up done in 1.5s
+00:24:06 [INFO]   RapidOCR engine ready
+00:24:06 [WARNING] Apple Vision OCR disabled: Apple Vision OCR requires macOS + pyobjc. Install with: pip install pyobjc-framework-Vision pyobjc-framework-Cocoa pyobjc-framework-Quartz
+00:24:06 [INFO] 
+00:24:06 [INFO] Server ready  >>>  http://localhost:8000
+00:24:06 [INFO] 
+00:24:06 [INFO] Worker loop started
+INFO:     Application startup complete.

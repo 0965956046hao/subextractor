@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 import functools
+import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -21,6 +22,208 @@ from app.services.align_service import run_align_sync
 from app.services.job_utils import JobCancelled, notify_ws_sync
 
 from datetime import datetime
+
+# Windows file locking fix: retry delete with small delays
+def _safe_unlink(path: Path, max_retries: int = 5, delay: float = 0.2) -> bool:
+    """Safely unlink a file, retrying on Windows file locking errors (WinError 32).
+    
+    On Windows, a file may be locked by another process (e.g., video preview,
+    previous FFmpeg). This retries with exponential backoff.
+    Returns True on success, False if all retries exhausted.
+    """
+    import platform
+    for attempt in range(max_retries):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except (PermissionError, OSError) as e:
+            # WinError 32: The process cannot access the file because it is being used by another process
+            is_win32_lock = (
+                platform.system() == "Windows"
+                and getattr(e, "winerror", None) == 32
+            )
+            if is_win32_lock and attempt < max_retries - 1:
+                time.sleep(delay * (attempt + 1))  # exponential backoff: 0.2, 0.4, 0.6, 0.8
+                continue
+            # Not a Windows lock error, or exhausted retries
+            return False
+    return False
+
+
+# ── Heatmap ROI collector ──────────────────────────────────────────────
+# Tính heatmap từ bounding box OCR results để tìm region phụ đề tinh chỉnh.
+# Sử dụng numpy vectorized ops cho hiệu suất.
+
+
+class HeatmapCollector:
+    """Collect bounding boxes từ OCR results và tính refined ROI.
+
+    Cách hoạt động:
+    1. add_box() thêm box normalized (x1,y1,x2,y2) 0-1 vào heatmap accumulation.
+       Mỗi pixel được cộng 1 đơn vị cho mỗi box bao phủ nó (không tính theo raw box area).
+    2. get_refined_roi() tính ROI tinh chỉnh thông qua:
+       - Ngưỡng phần vị (percentile) thay vì max * threshold tuyệt đối → robust против 1 vùng nhiễu lớn bất thường.
+       - Phân tích connected-components để tách cụm nhiễu khỏi cụm sub thật.
+       - Chọn cụm có mass lớn nhất, tính bounding box riêng lẻ.
+    """
+
+    def __init__(self, frame_width: int, frame_height: int):
+        self.frame_w = frame_width
+        self.frame_h = frame_height
+        # AccumulatorCounts cho từng pixel (int32 tránh overflow trên video dài)
+        self.heat = np.zeros((frame_height, frame_width), dtype=np.int32)
+        self.total_boxes = 0
+
+    def add_box(self, box_normalized: tuple[float, float, float, float]) -> None:
+        """Thêm 1 bounding box normalized (x1,y1,x2,y2) vào heatmap.
+
+        Box là normalized theo kích thước frame (width, height).
+        Mỗi pixel trong box được cộng 1 đơn vị (không cộng theo raw box area).
+        """
+        x1 = max(0, min(self.frame_w, int(box_normalized[0] * self.frame_w)))
+        y1 = max(0, min(self.frame_h, int(box_normalized[1] * self.frame_h)))
+        x2 = max(0, min(self.frame_w, int(box_normalized[2] * self.frame_w)))
+        y2 = max(0, min(self.frame_h, int(box_normalized[3] * self.frame_h)))
+
+        if x2 <= x1 or y2 <= y1:
+            return
+
+        # Vectorized accumulator: tăng count cho từng pixel trong box.
+        # Mỗi pixel chỉ cộng thêm 1 lần cho box này dù box có diện tích lớn tùy.
+        self.heat[y1 : y2 + 1, x1 : x2 + 1] += 1
+        self.total_boxes += 1
+
+    def get_refined_roi(
+        self,
+        density_threshold: float = 0.5,
+        min_box_ratio: float = 0.01,
+        margin_ratio: float = 0.1,
+    ) -> tuple[float, float, float, float] | None:
+        """Trả về (x1, y1, x2, y2) normalized 0-1 của ROI tinh chỉnh.
+
+        Quy trình:
+        1. Normalize heat về khoảng 0-1 (count / total_boxes).
+        2. Ngưỡng phần vị (percentile) thay vì max * threshold tuyệt đối → robust
+           against 1 vùng nhiễu lớn bất thường (ví dụ watermark tĩnh detect sai).
+        3. Phân tích connected-components để tách các vùng "hot" rời rạc.
+        4. Chọn cụm có tổng heat mass cao nhất làm subtitle region.
+        5. Tính bounding box của cụm chọn + margin, trả về normalized ROI.
+        """
+        if self.total_boxes == 0:
+            return None
+
+        # Normalize heat: count tương đối so với tổng boxes → giá trị 0-1
+        heat_norm = self.heat / self.total_boxes  # giá trị 0-1
+
+        max_count = float(self.heat.max())
+        if max_count == 0:
+            return None
+
+        # ── Fix 1: Sử dụng percentile-based threshold thay vì max * threshold tuyệt đối ──
+        # Thay vì threshold = max_count * density_threshold (có thể bị 1 vùng nhiễu lớn làm lệch),
+        # chúng ta lấy ngưỡng dựa trên phân phối giá trị heatmap.
+        # Ví dụ p90 nghĩa là chỉ giữ pixel cao nhất 10%, làm nổi bật vùng lặp lại nhất (subtitles).
+        flat_vals = heat_norm[heat_norm > 0]  # chỉ lấy các pixel có count > 0
+        if len(flat_vals) > 0:
+            # Sử dụng p90 làm ngưỡng adaptive: chỉ giữ pixel cao nhất 10%
+            threshold_percentile = np.percentile(flat_vals, 90)
+            binary = heat_norm >= threshold_percentile
+        else:
+            binary = np.zeros((self.frame_h, self.frame_w), dtype=bool)
+
+        # ── Fix 2: Connected-component analysis để tách cụm nhiễu khỏi cụm sub thật ──
+        # Sử dụng cv2.connectedComponentsWithStats để tìm các vùng rời rạc
+        import cv2
+
+        # Chuyển binary mask sang uint8 cho cv2
+        binary_uint8 = binary.astype(np.uint8) * 255
+
+        # Phát hiện connected components (labels, stats, centroids)
+        # num_labels: bao gồm background (0), nên kết quả label sẽ từ 1 trở đi
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            binary_uint8, connectivity=8
+        )
+
+        # Nếu không có vùng nào vượt ngưỡng
+        if num_labels <= 1:
+            # Không có vùng hot nào, trả về None
+            logger.info("job: heatmap no hot region found (density below threshold).")
+            return None
+
+        # Tính mass (tổng heat value) cho từng component (bỏ qua background label 0)
+        component_masses = []
+        for lbl in range(1, num_labels):
+            # Tạo mask cho component này
+            mask = (labels == lbl).astype(np.uint8) * 255
+            # Tính tổng normalized heat value cho pixel trong component này
+            mass = float((heat_norm * mask).sum())
+            component_masses.append((lbl, mass, stats[lbl]))
+
+        if not component_masses:
+            logger.info("job: heatmap no hot region found (density below threshold).")
+            return None
+
+        # Sắp xếp các component theo mass giảm dần (các cụm hot nhất lên đầu)
+        component_masses.sort(key=lambda x: x[1], reverse=True)
+
+        # Lấy component có mass cao nhất (cụm subtitle lớn nhất)
+        best_lbl, best_mass, best_stats = component_masses[0]
+
+        # Log thông tin các component để debug
+        logger.info(
+            "job: heatmap found %d components, top mass=%.4f (lbl=%d, bbox=%d,%d,%d,%d)",
+            len(component_masses),
+            best_mass,
+            best_lbl,
+            best_stats[0],
+            best_stats[1],
+            best_stats[0] + best_stats[2],
+            best_stats[1] + best_stats[3],
+        )
+        # Log masses của các component dưới cùng (để kiểm tra nhiễu)
+        for lbl, mass, stats_obj in component_masses[1:3]:
+            logger.info(
+                "job: heatmap component lbl=%d mass=%.4f (bbox=%d,%d,%d,%d)",
+                lbl,
+                mass,
+                stats_obj[0],
+                stats_obj[1],
+                stats_obj[0] + stats_obj[2],
+                stats_obj[1] + stats_obj[3],
+            )
+
+        # ── Kiểm tra min_box_ratio: loại cụm nếu quá nhỏ so với diện tích frame ──
+        # Tính tỷ lệ area của component so với toàn frame
+        component_area_ratio = (best_stats[2] * best_stats[3]) / (self.frame_w * self.frame_h)
+        if component_area_ratio < min_box_ratio:
+            # Cụm quá nhỏ, coi là không phải ROI chính (như cũ)
+            logger.info(
+                "job: heatmap selected region too small (area ratio %.4f < %.2f), returning None.",
+                component_area_ratio,
+                min_box_ratio,
+            )
+            return None
+
+        # ── Tính bounding box của component được chọn (không bao trùm tất cả) ──
+        x1_raw = best_stats[0]  # left
+        y1_raw = best_stats[1]  # top
+        x2_raw = best_stats[0] + best_stats[2]  # left + width
+        y2_raw = best_stats[1] + best_stats[3]  # top + height
+
+        # Thêm margin_ratio quanh region core (mặc định 10%)
+        margin_x = int((x2_raw - x1_raw) * margin_ratio)
+        margin_y = int((y2_raw - y1_raw) * margin_ratio)
+
+        x1 = max(0, x1_raw - margin_x)
+        y1 = max(0, y1_raw - margin_y)
+        x2 = min(self.frame_w, x2_raw + margin_x)
+        y2 = min(self.frame_h, y2_raw + margin_y)
+
+        # Trả về normalized 0-1
+        return (x1 / self.frame_w, y1 / self.frame_h, x2 / self.frame_w, y2 / self.frame_h)
+
+
+# Dấu cách
 
 
 async def _tg_notify(text: str):
@@ -153,8 +356,13 @@ def _ocr_segment_entries(
     end_time: float,
     progress_cb,
     text_cb=None,
-) -> list[tuple[float, float, str]]:
-    """OCR a single time segment and return its (start, end, text) entries."""
+    collect_boxes: bool = False,
+) -> tuple[list[tuple[float, float, str]], list[tuple[float, float, float, float]] | None]:
+    """OCR a single time segment and return its (start, end, text) entries.
+
+    Returns ``(entries, boxes)`` where ``boxes`` là list normalized (x1,y1,x2,y2)
+    nếu ``collect_boxes=True``, hoặc ``None`` nếu ``collect_boxes=False``.
+    """
     crops = (
         (crop_region(frame, region), ts)
         for frame, ts in stream_frames_generator(
@@ -170,6 +378,7 @@ def _ocr_segment_entries(
             progress_callback=progress_cb,
             text_callback=text_cb,
             total_frames=None,
+            collect_boxes=collect_boxes,
         )
 
 
@@ -239,6 +448,16 @@ def process_job_sync(
         last_pct_log = 0
         tg_chat_id = job.get("chat_id")
 
+        # ── Heatmap ROI collection (chỉ sequential + enable config) ──
+        # Lấy thông tin video để tạo HeatmapCollector
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+
+        collector = HeatmapCollector(vid_w, vid_h) if settings.roi_heatmap_enable else None
+
         def progress_cb(idx: int, total: int):
             nonlocal last_pct_log
             if job.get("cancelled"):
@@ -264,15 +483,88 @@ def process_job_sync(
         job_log(job, ws_clients, loop, "Bắt đầu nhận dạng chữ viết trong video…")
         logger.info("job %s: running OCR (sequential)...", job_id)
 
-        entries = _ocr_segment_entries(
+        # Truyền collect_boxes=True để thu thập bounding boxes cho heatmap
+        entries, boxes = _ocr_segment_entries(
             video_path, region, target_fps, engine_pool[0], lang,
             eff_start, eff_end, progress_cb, text_cb,
+            collect_boxes=settings.roi_heatmap_enable and (parts <= 1),
         )
 
         job["progress"] = 100
         _notify_sync(loop, ws_clients, job_id, {
             "type": "progress", "progress": 100, "phase": "ocr",
         })
+
+# ── Tính ROI tinh chỉnh từ heatmap (chế độ enable + đã collect boxes) ──
+        # và sử dụng region tinh chỉnh cho OCR nếu có region thay đổi đáng kể
+        # Chỉ áp dụng cho PaddleOCR (Apple Vision không hỗ trợ heatmap refinement)
+        refined_region = None
+        if collector is not None and boxes is not None:
+            # Chỉ compute khi có đủ box data VÀ sử dụng PaddleOCR
+            if engine_pool[0].name != "paddle":
+                logger.info("job %s: Heatmap refinement skipped (Apple Vision engine, dùng region ban đầu)", job_id)
+            else:
+                # Chỉ compute khi có đủ box data
+                calculated_refined = collector.get_refined_roi(
+                    density_threshold=settings.roi_heatmap_density_threshold,
+                    min_box_ratio=settings.roi_heatmap_min_box_ratio,
+                    margin_ratio=0.1,
+                )
+                if calculated_refined is not None:
+                    # Refined ROI là (x1,y1,x2,y2) normalized 0-1
+                    refined_region = {
+                        "x1": round(calculated_refined[0], 4),
+                        "y1": round(calculated_refined[1], 4),
+                        "x2": round(calculated_refined[2], 4),
+                        "y2": round(calculated_refined[3], 4),
+                    }
+                    job["refined_region"] = refined_region
+                    logger.info(
+                        "job %s: heatmap refined ROI → x1=%s y1=%s x2=%s y2=%s (density=%s)",
+                        job_id,
+                        calculated_refined[0], calculated_refined[1], calculated_refined[2], calculated_refined[3],
+                        settings.roi_heatmap_density_threshold,
+                    )
+
+                    # ★ Sử dụng refined region cho OCR nếu khác với region ban đầu đáng kể
+                    # So sánh với region gốc: nếu có dịch chuyển > 5% frame width/height, dùng refined
+                    original_region = region
+                    refined_x1, refined_y1 = calculated_refined[0], calculated_refined[1]
+                    orig_x1, orig_y1 = original_region.get("x1", 0), original_region.get("y1", 0)
+                    region_shift = max(
+                        abs(refined_x1 - orig_x1),
+                        abs(refined_y1 - orig_y1),
+                    )
+                    if region_shift > 0.05:  # > 5% frame shift → dùng region tinh chỉnh
+                        region = refined_region
+                        logger.info(
+                            "job %s: Sử dụng refined region thay vì region gốc (shift=%.4f)",
+                            job_id, region_shift,
+                        )
+                        # Re-run OCR với refined region để lấy SRT chính xác
+                        logger.info("job %s: Re-extracting OCR with refined region...", job_id)
+                        entries, boxes = _ocr_segment_entries(
+                            video_path, region, target_fps, engine_pool[0], lang,
+                            eff_start, eff_end, progress_cb, text_cb,
+                            collect_boxes=False,  # Không cần boxes nữa sau khi có region
+                        )
+                        job["progress"] = 100
+                        _notify_sync(loop, ws_clients, job_id, {
+                            "type": "progress", "progress": 100, "phase": "ocr",
+                        })
+                    else:
+                        logger.info(
+                            "job %s: refined region gần giống region gốc (shift=%.4f), dùng region ban đầu",
+                            job_id, region_shift,
+                        )
+                else:
+                    logger.info(
+                        "job %s: heatmap no hot region found (density below threshold).",
+                        job_id,
+                    )
+        elif collector is not None:
+            # Enable nhưng boxes là None (không collect do một lý do nào đó)
+            logger.info("job %s: heatmap enabled but no boxes collected.", job_id)
     # ── Parallel (parts > 1) ───────────────────────────────────────────────
     else:
         job_log(
@@ -527,8 +819,8 @@ async def run_hardcode_job(
         # burn (OOM, machine sleep, …) then never leaves a half-encoded file at
         # the final path that later runs would mistake for a completed encode.
         partial_path = out_dir / f"{Path(video_path).stem}_hardcoded.partial.mp4"
-        partial_path.unlink(missing_ok=True)
-        partial_path.with_suffix(".ass").unlink(missing_ok=True)
+        _safe_unlink(partial_path)
+        _safe_unlink(partial_path.with_suffix(".ass"))
 
         if (
             not job.get("watermark")
@@ -563,7 +855,7 @@ async def run_hardcode_job(
                 f"File phụ đề cứng cũ bị dở dang ({out_dur:.0f}s / {src_dur:.0f}s) — sẽ encode lại đầy đủ.",
                 "warn",
             )
-            final_path.unlink(missing_ok=True)
+            _safe_unlink(final_path)
 
         loop = asyncio.get_event_loop()
 
@@ -581,9 +873,9 @@ async def run_hardcode_job(
         # Success → atomically publish the final file.
         if not (partial_path.exists() and partial_path.stat().st_size > 0):
             raise RuntimeError("Hardcode finished without producing an output file")
-        final_path.unlink(missing_ok=True)
+        _safe_unlink(final_path)
         partial_path.rename(final_path)
-        partial_path.with_suffix(".ass").unlink(missing_ok=True)
+        _safe_unlink(partial_path.with_suffix(".ass"))
 
         job["status"] = "done"
         job["progress"] = 100

@@ -146,7 +146,7 @@ def _hex_to_rgba(hex_color: str, opacity: int = 255) -> tuple:
     return (r, g, b, max(0, min(255, opacity)))
 
 
-_SUB_PAD_X = 6
+_SUB_PAD_X = 12
 _SUB_PAD_Y = 6
 # Hiệu chỉnh dọc cho text \an5: tâm line-box libass ≠ tâm INK (do ascent/
 # descender). Đơn vị = nhân với font_size. Đo bằng script calibration.
@@ -179,7 +179,7 @@ def srt_to_ass_blackbox(
 
     s = dict(style or get_subtitle_style())
     # Chuẩn hoá về pixel thật của frame xuất (style lưu ở tham chiếu 1080p).
-    font_size_ref = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
+    font_size_ref = max(10, int(int(s.get("font_size", 52)) * vh / 1080))
     margin_v = max(0, int(int(s.get("margin_v", 40)) * vh / 1080))
     margin_h = int(int(s.get("margin_h", 0)) * vw / 1920)
     outline_w = max(0, int(s.get("outline_width", 0)))
@@ -482,7 +482,7 @@ def _render_subtitle(
 
     s = style or get_subtitle_style()
     # font_size là tham chiếu 1080p → scale theo chiều cao thực tế.
-    font_size = max(10, int(int(s.get("font_size", 48)) * vh / 1080))
+    font_size = max(10, int(int(s.get("font_size", 52)) * vh / 1080))
     font_path = font_path or _find_font(
         s.get("font_family", "Arial"), s.get("bold"), s.get("italic")
     )

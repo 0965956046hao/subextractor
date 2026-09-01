@@ -616,6 +616,11 @@ export const usePipelineStore = create<PipelineState>()(
       },
       rerunPipeline: (id, step) => {
         if (step <= 3) {
+          // When rerunning from early steps (especially step 2 region selection),
+          // reset regionMode to "manual" and clear region so user can re-select.
+          // The original pipeline may have regionMode="auto" from import, but
+          // rerun should allow manual region selection.
+          patch(id, { regionMode: "manual", region: null });
           runPrep(id, step);
         } else {
           enqueue(id, step);

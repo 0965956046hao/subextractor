@@ -107,6 +107,29 @@ LANG_NAMES = {
 }
 
 
+def _transform_translated_text(text: str) -> str:
+    """Chuyển đổi text sau khi dịch:
+    1. Bo dau cham "." o cuoi cau (nhung khong xoa dau cham khac)
+    2. Viet hoa chu cai dau tien cua cau
+    
+    Example:
+        "tôi là mạnh." -> "Tôi là mạnh"
+        "chào bạn!" -> "Chào bạn!"
+        "xin chào." -> "Xin chào"
+    """
+    import re
+    
+    # 1. Bo dau cham "." o cuoi chu text (chi bo dau cham cuoi cung, khong xoa dau cham ben trong)
+    # Su dung regex: neu text ket thuc bang . hoac ? hoac ! (theo sau bo dau trang)
+    text = re.sub(r"\s*[\.\?!]\s*$", "", text)
+    
+    # 2. Viet hoa chu cai dau tien cua chu text (chi word dau tien)
+    if text:
+        text = text[0].upper() + text[1:] if len(text) > 1 else text.upper()
+    
+    return text
+
+
 def _clean_gemini_response(text: str) -> str:
     """Strip markdown fences and any preamble/postamble from Gemini SRT output."""
     import re
@@ -667,6 +690,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         changed = 0
         for b, r in zip(batch, results):
             new_text = (r or "").strip()
+            # Áp dụng chuyển đổi: bo dau cham cuoi cau + viet hoa chu cai dau tien
+            new_text = _transform_translated_text(new_text)
             if new_text != b.text.strip():
                 changed += 1
             out_batch.append(SrtEntry(

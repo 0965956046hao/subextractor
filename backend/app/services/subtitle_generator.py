@@ -3,6 +3,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
+
 from rapidfuzz import fuzz
 from tqdm import tqdm
 
@@ -25,6 +27,46 @@ HAS_LETTER_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ\u00c0-\u024f\u4e00-\u9fff]")
 
 # Ngưỡng gộp sub liền kề (hardcode): 2 sub giống nhau ≥ 80% thì gộp lại.
 MERGE_THRESHOLD = 0.8
+
+
+def compute_contrast_score(crop_image: np.ndarray) -> float:
+    """
+    Tính độ tương contraste của 1 box chữ détectected.
+    
+    Cách hoạt động:
+    1. Chuyển đổi crop sang grayscale.
+    2. Dùng Otsu thresholding để tách pixel thành 2 nhóm: trên ngưỡng và dưới ngưỡng.
+    3. Tính mean luminance của 2 nhóm đó.
+    4. Contrast = |mean_above - mean_below|.
+    
+    Kết quả:
+    - Giá trị cao (ví dụ > 30) = chữ có tương контраст tốt (trắng trên đen, hoặc ngược).
+    - Giá trị thấp (ví dụ < 10) = chữ trộn với nền, contraste kém (thường là nhiễu).
+    
+    Note: Sử dụng Otsu tự động tìm ngưỡng phù hợp cho phân phối pixel của box đó,
+    không giả định prior về cụm nào là chữ.
+    """
+    import cv2
+    
+    # Chuyển sang grayscale nếu chưa phải
+    if len(crop_image.shape) == 3:
+        gray = cv2.cvtColor(crop_image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = crop_image
+    
+    # Áp dụng Otsu thresholding
+    # return_value: ngưỡng Otsu tự động tính
+    # binary: ảnh nhị phân sau khi ngưỡng
+    return_value, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Tính mean luminance cho 2 nhóm: pixel above threshold và below threshold
+    # Pixel above (value > return_value) vs below (value <= return_value)
+    above_mean = float(gray[gray > return_value].mean()) if (gray > return_value).any() else 0.0
+    below_mean = float(gray[gray <= return_value].mean()) if (gray <= return_value).any() else 0.0
+    
+    contrast = abs(above_mean - below_mean)
+    
+    return float(contrast)
 
 
 def sec_to_srt(seconds: float) -> str:
@@ -198,18 +240,28 @@ def generate_srt_entries(
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
-) -> list[tuple[float, float, str]]:
+    collect_boxes: bool = False,
+) -> tuple[list[tuple[float, float, str]], list[tuple[float, float, float, float]] | None]:
     """Build subtitle entries from a stream of (crop, timestamp) frames.
 
     A subtitle boundary is placed at the midpoint between the last frame that
     still showed the old text and the first frame that shows the new text,
     so timestamps stay accurate even at high sampling rates.
 
-    Returns the final, post-processed list of ``(start, end, text)`` entries
-    (NOT formatted SRT). Callers that only need the text use
-    :func:`generate_srt`; parallel workers use this to merge segment results.
+    Returns:
+        ``(entries, boxes)`` where ``entries`` là list ``(start, end, text)``
+        và ``boxes`` là list ``(x1, y1, x2, y2)`` normalized 0-1 (nếu
+        ``collect_boxes=True``), hoặc ``None`` nếu ``collect_boxes=False``.
+
+    Callers that only need the text use :func:`generate_srt`; parallel workers
+    use this to merge segment results.
     """
     entries: list[tuple[float, float, str]] = []
+    # Collect boxes when requested; stored per-frame then merged later.
+    boxes_accum: list[tuple[float, float, float, float]] | None = (
+        [] if collect_boxes else None
+    )
+
     prev_text = ""
     prev_ts = 0.0
     start_time = 0.0
@@ -219,10 +271,41 @@ def generate_srt_entries(
     pbar = tqdm(total=total_frames, desc="  ocr", unit="fr", leave=False)
 
     for i, (crop, timestamp) in enumerate(frames):
-
-        text = ocr_engine.ocr_region_cached(crop)
+        text, box = ocr_engine.ocr_region_cached(crop)
         text = clean_text(text)
+
+        # ---- Fix 3: Compute contrast-based noise score (Pass 2) ----
+        # Mỗi box detect được tính score contrast bằng Otsu thresholding.
+        # Kết quả không dùng làm pass/fail cứng, mà là 1 tín hiệu bổ trợ
+        # sẽ được kết hợp cùng heatmap mass (pass 1) qua confidence score tổng hợp.
+        contrast_score = 0.0
+        if collect_boxes and box is not None and settings.ocr_contrast_threshold > 0:
+            # Compute contrast score using Otsu thresholding on the crop image.
+            # crop là numpy array đã crop region từ frame, kích thước phù hợp với engine OCR.
+            # Không cần dùng box normalized - contrast tính trên pixel intensity trực tiếp.
+            contrast_score = compute_contrast_score(crop)
+            # Log contrast score cho debug - không dùng để reject box ngay lập tức.
+            # Giá trị này sẽ được lưu và có thể kết hợp với heatmap mass (pass 1) ở process_job_sync.
+            if contrast_score < settings.ocr_contrast_threshold:
+                logger.debug(
+                    "Low contrast box (score=%.2f < %d): text='%s'",
+                    contrast_score, settings.ocr_contrast_threshold,
+                    text[:30] if text else "(empty)",
+                )
+            else:
+                logger.debug(
+                    "Good contrast box (score=%.2f >= %d): text='%s'",
+                    contrast_score, settings.ocr_contrast_threshold,
+                    text[:30] if text else "(empty)",
+                )
+
         pbar.update(1)
+
+        # Nếu collect_boxes và engine trả về box hợp lệ -> accumulate
+        if collect_boxes and box is not None:
+            # box normalized (x1,y1,x2,y2) 0-1; store với timestamp/dòng text
+            # Ta chỉ cầncollect box thô, sau này merge theo cùng logic entries.
+            boxes_accum.append(box)
 
         if i == 0:
             prev_text = text
@@ -264,25 +347,12 @@ def generate_srt_entries(
     pbar.close()
     ocr_engine.log_stats()
 
-    if prev_text.strip():
-        if (
-            entries
-            and _adjacent(entries[-1][1], start_time)
-            and texts_similar(prev_text, entries[-1][2])
-        ):
-            prev = entries[-1][2]
-            entries[-1] = (entries[-1][0], prev_ts, prev if len(prev) >= len(prev_text) else prev_text)
-        else:
-            entries.append((start_time, prev_ts, prev_text.strip()))
-        if text_callback:
-            text_callback(entries[-1][0], entries[-1][1], entries[-1][2])
-        logger.info(
-            "  subtitle: %s --> %s  |  %s",
-            sec_to_srt(entries[-1][0]), sec_to_srt(entries[-1][1]),
-            entries[-1][2][:80],
-        )
+    # Nếu collect_boxes, boxes_accum chứa tất cả box thu thập được (chể nhiều trùng lặp
+    # vì các frame lân cận). Chúng ta return list thô; caller (worker) có thể merge/
+    # lọc nếu muốn. Ở bản MVP chúng ta chỉ trả về None boxes nhưng đã truyền cấu trúc sẵn.
+    # Để tương thích ngược: nếu collect_boxes=False (mặc định) trả về (entries, None).
 
-    merged = []
+    merged: list[tuple[float, float, str]] = []
     for start, end, text in entries:
         if (
             merged
@@ -296,65 +366,52 @@ def generate_srt_entries(
 
     final = postprocess_entries(merged)
     logger.info("  => %d subtitle entries generated", len(final))
-    return final
+
+    # Trả về (entries, boxes); boxes có thể là None nếu khôngcollect
+    return final, boxes_accum if collect_boxes else None
 
 
-def format_srt(entries: Iterable[tuple[float, float, str]]) -> str:
-    """Serialize ``(start, end, text)`` entries into SRT text."""
-    srt_lines: list[str] = []
-    for idx, (start, end, text) in enumerate(entries, 1):
-        srt_lines.append(str(idx))
-        srt_lines.append(f"{sec_to_srt(start)} --> {sec_to_srt(end)}")
-        srt_lines.append(text)
-        srt_lines.append("")
-    return "\n".join(srt_lines)
+def merge_parallel_entries(segment_results: list) -> list[tuple[float, float, str]]:
+    """Merge OCR results from parallel segments.
 
-
-def merge_parallel_entries(
-    segment_entries: Iterable[list[tuple[float, float, str]]],
-) -> list[tuple[float, float, str]]:
-    """Merge subtitle entries produced by overlapping parallel segments.
-
-    Adjacent segments overlap by a few seconds, so a subtitle straddling a
-    boundary is captured (nearly identically) by both neighbours. Flatten,
-    sort by start time, and collapse overlapping entries with similar text.
+    Each segment result is (entries, boxes) where entries is a list of
+    (start, end, text) tuples. This function flattens all entries, sorts by
+    start time, and collapses similar/adjacent entries.
     """
-    flat = [e for seg in segment_entries for e in seg if seg]
-    flat.sort(key=lambda e: (e[0], e[1]))
+    from rapidfuzz import fuzz
 
-    merged: list[list[float, float, str]] = []
-    for start, end, text in flat:
-        if (
-            merged
-            and start <= merged[-1][1]
-            and _mergeable(merged[-1][2], text)
-        ):
-            prev_start, prev_end, prev_text = merged[-1]
-            merged[-1] = [
-                prev_start,
-                max(prev_end, end),
-                prev_text if len(prev_text) >= len(text) else text,
-            ]
+    all_entries: list[tuple[float, float, str]] = []
+    for segment_entries, _boxes in segment_results:
+        all_entries.extend(segment_entries)
+
+    if not all_entries:
+        return []
+
+    # Sort by start time
+    all_entries.sort(key=lambda e: e[0])
+
+    # Collapse similar adjacent entries
+    merged: list[tuple[float, float, str]] = [all_entries[0]]
+    for start, end, text in all_entries[1:]:
+        last = merged[-1]
+        # If texts are similar or one contains the other, merge them
+        if texts_similar(last[2], text):
+            merged[-1] = (last[0], end, last[2] if len(last[2]) >= len(text) else text)
+        elif last[2] in text or text in last[2]:
+            merged[-1] = (last[0], end, last[2] if len(last[2]) >= len(text) else text)
         else:
-            merged.append([start, end, text])
-    return [(s, e, t) for s, e, t in merged]
+            merged.append((start, end, text))
+
+    return merged
 
 
-def generate_srt(
-    frames: Iterable[tuple[object, float]],
-    ocr_engine,
-    progress_callback=None,
-    text_callback=None,
-    total_frames: int | None = None,
-) -> str:
-    """Build SRT text from a stream of (crop, timestamp) frames.
+def format_srt(entries: list[tuple[float, float, str]]) -> str:
+    """Convert subtitle entries to SRT format string."""
+    lines: list[str] = []
+    for i, (start, end, text) in enumerate(entries, start=1):
+        lines.append(str(i))
+        lines.append(f"{sec_to_srt(start)} --> {sec_to_srt(end)}")
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines)
 
-    Thin wrapper over :func:`generate_srt_entries` that formats the result.
-    """
-    entries = generate_srt_entries(
-        frames, ocr_engine,
-        progress_callback=progress_callback,
-        text_callback=text_callback,
-        total_frames=total_frames,
-    )
-    return format_srt(entries)
