@@ -1941,7 +1941,6 @@ async function runPrep(id: string, startStep = 0) {
       finishedAt: Date.now(),
     });
     reportPipeline(id, true);
-  } finally {
     liveRunners.delete(id);
   }
 }
@@ -2757,7 +2756,7 @@ async function runPipeline(id: string, startStep = 4) {
     }
 
     // 8. Hardcode
-    if (startStep <= 8) {
+    if (startStep <= 9) {
       patch(id, { stage: "muxing" });
       markStepStart(id, 9);
       // Resume: nếu video đã có phụ đề cứng thì bỏ qua — nhưng PHẢI encode lại

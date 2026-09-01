@@ -73,6 +73,7 @@ function Start-FgProcess($name, $file, [string[]]$argsList, $workdir) {
 function Start-NewWindow($name, $file, [string[]]$argsList, $workdir) {
   Write-Host "==> Starting $name in NEW WINDOW  http://localhost:8002"
   $argStr = $argsList -join ' '
+  # Use explicit cd then run, ensure workdir is used
   $scriptBlock = "cd '$workdir'; & '$file' $argStr; Read-Host 'Press Enter to close...'"
   Start-Process powershell -ArgumentList "-NoExit", "-Command", $scriptBlock -WorkingDirectory $workdir
 }

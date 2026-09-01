@@ -15,7 +15,7 @@ const nextConfig = {
       afterFiles: [
         {
           source: "/api/:path*",
-          destination: `${process.env.BACKEND_URL || "http://localhost:8000"}/api/:path*`,
+          destination: `${process.env.BACKEND_URL || "http://localhost:8002"}/api/:path*`,
         },
       ],
     };
