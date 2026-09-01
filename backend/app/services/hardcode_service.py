@@ -779,7 +779,7 @@ def run_hardcode_sync(
 
     use_vtb = _has_videotoolbox()
     if use_vtb:
-        v_enc = ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
+        v_enc = ["-c:v", "h264_videotoolbox", "-allow_sw", "1", "-b:v", "8M"]
     else:
         v_enc = ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
 
