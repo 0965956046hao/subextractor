@@ -15,12 +15,24 @@ from app.services.apple_ocr_engine import AppleOCREngine
 from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation, profiles
 from app.worker import worker_loop
 
+import sys
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+    force=True,
 )
+# Ensure all loggers propagate to root
+for name in logging.root.manager.loggerDict:
+    lg = logging.getLogger(name)
+    lg.propagate = True
+
 logger = logging.getLogger(__name__)
+logger.info("Logging configured: all logs will appear in terminal")
 
 
 @asynccontextmanager
