@@ -610,10 +610,11 @@ export async function rewriteSrtLine(
 export async function capCutPreview(
   voice: string,
   text?: string,
+  lang?: string,
 ): Promise<Blob> {
   const res = await api.post<Blob>(
     "/capcut/preview",
-    { voice, text },
+    { voice, text, lang },
     { responseType: "blob" },
   );
   return res.data;
@@ -631,10 +632,11 @@ export async function getGoogleTtsVoices(
 export async function googleTtsPreview(
   voice: string,
   text?: string,
+  lang?: string,
 ): Promise<Blob> {
   const res = await api.post<Blob>(
     "/google-tts/preview",
-    { voice, text },
+    { voice, text, lang },
     { responseType: "blob" },
   );
   return res.data;

@@ -591,8 +591,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     try {
       const blob =
         dubEngine === "google"
-          ? await googleTtsPreview(dubVoice)
-          : await capCutPreview(dubVoice);
+          ? await googleTtsPreview(dubVoice, undefined, voiceLang)
+          : await capCutPreview(dubVoice, undefined, voiceLang);
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
       setPreviewUrl(null);
@@ -3036,7 +3036,7 @@ function DetailView({
               src={previewUrl}
               title={tr("pipeline.resultVideoTitle")}
               className="w-full aspect-video rounded-xl ring-1 ring-white/[0.09] bg-black"
-              allow="autoplay; fullscreen"
+              allow="fullscreen"
               allowFullScreen
             />
 
