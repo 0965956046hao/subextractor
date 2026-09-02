@@ -380,6 +380,23 @@ def _has_drawtext_filter() -> bool:
         return False
 
 
+def _probe_video_codec(video_path: str) -> str | None:
+    """Return the video codec name (e.g., 'hevc', 'h264') or None on failure."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "csv=p=0",
+            video_path,
+        ]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=True)
+        codec = out.stdout.strip()
+        return codec if codec else None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Font finder (macOS)
 # ---------------------------------------------------------------------------
@@ -621,14 +638,16 @@ def run_hardcode_sync(
         )
     elif not job.get("auto_fit") and job.get("region"):
         # Chế độ thủ công: tính box height từ region đã chọn, fix cho toàn bộ subtitle
+        # Dùng target height (th) thay vì original height (vh) để box height
+        # scale đúng khi video được upscale lên min 1080p.
         y1 = max(0.0, min(1.0, float(job["region"].get("y1", 0.0))))
         y2 = max(0.0, min(1.0, float(job["region"].get("y2", 1.0))))
         rh = max(0.01, y2 - y1)
-        fixed_box_height = max(10, int(rh * vh))
+        fixed_box_height = max(10, int(rh * th))
         logger.info(
-            "hardcode job %s: manual mode → fixed box height=%spx (from region y1=%s y2=%s)",
+            "hardcode job %s: manual mode → fixed box height=%spx (from region y1=%s y2=%s, target_h=%s)",
             job_id, fixed_box_height,
-            job["region"].get("y1", 0), job["region"].get("y2", 0),
+            job["region"].get("y1", 0), job["region"].get("y2", 0), th,
         )
     if job.get("style"):
         style = apply_style_override(style, job["style"])
@@ -905,6 +924,15 @@ def run_hardcode_sync(
     # ── Assemble the full FFmpeg command ───────────────────────────────────
     # Input layout: [0]=video, [1]=audio (nếu có nguồn audio riêng), [last]=logo
     cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
+
+    # Detect input codec and add proper decode options for HEVC
+    input_codec = _probe_video_codec(video_path_str)
+    if input_codec and input_codec.lower() in ("hevc", "h265"):
+        # Force software decode for HEVC to avoid hardware decoder failures
+        # Use -hwaccel none before -i to disable hardware acceleration for this input
+        cmd += ["-hwaccel", "none"]
+        logger.info("hardcode job %s: input is HEVC, disabling hardware decode", job_id)
+
     cmd += ["-i", video_path_str]
 
     audio_idx = 0  # input index for the audio stream
