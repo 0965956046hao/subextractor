@@ -923,6 +923,7 @@ def run_hardcode_sync(
         cmd += ["-map", f"[{last_out}]"]
     else:
         cmd += ["-vf", ",".join(vf_parts)]
+        cmd += ["-map", "0:v"]
 
     # Audio mapping
     if use_external_audio:
