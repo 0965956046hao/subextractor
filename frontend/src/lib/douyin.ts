@@ -10,23 +10,53 @@ import puppeteer, {
 } from "puppeteer-core";
 import { resolveProfileDir } from "./subtitle-profile";
 
-function defaultChromePath(): string {
-  switch (process.platform) {
-    case "win32": {
-      const candidates = [
+function getBrowserPath(): string {
+  const envPath = process.env.BROWSER_PATH || process.env.CHROME_PATH;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  const isCocCoc = process.env.BROWSER_TYPE === "coccoc" || process.env.USE_COC_COC === "true";
+
+  if (process.platform === "win32") {
+    if (isCocCoc) {
+      const coccocCandidates = [
         process.env.LOCALAPPDATA &&
           path.join(
             process.env.LOCALAPPDATA,
-            "Google",
-            "Chrome",
+            "CocCoc",
+            "Browser",
             "Application",
-            "chrome.exe"
+            "browser.exe"
           ),
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files\\CocCoc\\Browser\\Application\\browser.exe",
+        "C:\\Program Files (x86)\\CocCoc\\Browser\\Application\\browser.exe",
       ].filter(Boolean) as string[];
-      return candidates.find((p) => fs.existsSync(p)) || candidates[0];
+      const found = coccocCandidates.find((p) => fs.existsSync(p));
+      if (found) return found;
     }
+    // Default: Chrome
+    const chromeCandidates = [
+      process.env.LOCALAPPDATA &&
+        path.join(
+          process.env.LOCALAPPDATA,
+          "Google",
+          "Chrome",
+          "Application",
+          "chrome.exe"
+        ),
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    ].filter(Boolean) as string[];
+    return chromeCandidates.find((p) => fs.existsSync(p)) || chromeCandidates[0];
+  }
+
+  // macOS / Linux - check for Cốc Cốc first if requested
+  if (isCocCoc && process.platform === "darwin") {
+    const coccocPath = "/Applications/CocCoc.app/Contents/MacOS/CocCoc";
+    if (fs.existsSync(coccocPath)) return coccocPath;
+  }
+
+  // Default Chrome paths
+  switch (process.platform) {
     case "darwin":
       return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
     default:
@@ -34,7 +64,8 @@ function defaultChromePath(): string {
   }
 }
 
-export const CHROME_PATH = process.env.CHROME_PATH || defaultChromePath();
+export const CHROME_PATH = getBrowserPath();
+export const IS_COC_COC = process.env.BROWSER_TYPE === "coccoc" || process.env.USE_COC_COC === "true";
 
 export const CDP_URL = process.env.DOUYIN_CDP_URL || "http://localhost:9222";
 
@@ -124,7 +155,8 @@ export async function openBrowser(options?: {
       });
       if (headless) return { browser, persistent: true };
       const version = await browser.version();
-      if (/headlesschrome/i.test(version)) {
+      const isHeadless = /headlesschrome/i.test(version) || (IS_COC_COC && /headless/i.test(version));
+      if (isHeadless) {
         await browser.disconnect().catch(() => {});
         continue; // headless instance — not usable for a visible login
       }
@@ -153,9 +185,10 @@ export async function openBrowser(options?: {
   return { browser, persistent: false };
 }
 
-/** Kill any Chrome running with the given user-data-dir (profile lock). */
+/** Kill any Chrome/Cốc Cốc running with the given user-data-dir (profile lock). */
 export function killChromeOnProfile(profileDir: string): void {
   try {
+    const browserName = IS_COC_COC ? "coccoc" : "chrome";
     const out = execSync(`pgrep -f "user-data-dir=${profileDir}"`, {
       encoding: "utf8",
     });

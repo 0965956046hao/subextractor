@@ -3,8 +3,59 @@ import os from "os";
 import path from "path";
 import puppeteer from "puppeteer-core";
 
-const CHROME_PATH =
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+function getBrowserPath(): string {
+  const envPath = process.env.BROWSER_PATH || process.env.CHROME_PATH;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  const isCocCoc = process.env.BROWSER_TYPE === "coccoc" || process.env.USE_COC_COC === "true";
+
+  if (process.platform === "win32") {
+    if (isCocCoc) {
+      const coccocCandidates = [
+        process.env.LOCALAPPDATA &&
+          path.join(
+            process.env.LOCALAPPDATA,
+            "CocCoc",
+            "Browser",
+            "Application",
+            "browser.exe"
+          ),
+        "C:\\Program Files\\CocCoc\\Browser\\Application\\browser.exe",
+        "C:\\Program Files (x86)\\CocCoc\\Browser\\Application\\browser.exe",
+      ].filter(Boolean) as string[];
+      const found = coccocCandidates.find((p) => fs.existsSync(p));
+      if (found) return found;
+    }
+    const chromeCandidates = [
+      process.env.LOCALAPPDATA &&
+        path.join(
+          process.env.LOCALAPPDATA,
+          "Google",
+          "Chrome",
+          "Application",
+          "chrome.exe"
+        ),
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    ].filter(Boolean) as string[];
+    return chromeCandidates.find((p) => fs.existsSync(p)) || chromeCandidates[0];
+  }
+
+  if (isCocCoc && process.platform === "darwin") {
+    const coccocPath = "/Applications/CocCoc.app/Contents/MacOS/CocCoc";
+    if (fs.existsSync(coccocPath)) return coccocPath;
+  }
+
+  switch (process.platform) {
+    case "darwin":
+      return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    default:
+      return "/usr/bin/google-chrome";
+  }
+}
+
+const CHROME_PATH = getBrowserPath();
+const IS_COC_COC = process.env.BROWSER_TYPE === "coccoc" || process.env.USE_COC_COC === "true";
 const COOKIE_FILE = path.join(os.homedir(), ".douyin-session", "cookies.json");
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
@@ -35,7 +86,7 @@ async function loadCookies(page) {
 let browser;
 try {
   browser = await puppeteer.connect({ browserURL: `http://localhost:${CDP_PORT}`, defaultViewport: null });
-  console.log("[browser] connected to existing chrome", CDP_PORT);
+  console.log("[browser] connected to existing browser", CDP_PORT);
 } catch {
   browser = await puppeteer.launch({
     executablePath: CHROME_PATH,
@@ -47,7 +98,8 @@ try {
     ],
     defaultViewport: null,
   });
-  console.log("[browser] launched fresh chrome");
+  const browserName = IS_COC_COC ? "Cốc Cốc" : "Chrome";
+  console.log(`[browser] launched fresh ${browserName}`);
 }
 
 const page = await browser.newPage();

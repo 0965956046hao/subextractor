@@ -1,5 +1,5 @@
 import puppeteer, { type Browser, type ElementHandle, type Page } from "puppeteer-core";
-import { CHROME_PATH, killChromeOnProfile, type BrowserHandle } from "./douyin";
+import { CHROME_PATH, IS_COC_COC, killChromeOnProfile, type BrowserHandle } from "./douyin";
 import { resolveProfileDir } from "./subtitle-profile";
 import { execSync } from "child_process";
 
@@ -63,7 +63,8 @@ export async function openChatGptBrowser(): Promise<BrowserHandle> {
         defaultViewport: null,
       });
       const version = await browser.version();
-      if (/headlesschrome/i.test(version)) {
+      const isHeadless = /headlesschrome/i.test(version) || (IS_COC_COC && /headless/i.test(version));
+      if (isHeadless) {
         // Found headless — kill it, then continue to try the other endpoint.
         await browser.disconnect().catch(() => {});
         killChromeOnProfile(CHATGPT_PROFILE_DIR);
@@ -103,7 +104,8 @@ export async function openChatGptBrowser(): Promise<BrowserHandle> {
       }
     }
   }
-  throw new Error("Không khởi động được Chrome sau 3 lần thử");
+  const browserName = IS_COC_COC ? "Cốc Cốc" : "Chrome";
+  throw new Error(`Không khởi động được ${browserName} sau 3 lần thử`);
 }
 
 /** Detach but leave the ChatGPT Chrome (and its profile) running. */
