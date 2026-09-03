@@ -195,27 +195,27 @@ function stepDetail(p: Pipeline, tr: TFunc): string {
     case 2:
       return p.region
         ? tr("pipeline.stepDetail.regionSelected", {
-            x1: p.region.x1,
-            x2: p.region.x2,
-            y1: p.region.y1,
-            y2: p.region.y2,
-          })
+          x1: p.region.x1,
+          x2: p.region.x2,
+          y1: p.region.y1,
+          y2: p.region.y2,
+        })
         : tr("pipeline.stepDetail.regionPending");
     case 3:
       return p.subtitleStyle
         ? tr("pipeline.stepDetail.subtitleStyle", {
-            size: p.subtitleStyle.font_size ?? 48,
-            margin: p.subtitleStyle.margin_v ?? 40,
-          })
+          size: p.subtitleStyle.font_size ?? 48,
+          margin: p.subtitleStyle.margin_v ?? 40,
+        })
         : p.autoFit
           ? tr("pipeline.stepDetail.subtitleAutoFit")
           : tr("pipeline.stepDetail.subtitlePreview");
     case 4:
       return p.ocrEngine
         ? tr("pipeline.stepDetail.ocrEngine", {
-            engine: p.ocrEngine,
-            lang: localizedLangLabel(p.ocrLang, tr),
-          })
+          engine: p.ocrEngine,
+          lang: localizedLangLabel(p.ocrLang, tr),
+        })
         : tr("pipeline.stepDetail.ocrPending");
     case 5:
       return tr("pipeline.stepDetail.context", {
@@ -225,12 +225,12 @@ function stepDetail(p: Pipeline, tr: TFunc): string {
       return p.translateOn !== false
         ? p.srcLang
           ? tr("pipeline.stepDetail.translateFromTo", {
-              from: localizedLangLabel(p.srcLang, tr),
-              to: localizedLangLabel(p.translateTarget || "vi", tr),
-            })
+            from: localizedLangLabel(p.srcLang, tr),
+            to: localizedLangLabel(p.translateTarget || "vi", tr),
+          })
           : tr("pipeline.stepDetail.translateTo", {
-              to: localizedLangLabel(p.translateTarget || "vi", tr),
-            })
+            to: localizedLangLabel(p.translateTarget || "vi", tr),
+          })
         : tr("pipeline.stepDetail.translateOff");
     case 7:
       return tr("pipeline.stepDetail.dub");
@@ -272,6 +272,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     "douyin",
   );
   const [srcLang, setSrcLang] = useState<"zh" | "en" | "vi">("zh");
+  const OPT_TABS = [
+    { id: "source", label: "Nguồn & Vùng" },
+    { id: "voice", label: "Giọng & Dịch" },
+    { id: "export", label: "Xuất & Đăng" },
+  ] as const;
+  const [optTab, setOptTab] = useState<"source" | "voice" | "export">("source");
   const [translateOn, setTranslateOn] = useState(true);
   const [translateTarget, setTranslateTarget] = useState<"zh" | "en" | "vi">(
     "vi",
@@ -358,8 +364,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           healthy: !!profiles?.douyin.exists,
           message: profiles?.douyin.exists
             ? tr("pipeline.health.profileDouyinReady", {
-                path: profiles.douyin.path,
-              })
+              path: profiles.douyin.path,
+            })
             : tr("pipeline.health.profileDouyinMissing"),
         },
         {
@@ -368,8 +374,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           healthy: !!profiles?.chatgpt.exists,
           message: profiles?.chatgpt.exists
             ? tr("pipeline.health.profileChatgptReady", {
-                path: profiles.chatgpt.path,
-              })
+              path: profiles.chatgpt.path,
+            })
             : tr("pipeline.health.profileChatgptMissing"),
         },
       ];
@@ -406,7 +412,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         setPresets(cfg.watermark_presets || []);
         setWatermarkPreset(cfg.active_watermark_preset || "");
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       mounted = false;
     };
@@ -420,7 +426,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         if (!mounted) return;
         setYtChannels(res.channels || []);
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       mounted = false;
     };
@@ -602,8 +608,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     try {
       const blob =
         dubEngine === "google"
-          ? await googleTtsPreview(dubVoice)
-          : await capCutPreview(dubVoice);
+          ? await googleTtsPreview(dubVoice, undefined, voiceLang)
+          : await capCutPreview(dubVoice, undefined, voiceLang);
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
       setPreviewUrl(null);
@@ -734,7 +740,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     setUploadProgress(0);
     setUploadError(null);
     try {
-      const videoId = await uploadVideo(file, setUploadProgress);
+      const videoId = await uploadVideo(file, setUploadProgress, undefined, "pipeline");
       setUploaded({ videoId, name: file.name, size: file.size });
     } catch (e) {
       setUploadError(
@@ -904,7 +910,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </p>
                     <button
                       onClick={checkHealth}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-warn-muted text-warn ring-1 ring-warn/25 hover:bg-warn/25 transition-colors cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-warn-muted text-warn ring-1 ring-warn/25 hover:bg-warn/25 transition-colors cursor-pointer"
                     >
                       {tr("pipeline.retry")}
                     </button>
@@ -949,7 +955,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </span>
                   <button
                     onClick={checkHealth}
-                    className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium bg-success-muted text-success ring-1 ring-success/25 hover:bg-success/25 transition-colors cursor-pointer"
+                    className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium bg-success-muted text-success ring-1 ring-success/25 hover:bg-success/25 transition-colors cursor-pointer"
                   >
                     {tr("pipeline.retry")}
                   </button>
@@ -960,11 +966,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   <button
                     key={t}
                     onClick={() => setSourceType(t)}
-                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
-                      sourceType === t
-                        ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                        : "text-ink-light hover:text-ink"
-                    } cursor-pointer`}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${sourceType === t
+                      ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                      : "text-ink-light hover:text-ink"
+                      } cursor-pointer`}
                   >
                     {t === "douyin"
                       ? tr("pipeline.sourceDouyin")
@@ -1095,66 +1100,21 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
               )}
-              <div className="mt-4 flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                  {tr("pipeline.sourceLang")}
-                </span>
-                <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
-                  {(["zh", "en", "vi"] as const).map((l) => (
-                    <button
-                      key={l}
-                      onClick={() => setSrcLang(l)}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
-                        srcLang === l
-                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                          : "text-ink-light hover:text-ink"
-                      } cursor-pointer`}
-                    >
-                      {l === "zh"
-                        ? tr("pipeline.langZh")
-                        : l === "en"
-                          ? tr("pipeline.langEn")
-                          : tr("pipeline.langVi")}
-                    </button>
-                  ))}
-                </div>
-                <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                  {tr("pipeline.sourceLangHint")}
-                </p>
-              </div>
-              <div className="mt-4 flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                  {tr("pipeline.scanRegion")}
-                </span>
-                <div
-                  className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
-                >
+              {/* Tab nhóm tuỳ chọn */}
+
+              <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] w-max mb-5 mt-5">
+                {OPT_TABS.map((t) => (
                   <button
-                    onClick={() => setRegionMode("auto")}
-                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                      regionMode === "auto"
-                        ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                        : "text-ink-light hover:text-ink"
-                    }`}
+                    key={t.id}
+                    onClick={() => setOptTab(t.id)}
+                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${optTab === t.id
+                      ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                      : "text-ink-light hover:text-ink"
+                      }`}
                   >
-                    {tr("pipeline.regionAuto")}
+                    {t.label}
                   </button>
-                  <button
-                    onClick={() => setRegionMode("manual")}
-                    className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                      regionMode === "manual"
-                        ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                        : "text-ink-light hover:text-ink"
-                    }`}
-                  >
-                    {tr("pipeline.regionManual")}
-                  </button>
-                </div>
-                <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                  {regionMode === "auto"
-                    ? tr("pipeline.regionAutoHint")
-                    : tr("pipeline.regionManualHint")}
-                </p>
+                ))}
               </div>
               <div className="flex items-center gap-2">
                 <select
@@ -1192,281 +1152,102 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </button>
                 )}
               </div>
-              <div className="mt-4 border-t border-white/[0.07] pt-4">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                    {tr("pipeline.dubTitle")}
-                  </span>
-                  <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
-                    {(["vi-VN", "en-US"] as const).map((l) => (
-                      <button
-                        key={l}
-                        onClick={() => {
-                          if (l === voiceLang) return;
-                          setVoiceLang(l);
-                          setPreviewUrl(null);
-                          setPreviewError(false);
-                          setDubVoice(
-                            l === "vi-VN" ? "BV421_vivn_streaming" : "",
-                          );
-                        }}
-                        className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
-                          voiceLang === l
+              <div className="mt-4 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] overflow-hidden p-5">
+                <div className={optTab === "source" ? "" : "hidden"}>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      {tr("pipeline.sourceLang")}
+                    </span>
+                    <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
+                      {(["zh", "en", "vi"] as const).map((l) => (
+                        <button
+                          key={l}
+                          onClick={() => setSrcLang(l)}
+                          className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${srcLang === l
                             ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                             : "text-ink-light hover:text-ink"
-                        } cursor-pointer`}
-                      >
-                        {l === "vi-VN"
-                          ? tr("pipeline.langVi")
-                          : tr("pipeline.langEn")}
-                      </button>
-                    ))}
-                  </div>
-                  <div
-                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
-                  >
-                    <button
-                      onClick={() => switchDubEngine("google")}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                        dubEngine === "google"
-                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                          : "text-ink-light hover:text-ink"
-                      }`}
-                    >
-                      Google TTS
-                    </button>
-                    <button
-                      onClick={() => switchDubEngine("capcut")}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                        dubEngine === "capcut"
-                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                          : "text-ink-light hover:text-ink"
-                      }`}
-                    >
-                      CapCut
-                    </button>
-                  </div>
-                  {(dubEngine === "capcut"
-                    ? capcutVoices.length > 0 && !voicesLoading
-                    : googleVoices.length > 0 && !voicesLoading) && (
-                    <>
-                      <select
-                        value={dubVoice}
-                        onChange={(e) => {
-                          setDubVoice(e.target.value);
-                          setPreviewUrl(null);
-                          setPreviewError(false);
-                        }}
-                        className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {(dubEngine === "capcut"
-                          ? capcutVoices
-                          : googleVoices
-                        ).map((v) => (
-                          <option key={v.voice_type} value={v.voice_type}>
-                            {v.display_name} ({v.voice_type})
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={handlePreviewVoice}
-                        disabled={previewing}
-                        className="btn-island-secondary btn-xs chip-active disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        {previewing
-                          ? tr("pipeline.creatingAudio")
-                          : tr("pipeline.previewVoice")}
-                      </button>
-                      {previewUrl && (
-                        <audio
-                          key={previewUrl}
-                          src={previewUrl}
-                          controls
-                          autoPlay
-                          className="h-8"
-                        />
-                      )}
-                      {previewError && (
-                        <span className="text-[11px] text-danger flex items-center gap-1.5">
-                          {tr("pipeline.voiceUnavailable")}
-                        </span>
-                      )}
-                    </>
-                  )}
-                  {voicesLoading && (
-                    <span className="text-[11px] text-ink-light flex items-center gap-1.5">
-                      <IconSpinner className="w-3 h-3" />{" "}
-                      {tr("pipeline.loadingVoices")}{" "}
-                      {dubEngine === "google" ? "Google TTS" : "CapCut"}...
-                    </span>
-                  )}
-                  {!voicesLoading &&
-                    (dubEngine === "capcut"
-                      ? capcutVoices.length === 0
-                      : googleVoices.length === 0) && (
-                      <span className="text-[11px] text-warn flex items-center gap-2">
-                        {tr("pipeline.voicesFailed")}{" "}
-                        {dubEngine === "google"
-                          ? tr("pipeline.voicesFailedGoogle")
-                          : tr("pipeline.voicesFailedCapcut")}
-                        .
-                        <button
-                          onClick={refreshVoices}
-                          className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-warn/15 text-warn/80 ring-1 ring-warn/15 hover:bg-warn/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            } cursor-pointer`}
                         >
-                          {tr("pipeline.retry")}
+                          {l === "zh"
+                            ? tr("pipeline.langZh")
+                            : l === "en"
+                              ? tr("pipeline.langEn")
+                              : tr("pipeline.langVi")}
                         </button>
-                      </span>
-                    )}
-                </div>
-                <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                  {dubEngine === "google"
-                    ? tr("pipeline.dubGoogleHint")
-                    : tr("pipeline.dubCapcutHint")}
-                </p>
-
-                <div className="mt-3 flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                    {tr("pipeline.originalVoice")}
-                  </span>
-                  <div
-                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
-                  >
-                    <button
-                      onClick={() => setMuteOriginal(true)}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                        muteOriginal
-                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                          : "text-ink-light hover:text-ink"
-                      }`}
-                    >
-                      {tr("pipeline.originalVoiceMute")}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setMuteOriginal(false);
-                        setKeepOriginalEnabled(false);
-                      }}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                        !muteOriginal
-                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                          : "text-ink-light hover:text-ink"
-                      }`}
-                    >
-                      {tr("pipeline.originalVoiceKeep")}
-                    </button>
-                  </div>
-                  {!muteOriginal && (
-                    <label className="flex items-center gap-2.5">
-                      <span className="text-[11px] text-ink-muted">
-                        {tr("pipeline.reduceOriginalVoice")}
-                      </span>
-                      <input
-                        type="range"
-                        min={0}
-                        max={30}
-                        step={1}
-                        value={originalGainDb}
-                        onChange={(e) =>
-                          setOriginalGainDb(Number(e.target.value))
-                        }
-                        className="w-40 accent-accent disabled:opacity-40"
-                      />
-                      <span className="text-[12px] font-mono tabular-nums text-accent font-semibold w-10">
-                        -{originalGainDb} dB
-                      </span>
-                    </label>
-                  )}
-                </div>
-                {!muteOriginal && (
-                  <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                    {originalGainDb === 0
-                      ? tr("pipeline.reduceOriginalHintZero")
-                      : tr("pipeline.reduceOriginalHint", {
-                          db: originalGainDb,
-                        })}
-                  </p>
-                )}
-                {muteOriginal && (
-                  <label className="mt-2 flex items-center gap-2.5 cursor-pointer w-fit">
-                    <input
-                      type="checkbox"
-                      checked={keepOriginalEnabled}
-                      onChange={(e) => setKeepOriginalEnabled(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    <span className="text-[11px] text-ink-muted">
-                      Chọn đoạn giữ tiếng gốc (pipeline sẽ dừng để bạn chọn trên
-                      timeline)
-                    </span>
-                  </label>
-                )}
-
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.multiVoice")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {dubEngine === "capcut"
-                          ? tr("pipeline.multiVoiceHint")
-                          : tr("pipeline.multiVoiceCapcutOnly")}
-                      </p>
+                      ))}
                     </div>
-                    <button
-                      type="button"
-                      disabled={dubEngine !== "capcut"}
-                      onClick={() => setMultiVoice(!multiVoice)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                        multiVoice ? "bg-accent" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          multiVoice ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
+                    <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                      {tr("pipeline.sourceLangHint")}
+                    </p>
                   </div>
-                </div>
-
-                <div className="mt-4 border-t border-white/[0.07] pt-4 flex items-center gap-3 flex-wrap">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                    {tr("pipeline.alignSubs")}
-                  </span>
-                  <div
-                    className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
-                  >
-                    <button
-                      onClick={() => setAutoFitSubs(true)}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                        autoFitSubs
+                  <div className="mt-4 flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      {tr("pipeline.scanRegion")}
+                    </span>
+                    <div
+                      className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
+                    >
+                      <button
+                        onClick={() => setRegionMode("auto")}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${regionMode === "auto"
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
-                      }`}
-                    >
-                      {tr("pipeline.alignSubsAutoFit")}
-                    </button>
-                    <button
-                      onClick={() => setAutoFitSubs(false)}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${
-                        !autoFitSubs
+                          }`}
+                      >
+                        {tr("pipeline.regionAuto")}
+                      </button>
+                      <button
+                        onClick={() => setRegionMode("manual")}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${regionMode === "manual"
                           ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                           : "text-ink-light hover:text-ink"
-                      }`}
-                    >
-                      {tr("pipeline.alignSubsManual")}
-                    </button>
+                          }`}
+                      >
+                        {tr("pipeline.regionManual")}
+                      </button>
+                    </div>
+                    <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                      {regionMode === "auto"
+                        ? tr("pipeline.regionAutoHint")
+                        : tr("pipeline.regionManualHint")}
+                    </p>
                   </div>
-                  <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
-                    {autoFitSubs
-                      ? tr("pipeline.alignSubsAutoFitHint")
-                      : tr("pipeline.alignSubsManualHint")}
-                  </p>
+                  <div className="mt-4 border-t border-white/[0.07] pt-4 flex items-center gap-3 flex-wrap">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      {tr("pipeline.alignSubs")}
+                    </span>
+                    <div
+                      className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
+                    >
+                      <button
+                        onClick={() => setAutoFitSubs(true)}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${autoFitSubs
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                          : "text-ink-light hover:text-ink"
+                          }`}
+                      >
+                        {tr("pipeline.alignSubsAutoFit")}
+                      </button>
+                      <button
+                        onClick={() => setAutoFitSubs(false)}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${!autoFitSubs
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                          : "text-ink-light hover:text-ink"
+                          }`}
+                      >
+                        {tr("pipeline.alignSubsManual")}
+                      </button>
+                    </div>
+                    <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                      {autoFitSubs
+                        ? tr("pipeline.alignSubsAutoFitHint")
+                        : tr("pipeline.alignSubsManualHint")}
+                    </p>
+                  </div>
                 </div>
+                <div className={optTab === "voice" ? "" : "hidden"}>
 
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1479,14 +1260,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     <button
                       type="button"
                       onClick={() => setTranslateOn(!translateOn)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        translateOn ? "bg-accent" : "bg-black/10"
-                      }`}
+                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${translateOn ? "bg-accent" : "bg-black/10"
+                        }`}
                     >
                       <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          translateOn ? "left-[22px]" : "left-0.5"
-                        }`}
+                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${translateOn ? "left-[22px]" : "left-0.5"
+                          }`}
                       />
                     </button>
                   </div>
@@ -1500,11 +1279,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           <button
                             key={l}
                             onClick={() => setTranslateTarget(l)}
-                            className={`px-4 py-1.5 rounded-md text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${
-                              translateTarget === l
-                                ? "bg-accent text-white shadow-sm ring-1 ring-accent"
-                                : "text-ink-light hover:text-ink"
-                            } cursor-pointer`}
+                            className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${translateTarget === l
+                              ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                              : "text-ink-light hover:text-ink"
+                              } cursor-pointer`}
                           >
                             {l === "zh"
                               ? tr("pipeline.langZh")
@@ -1519,40 +1297,270 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </p>
                     </div>
                   )}
-                </div>
 
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.autoDub")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.autoDubHint")}
-                      </p>
+                  <div className="mt-4 border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.autoDub")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.autoDubHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDubOn(!dubOn)}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${dubOn ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${dubOn ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setDubOn(!dubOn)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        dubOn ? "bg-accent" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          dubOn ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
+                    {dubOn && (
+                      <p className="mt-3 text-[11px] text-ink-light leading-relaxed">
+                        {tr("pipeline.autoDubHintDetail")}
+                      </p>
+                    )}
                   </div>
-                  {dubOn && (
-                    <p className="mt-3 text-[11px] text-ink-light leading-relaxed">
-                      {tr("pipeline.autoDubHintDetail")}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      {tr("pipeline.dubTitle")}
+                    </span>
+                    <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
+                      {(["vi-VN", "en-US"] as const).map((l) => (
+                        <button
+                          key={l}
+                          onClick={() => {
+                            if (l === voiceLang) return;
+                            setVoiceLang(l);
+                            setPreviewUrl(null);
+                            setPreviewError(false);
+                            setDubVoice(
+                              l === "vi-VN" ? "BV421_vivn_streaming" : "",
+                            );
+                          }}
+                          className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${voiceLang === l
+                            ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                            : "text-ink-light hover:text-ink"
+                            } cursor-pointer`}
+                        >
+                          {l === "vi-VN"
+                            ? tr("pipeline.langVi")
+                            : tr("pipeline.langEn")}
+                        </button>
+                      ))}
+                    </div>
+                    <div
+                      className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
+                    >
+                      <button
+                        onClick={() => switchDubEngine("google")}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${dubEngine === "google"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                          : "text-ink-light hover:text-ink"
+                          }`}
+                      >
+                        Google TTS
+                      </button>
+                      <button
+                        onClick={() => switchDubEngine("capcut")}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${dubEngine === "capcut"
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                          : "text-ink-light hover:text-ink"
+                          }`}
+                      >
+                        CapCut
+                      </button>
+                    </div>
+                    {(dubEngine === "capcut"
+                      ? capcutVoices.length > 0 && !voicesLoading
+                      : googleVoices.length > 0 && !voicesLoading) && (
+                        <>
+                          <select
+                            value={dubVoice}
+                            onChange={(e) => {
+                              setDubVoice(e.target.value);
+                              setPreviewUrl(null);
+                              setPreviewError(false);
+                            }}
+                            className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {(dubEngine === "capcut"
+                              ? capcutVoices
+                              : googleVoices
+                            ).map((v) => (
+                              <option key={v.voice_type} value={v.voice_type}>
+                                {v.display_name} ({v.voice_type})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handlePreviewVoice}
+                            disabled={previewing}
+                            className="btn-island-secondary btn-xs chip-active disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {previewing
+                              ? tr("pipeline.creatingAudio")
+                              : tr("pipeline.previewVoice")}
+                          </button>
+                          {previewUrl && (
+                            <audio
+                              key={previewUrl}
+                              src={previewUrl}
+                              controls
+                              autoPlay
+                              className="h-8"
+                            />
+                          )}
+                          {previewError && (
+                            <span className="text-[11px] text-danger flex items-center gap-1.5">
+                              {tr("pipeline.voiceUnavailable")}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    {voicesLoading && (
+                      <span className="text-[11px] text-ink-light flex items-center gap-1.5">
+                        <IconSpinner className="w-3 h-3" />{" "}
+                        {tr("pipeline.loadingVoices")}{" "}
+                        {dubEngine === "google" ? "Google TTS" : "CapCut"}...
+                      </span>
+                    )}
+                    {!voicesLoading &&
+                      (dubEngine === "capcut"
+                        ? capcutVoices.length === 0
+                        : googleVoices.length === 0) && (
+                        <span className="text-[11px] text-warn flex items-center gap-2">
+                          {tr("pipeline.voicesFailed")}{" "}
+                          {dubEngine === "google"
+                            ? tr("pipeline.voicesFailedGoogle")
+                            : tr("pipeline.voicesFailedCapcut")}
+                          .
+                          <button
+                            onClick={refreshVoices}
+                            className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-warn/15 text-warn/80 ring-1 ring-warn/15 hover:bg-warn/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {tr("pipeline.retry")}
+                          </button>
+                        </span>
+                      )}
+                  </div>
+                  <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                    {dubEngine === "google"
+                      ? tr("pipeline.dubGoogleHint")
+                      : tr("pipeline.dubCapcutHint")}
+                  </p>
+
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      {tr("pipeline.originalVoice")}
+                    </span>
+                    <div
+                      className={`flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] `}
+                    >
+                      <button
+                        onClick={() => setMuteOriginal(true)}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${muteOriginal
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                          : "text-ink-light hover:text-ink"
+                          }`}
+                      >
+                        {tr("pipeline.originalVoiceMute")}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMuteOriginal(false);
+                          setKeepOriginalEnabled(false);
+                        }}
+                        className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] cursor-pointer ${!muteOriginal
+                          ? "bg-accent text-white shadow-sm ring-1 ring-accent"
+                          : "text-ink-light hover:text-ink"
+                          }`}
+                      >
+                        {tr("pipeline.originalVoiceKeep")}
+                      </button>
+                    </div>
+                    {!muteOriginal && (
+                      <label className="flex items-center gap-2.5">
+                        <span className="text-[11px] text-ink-muted">
+                          {tr("pipeline.reduceOriginalVoice")}
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={30}
+                          step={1}
+                          value={originalGainDb}
+                          onChange={(e) =>
+                            setOriginalGainDb(Number(e.target.value))
+                          }
+                          className="w-40 accent-accent disabled:opacity-40"
+                        />
+                        <span className="text-[12px] font-mono tabular-nums text-accent font-semibold w-10">
+                          -{originalGainDb} dB
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                  {!muteOriginal && (
+                    <p className="w-full text-[11px] text-ink-light leading-relaxed mt-1">
+                      {originalGainDb === 0
+                        ? tr("pipeline.reduceOriginalHintZero")
+                        : tr("pipeline.reduceOriginalHint", {
+                          db: originalGainDb,
+                        })}
                     </p>
                   )}
-                </div>
+                  {muteOriginal && (
+                    <label className="mt-2 flex items-center gap-2.5 cursor-pointer w-fit">
+                      <input
+                        type="checkbox"
+                        checked={keepOriginalEnabled}
+                        onChange={(e) => setKeepOriginalEnabled(e.target.checked)}
+                        className="accent-accent"
+                      />
+                      <span className="text-[11px] text-ink-muted">
+                        Chọn đoạn giữ tiếng gốc (pipeline sẽ dừng để bạn chọn trên timeline)
+                      </span>
+                    </label>
+                  )}
 
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
+                  <div className="mt-4 border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.multiVoice")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {dubEngine === "capcut"
+                            ? tr("pipeline.multiVoiceHint")
+                            : tr("pipeline.multiVoiceCapcutOnly")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={dubEngine !== "capcut"}
+                        onClick={() => setMultiVoice(!multiVoice)}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${multiVoice ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${multiVoice ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+
+
+
+                </div>
+                <div className={optTab === "export" ? "" : "hidden"}>
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -1565,14 +1573,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     <button
                       type="button"
                       onClick={() => setWatermarkOn(!watermarkOn)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        watermarkOn ? "bg-accent" : "bg-black/10"
-                      }`}
+                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${watermarkOn ? "bg-accent" : "bg-black/10"
+                        }`}
                     >
                       <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          watermarkOn ? "left-[22px]" : "left-0.5"
-                        }`}
+                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${watermarkOn ? "left-[22px]" : "left-0.5"
+                          }`}
                       />
                     </button>
                   </div>
@@ -1605,224 +1611,212 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </label>
                     </div>
                   )}
-                </div>
 
-                {/* ── Remove Watermark (delogo) ── */}
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.removeWatermark")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.removeWatermarkHint")}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (removeWmEnabled) {
-                          setRemoveWmEnabled(false);
-                          setRemoveWmRegions([]);
-                        } else {
-                          setRemoveWmEnabled(true);
-                        }
-                      }}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        removeWmEnabled ? "bg-danger" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          removeWmEnabled ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                  {removeWmEnabled && (
-                    <p className="text-[11px] text-ink-light mt-2">
-                      {tr("pipeline.removeWatermarkWillPrompt")}
-                    </p>
-                  )}
-                  {removeWmRegions.length > 0 && (
-                    <div className="mt-3 flex items-center gap-3">
-                      <span className="text-[11px] text-green-600">
-                        ✓ {tr("pipeline.removeWatermarkActive")}
-                      </span>
+                  {/* ── Remove Watermark (delogo) ── */}
+                  <div className="mt-4 border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.removeWatermark")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.removeWatermarkHint")}
+                        </p>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
-                          setRemoveWmRegions([]);
-                          setRemoveWmEnabled(false);
+                          if (removeWmEnabled) {
+                            setRemoveWmEnabled(false);
+                            setRemoveWmRegions([]);
+                          } else {
+                            setRemoveWmEnabled(true);
+                          }
                         }}
-                        className="text-[11px] text-danger hover:text-danger cursor-pointer"
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${removeWmEnabled ? "bg-danger" : "bg-black/10"
+                          }`}
                       >
-                        {tr("pipeline.removeWatermarkClear")}
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${removeWmEnabled ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
                       </button>
+                    </div>
+                    {removeWmEnabled && (
+                      <p className="text-[11px] text-ink-light mt-2">
+                        {tr("pipeline.removeWatermarkWillPrompt")}
+                      </p>
+                    )}
+                    {removeWmRegions.length > 0 && (
+                      <div className="mt-3 flex items-center gap-3">
+                        <span className="text-[11px] text-green-600">
+                          ✓ {tr("pipeline.removeWatermarkActive")}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRemoveWmRegions([]);
+                            setRemoveWmEnabled(false);
+                          }}
+                          className="text-[11px] text-danger hover:text-danger cursor-pointer"
+                        >
+                          {tr("pipeline.removeWatermarkClear")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.checkTimeline")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.checkTimelineHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCheckSubs(!checkSubs)}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${checkSubs ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${checkSubs ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 mt-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.checkVoice")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.checkVoiceHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCheckVoice(!checkVoice)}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${checkVoice ? "bg-violet-600" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${checkVoice ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 border-t border-white/[0.07] pt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.falThumbnail")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.falThumbnailHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseFalThumbnail(!useFalThumbnail);
+                          if (!useFalThumbnail) setUseGptThumbnail(false);
+                        }}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${useFalThumbnail ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${useFalThumbnail ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.gptThumbnail")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.gptThumbnailHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseGptThumbnail(!useGptThumbnail);
+                          if (!useGptThumbnail) setUseFalThumbnail(false);
+                        }}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${useGptThumbnail ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${useGptThumbnail ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.autoYoutube")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.autoYoutubeHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAutoUploadYoutube(!autoUploadYoutube)}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${autoUploadYoutube ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${autoUploadYoutube ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {autoUploadYoutube && (
+                    <div className="mt-3 border-t border-white/[0.07] pt-3">
+                      <label className="flex items-center justify-between gap-3">
+                        <span className="text-[11px] text-ink-muted">
+                          {tr("pipeline.youtubeChannel")}
+                        </span>
+                        <select
+                          value={ytChannel}
+                          onChange={(e) => setYtChannel(e.target.value)}
+                          className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
+                        >
+                          <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
+                          {ytChannels.map((ch) => (
+                            <option key={ch.id} value={ch.id}>
+                              {ch.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {ytChannels.length === 0 && (
+                        <p className="text-[10px] text-ink-light mt-1.5">
+                          {tr("pipeline.youtubeChannelEmpty")}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
 
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.checkTimeline")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.checkTimelineHint")}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setCheckSubs(!checkSubs)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        checkSubs ? "bg-accent" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          checkSubs ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 mt-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.checkVoice")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.checkVoiceHint")}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setCheckVoice(!checkVoice)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        checkVoice ? "bg-violet-600" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          checkVoice ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 border-t border-white/[0.07] pt-4 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.falThumbnail")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.falThumbnailHint")}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUseFalThumbnail(!useFalThumbnail);
-                        if (!useFalThumbnail) setUseGptThumbnail(false);
-                      }}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        useFalThumbnail ? "bg-accent" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          useFalThumbnail ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.gptThumbnail")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.gptThumbnailHint")}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUseGptThumbnail(!useGptThumbnail);
-                        if (!useGptThumbnail) setUseFalThumbnail(false);
-                      }}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        useGptThumbnail ? "bg-accent" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          useGptThumbnail ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 border-t border-white/[0.07] pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
-                        {tr("pipeline.autoYoutube")}
-                      </p>
-                      <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
-                        {tr("pipeline.autoYoutubeHint")}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setAutoUploadYoutube(!autoUploadYoutube)}
-                      className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${
-                        autoUploadYoutube ? "bg-accent" : "bg-black/10"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${
-                          autoUploadYoutube ? "left-[22px]" : "left-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                {autoUploadYoutube && (
-                  <div className="mt-3 border-t border-white/[0.07] pt-3">
-                    <label className="flex items-center justify-between gap-3">
-                      <span className="text-[11px] text-ink-muted">
-                        {tr("pipeline.youtubeChannel")}
-                      </span>
-                      <select
-                        value={ytChannel}
-                        onChange={(e) => setYtChannel(e.target.value)}
-                        className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
-                      >
-                        <option value="">
-                          {tr("pipeline.youtubeChannelDefault")}
-                        </option>
-                        {ytChannels.map((ch) => (
-                          <option key={ch.id} value={ch.id}>
-                            {ch.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {ytChannels.length === 0 && (
-                      <p className="text-[10px] text-ink-light mt-1.5">
-                        {tr("pipeline.youtubeChannelEmpty")}
-                      </p>
-                    )}
-                  </div>
-                )}
               </div>
+
             </div>
           </div>
         </AnimatedBlock>
@@ -1833,21 +1827,19 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
             <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] w-max">
               <button
                 onClick={() => setTab("detail")}
-                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
-                  tab === "detail"
-                    ? "bg-accent text-white shadow-sm"
-                    : "text-ink-light hover:text-ink"
-                }`}
+                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${tab === "detail"
+                  ? "bg-accent text-white shadow-sm"
+                  : "text-ink-light hover:text-ink"
+                  }`}
               >
                 {tr("pipeline.tabProgress")}
               </button>
               <button
                 onClick={() => setTab("active")}
-                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
-                  tab === "active"
-                    ? "bg-accent text-white shadow-sm"
-                    : "text-ink-light hover:text-ink"
-                }`}
+                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${tab === "active"
+                  ? "bg-accent text-white shadow-sm"
+                  : "text-ink-light hover:text-ink"
+                  }`}
               >
                 {tr("pipeline.tabActive")}
                 {activeCount > 0 && (
@@ -1858,11 +1850,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
               </button>
               <button
                 onClick={() => setTab("done")}
-                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${
-                  tab === "done"
-                    ? "bg-accent text-white shadow-sm"
-                    : "text-ink-light hover:text-ink"
-                }`}
+                className={`px-5 py-2 rounded-full text-[12px] font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer active:scale-[0.97] ${tab === "done"
+                  ? "bg-accent text-white shadow-sm"
+                  : "text-ink-light hover:text-ink"
+                  }`}
               >
                 {tr("pipeline.tabDone")}
                 {finishedCount > 0 && (
@@ -1909,7 +1900,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
             <div className="double-bezel">
               <div className="double-bezel-inner p-5 sm:p-6">
                 {donePipelines.length === 0 &&
-                historyVideosDone.length === 0 ? (
+                  historyVideosDone.length === 0 ? (
                   <p className="text-sm text-ink-muted text-center py-8">
                     {tr("pipeline.emptyDone")}
                   </p>
@@ -2046,18 +2037,16 @@ function PipelineRow({
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
     if (p.status === "error" && p.failedStep != null) {
-      return `${tr("pipeline.stepError")} ${p.failedStep + 1}/9 · ${
-        STEP_LABEL_KEYS[p.failedStep]
-          ? tr(STEP_LABEL_KEYS[p.failedStep])
-          : p.stage
-      }`;
+      return `${tr("pipeline.stepError")} ${p.failedStep + 1}/9 · ${STEP_LABEL_KEYS[p.failedStep]
+        ? tr(STEP_LABEL_KEYS[p.failedStep])
+        : p.stage
+        }`;
     }
     if (p.status !== "running") return null;
     const idx = STEP_STAGE[p.stage];
     return idx != null
-      ? `${tr("pipeline.stepProgress")} ${idx + 1}/12 · ${
-          STEP_LABEL_KEYS[idx] ? tr(STEP_LABEL_KEYS[idx]) : p.stage
-        }`
+      ? `${tr("pipeline.stepProgress")} ${idx + 1}/12 · ${STEP_LABEL_KEYS[idx] ? tr(STEP_LABEL_KEYS[idx]) : p.stage
+      }`
       : p.stage;
   })();
 
@@ -2131,13 +2120,12 @@ function PipelineRow({
         <div className="flex items-center gap-2 mt-1.5">
           <div className="flex-1 h-1 rounded-full bg-white/[0.08] overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                p.status === "error"
-                  ? "bg-danger"
-                  : p.status === "done"
-                    ? "bg-success"
-                    : "bg-accent"
-              }`}
+              className={`h-full rounded-full transition-all duration-500 ${p.status === "error"
+                ? "bg-danger"
+                : p.status === "done"
+                  ? "bg-success"
+                  : "bg-accent"
+                }`}
               style={{
                 width: `${p.status === "done" ? 100 : Math.max(p.status === "error" ? 0 : p.progress, 2)}%`,
               }}
@@ -2804,13 +2792,12 @@ function DetailView({
             </div>
             <div className="h-2 rounded-full bg-white/[0.08] overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  p.status === "error"
-                    ? "bg-danger"
-                    : p.status === "done"
-                      ? "bg-success"
-                      : "bg-accent"
-                }`}
+                className={`h-full rounded-full transition-all duration-500 ${p.status === "error"
+                  ? "bg-danger"
+                  : p.status === "done"
+                    ? "bg-success"
+                    : "bg-accent"
+                  }`}
                 style={{
                   width: `${p.status === "done" ? 100 : p.status === "error" ? 0 : Math.max(p.progress, 2)}%`,
                 }}
@@ -2826,8 +2813,7 @@ function DetailView({
               const done = i < activeStep || p.status === "done";
               const isFailed =
                 p.status === "error" && failedStep != null && i === failedStep;
-              const active =
-                i === activeStep && p.status !== "done" && !isFailed;
+              const active = i === activeStep && p.status !== "done" && !isFailed;
               const start = p.stepStarts[i];
               const end = p.stepEnds[i];
               const skipped = p.stepSkipped[i];
@@ -2942,13 +2928,11 @@ function DetailView({
                               value={p.watermarkPreset || ""}
                               onChange={async (e) => {
                                 const presetId = e.target.value;
-                                // Lưu active preset về backend trước (giống Settings),
-                                // rồi mới cập nhật pipeline + tiếp tục luồng.
                                 if (presetId) {
                                   try {
                                     await setActiveWatermarkPreset(presetId);
                                   } catch {
-                                    // ignore — vẫn áp cho lần chạy hiện tại
+                                    // ignore
                                   }
                                 }
                                 updatePipeline(p.id, {
@@ -3050,10 +3034,10 @@ function DetailView({
                 {tr("pipeline.logTime")}{" "}
                 {p.startedAt
                   ? fmtElapsed(
-                      (p.status === "done" || p.status === "error"
-                        ? (p.finishedAt ?? now)
-                        : now) - p.startedAt,
-                    )
+                    (p.status === "done" || p.status === "error"
+                      ? (p.finishedAt ?? now)
+                      : now) - p.startedAt,
+                  )
                   : "—"}
               </span>
             </div>
@@ -3200,7 +3184,7 @@ function DetailView({
               src={previewUrl}
               title={tr("pipeline.resultVideoTitle")}
               className="w-full aspect-video rounded-xl ring-1 ring-white/[0.09] bg-black"
-              allow="autoplay; fullscreen"
+              allow="fullscreen"
               allowFullScreen
             />
 
@@ -3310,8 +3294,8 @@ function DetailView({
                   <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
                     {p.timelineCheck.issues.length > 0
                       ? tr("pipeline.timelineCheckIssues", {
-                          count: p.timelineCheck.issues.length,
-                        })
+                        count: p.timelineCheck.issues.length,
+                      })
                       : tr("pipeline.timelineCheckOk")}
                   </p>
                 </div>

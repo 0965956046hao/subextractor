@@ -27,7 +27,13 @@ from app.services.capcut_tts_client import (
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["capcut"])
 
-PREVIEW_TEXT = "Xin chào, đây là giọng đọc CapCut. Bạn có thích giọng này không?"
+PREVIEW_TEXTS: dict[str, str] = {
+    "vi-VN": "Xin chào, đây là giọng đọc CapCut. Bạn có thích giọng này không?",
+    "en-US": "Hello, this is a CapCut voice preview. Do you like this voice?",
+    "zh-CN": "你好，这是CapCut语音预览。你喜欢这个声音吗？",
+    "ja-JP": "こんにちは、これはCapCutの音声プレビューです。この声は好きですか？",
+    "ko-KR": "안녕하세요, đây là bản xem trước giọng nói CapCut. 이 목소리가 마음에 드시나요?",
+}
 PREVIEW_TIMEOUT = 60
 
 
@@ -53,12 +59,14 @@ async def capcut_health():
 async def capcut_preview(body: dict):
     """Generate a short preview MP3 for a voice and return its audio bytes.
 
-    Body: {"voice": "BV421_vivn_streaming", "text": "optional override"}
+    Body: {"voice": "BV421_vivn_streaming", "text": "optional override", "lang": "vi-VN"}
     """
     voice = body.get("voice") or settings.capcut_tts_default_voice
-    text = (body.get("text") or PREVIEW_TEXT).strip()[:200]
+    lang = body.get("lang") or "vi-VN"
+    default_text = PREVIEW_TEXTS.get(lang, PREVIEW_TEXTS["vi-VN"])
+    text = (body.get("text") or default_text).strip()[:200]
     if not text:
-        text = PREVIEW_TEXT
+        text = default_text
 
     try:
         job_id = await run_in_threadpool(

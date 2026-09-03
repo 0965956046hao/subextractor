@@ -21,9 +21,11 @@ export async function uploadVideo(
   file: File,
   onProgress?: (pct: number) => void,
   signal?: AbortSignal,
+  origin: "extract" | "pipeline" = "extract",
 ): Promise<string> {
   const form = new FormData();
   form.append("file", file);
+  form.append("origin", origin);
   const res = await api.post<{ video_id: string }>("/upload", form, {
     headers: { "Content-Type": "multipart/form-data" },
     // File video lớn có thể mất hàng chục phút để upload → timeout 120 phút.
@@ -624,10 +626,11 @@ export async function rewriteSrtLine(
 export async function capCutPreview(
   voice: string,
   text?: string,
+  lang?: string,
 ): Promise<Blob> {
   const res = await api.post<Blob>(
     "/capcut/preview",
-    { voice, text },
+    { voice, text, lang },
     { responseType: "blob" },
   );
   return res.data;
@@ -645,10 +648,11 @@ export async function getGoogleTtsVoices(
 export async function googleTtsPreview(
   voice: string,
   text?: string,
+  lang?: string,
 ): Promise<Blob> {
   const res = await api.post<Blob>(
     "/google-tts/preview",
-    { voice, text },
+    { voice, text, lang },
     { responseType: "blob" },
   );
   return res.data;

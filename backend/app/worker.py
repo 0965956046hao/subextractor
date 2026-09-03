@@ -152,6 +152,7 @@ def _ocr_segment_entries(
     start_time: float,
     end_time: float,
     progress_cb,
+    text_cb=None,
 ) -> list[tuple[float, float, str]]:
     """OCR a single time segment and return its (start, end, text) entries."""
     crops = (
@@ -167,6 +168,7 @@ def _ocr_segment_entries(
         return generate_srt_entries(
             crops, engine,
             progress_callback=progress_cb,
+            text_callback=text_cb,
             total_frames=None,
         )
 
@@ -220,6 +222,15 @@ def process_job_sync(
 
     job["progress"] = 0
 
+    # Stream mỗi câu phụ đề vừa nhận dạng được lên log UI ngay trong bước OCR
+    # (thay vì đợi xong mới dump 1 lần).
+    def text_cb(start: float, end: float, text: str):
+        job_log(
+            job, ws_clients, loop,
+            f"🔤 OCR [{sec_to_srt(start)} → {sec_to_srt(end)}] {text}",
+            "text",
+        )
+
     parts = max(1, len(engine_pool))
     overlap = settings.ocr_parallel_overlap if parts > 1 else 0.0
 
@@ -255,7 +266,7 @@ def process_job_sync(
 
         entries = _ocr_segment_entries(
             video_path, region, target_fps, engine_pool[0], lang,
-            eff_start, eff_end, progress_cb,
+            eff_start, eff_end, progress_cb, text_cb,
         )
 
         job["progress"] = 100
@@ -320,7 +331,7 @@ def process_job_sync(
                 ex.submit(
                     _ocr_segment_entries,
                     video_path, region, target_fps, engine_pool[i], lang,
-                    s, e, make_progress_cb(),
+                    s, e, make_progress_cb(), text_cb,
                 )
                 for i, (s, e) in enumerate(bounds)
             ]
@@ -335,13 +346,13 @@ def process_job_sync(
             "type": "progress", "progress": 100, "phase": "ocr",
         })
 
-    # Log extracted content (ordered, deduped) then format.
-    for start, end, text in entries:
-        job_log(
-            job, ws_clients, loop,
-            f"[{sec_to_srt(start)} → {sec_to_srt(end)}] {text}",
-            "text",
-        )
+    # Nội dung OCR đã được stream lên log UI từng câu qua text_cb trong lúc
+    # nhận dạng. Ở đây chỉ tóm tắt số câu đã trích xuất.
+    job_log(
+        job, ws_clients, loop,
+        f"Đã nhận dạng được {len(entries)} câu phụ đề.",
+        "info",
+    )
 
     srt_content = format_srt(entries)
     t2 = time.time()

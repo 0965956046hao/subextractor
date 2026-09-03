@@ -13,6 +13,8 @@ Endpoints used:
 """
 
 import logging
+import shutil
+import tempfile
 import time
 
 from pathlib import Path
@@ -186,6 +188,35 @@ def generate_segments_to_dir(
             progress_callback(len(written), len(audio_files))
 
     return written
+
+
+def warmup_capcut(
+    voice: str,
+    rate: str = "1.0",
+    text: str = "xin chào",
+    attempts: int = 10,
+) -> bool:
+    """Làm ấm SDK CapCut (health-check) bằng cách sinh 1 đoạn ngắn trước batch.
+
+    Trả True nếu sinh thành công. Dùng trước các batch lớn để tránh các segment
+    đầu bị fail do cold-start của service (lần gọi đầu SDK thường chậm / drop vài
+    đoạn đầu). Thất bại không cản trở batch chính — chỉ mang tính chất kiểm tra
+    và làm ấm kết nối; batch chính vẫn được thử dù warm-up lỗi.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="capcut_warmup_"))
+    try:
+        for _ in range(max(1, attempts)):
+            try:
+                written = generate_segments_to_dir(
+                    [text], tmp, voice=voice, rate=rate, prefix="warmup"
+                )
+                if any(p.exists() and p.stat().st_size > 0 for p in written):
+                    return True
+            except Exception as e:
+                logger.warning("CapCut warmup attempt failed: %s", e)
+        return False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _index_from_filename(name: str, prefix: str) -> int:

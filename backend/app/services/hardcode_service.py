@@ -779,7 +779,7 @@ def run_hardcode_sync(
 
     use_vtb = _has_videotoolbox()
     if use_vtb:
-        v_enc = ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
+        v_enc = ["-c:v", "h264_videotoolbox", "-allow_sw", "1", "-b:v", "8M"]
     else:
         v_enc = ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
 
@@ -804,6 +804,10 @@ def run_hardcode_sync(
         cmd += ["-map", f"[{last_out}]"]
     else:
         cmd += ["-vf", ",".join(vf_parts)]
+        # Map video (qua -vf) rõ ràng. ffmpeg TẮT tự động chọn stream ngay khi
+        # có bất kỳ -map nào → nếu chỉ map audio, video sẽ bị drop và file đầu
+        # ra chỉ có tiếng không có hình.
+        cmd += ["-map", "0:v"]
 
     # Audio mapping
     if use_external_audio:

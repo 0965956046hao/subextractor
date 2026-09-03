@@ -179,6 +179,7 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
             model=settings.gemini_model,
             contents=contents,
             config=config,
+            _timeout=settings.gemini_timeout,
         )
 
     for bi, batch_start in enumerate(range(0, len(entries), STEP)):

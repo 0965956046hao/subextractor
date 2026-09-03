@@ -59,7 +59,7 @@ def _should_retry(e: Exception) -> bool:
 
 gemini_retry = retry(
     wait=wait_random_exponential(min=2, max=10),
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(5),
     retry=retry_if_exception(_should_retry),
     reraise=True,
 )
@@ -116,17 +116,25 @@ def _mask(key: str) -> str:
     return f"{key[:4]}…{key[-4:]}"
 
 
-def genai_generate_content_factory(key: str):
+def genai_generate_content_factory(key: str, timeout: float | None = None):
     """Build a `generate_content` callable that keeps its genai.Client alive.
 
     Do NOT use `lambda key: genai.Client(api_key=key).models.generate_content`
     directly — the temporary client gets garbage-collected (transport closed)
     before the request is sent, raising "Cannot send a request, as the client
     has been closed." This closure holds the client in scope for the call.
+
+    `timeout` (seconds) is forwarded via `http_options` to the client.
     """
     from google import genai
+    from google.genai import types as genai_types
 
-    client = genai.Client(api_key=key)
+    http_options = (
+        genai_types.HttpOptions(timeout=int(timeout * 1000))
+        if timeout is not None
+        else None
+    )
+    client = genai.Client(api_key=key, http_options=http_options)
 
     def _call(*args, **kwargs):
         return client.models.generate_content(*args, **kwargs)
@@ -134,38 +142,37 @@ def genai_generate_content_factory(key: str):
     return _call
 
 
-def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 6, **kwargs):
+def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: float | None = None, **kwargs):
     """Call a Gemini API with automatic key rotation on quota/rate-limit errors.
 
-    `fn_factory(api_key: str)` must return the bound callable to invoke, e.g.
-        `genai_generate_content_factory`
-    which keeps the genai.Client alive (see its docstring).
+    `fn_factory(api_key: str, timeout: float | None)` must return the bound
+    callable to invoke, e.g. `genai_generate_content_factory`.
 
     - No keys configured → raises the friendly "set a key" error.
     - Retryable error (429/RESOURCE_EXHAUSTED/QUOTA/...): rotate to the next key
       and retry, up to `_max_attempts` total (each attempt uses a fresh key).
     - Non-retryable errors are raised immediately.
+    - `_timeout` (seconds) is forwarded to each `generate_content` call.
     """
     keys = configured_gemini_keys()
     if not keys:
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
     last_err: Exception | None = None
-    attempts = max(1, min(_max_attempts, len(keys) * 2 if len(keys) > 1 else _max_attempts))
-    for i in range(attempts):
+    for i in range(_max_attempts):
         key = _next_key(keys)
         try:
-            fn = fn_factory(key)
+            fn = fn_factory(key, timeout=_timeout)
             return fn(*args, **kwargs)
         except Exception as e:
             last_err = e
             if not _should_retry(e):
                 raise
-            if i < attempts - 1:
+            if i < _max_attempts - 1:
                 delay = random.uniform(2, 8)
                 logger.info(
                     "Gemini call failed on key %s (attempt %d/%d): %s — rotating key, backoff %.1fs",
-                    _mask(key), i + 1, attempts, e, delay,
+                    _mask(key), i + 1, _max_attempts, e, delay,
                 )
                 time.sleep(delay)
     raise last_err  # type: ignore[misc]

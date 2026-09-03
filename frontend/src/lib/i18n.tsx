@@ -525,7 +525,7 @@ const dictionaries = {
     "voice.bulkTo": "To voice…",
     "voice.bulkApply": "Apply all",
     "voice.bulkFailed": "Failed to bulk switch voice",
-    "voice.previewText": "Xin chào, đây là giọng đọc thử.",
+    "voice.previewText": "Hello, this is a voice preview.",
     "voice.checkAlignment": "Check alignment",
     "voice.checking": "Checking…",
     "voice.alignmentIssuesFound": "{count} audio longer than SRT",

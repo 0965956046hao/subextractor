@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     # Gemini translation
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_timeout: int = 300  # seconds (5 phút) per API call
 
     # Google Cloud TTS
     google_tts_credentials: str = ""

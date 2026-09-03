@@ -2,7 +2,7 @@ import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from app.config import settings
 
@@ -12,7 +12,10 @@ ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 @router.post("/api/upload")
-async def upload_video(file: UploadFile = File(...)):
+async def upload_video(
+    file: UploadFile = File(...),
+    origin: str = Form("extract"),
+):
     if not file.filename:
         raise HTTPException(400, "No filename provided")
 
@@ -39,8 +42,10 @@ async def upload_video(file: UploadFile = File(...)):
         raise HTTPException(500, f"Upload failed: {e}")
 
     try:
+        if origin not in ("extract", "pipeline"):
+            origin = "extract"
         (video_dir / "meta.json").write_text(
-            json.dumps({"filename": file.filename, "origin": "extract"}),
+            json.dumps({"filename": file.filename, "origin": origin}),
             encoding="utf-8",
         )
     except Exception:
