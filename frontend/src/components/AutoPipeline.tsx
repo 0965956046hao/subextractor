@@ -2592,6 +2592,11 @@ function DetailView({
                   })}
                 </span>
               )}
+              {p.status === "error" && p.stage === "wm_error" && (
+                <span className="text-[10px] text-ink-light">
+                  Nếu file delogo.mp4 đã có sẵn, “Thử lại” sẽ bỏ qua bước này và tiếp tục.
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-ink-light font-mono truncate">
               {p.url}
@@ -2611,6 +2616,14 @@ function DetailView({
                 className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-danger-muted ring-1 ring-danger/15 text-danger hover:bg-danger/10 transition-colors cursor-pointer"
               >
                 {tr("pipeline.cancelProcess")}
+              </button>
+            )}
+            {p.status === "error" && p.stage === "wm_error" && (
+              <button
+                onClick={() => rerunPipeline(p.id, 5)}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-accent-muted ring-1 ring-accent/20 text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+              >
+                Thử lại xoá watermark
               </button>
             )}
             <button
@@ -2706,12 +2719,12 @@ function DetailView({
         )}
 
         {p.thumbnailFallback?.waiting && (
-          <div className="mb-5 p-4 bg-white rounded-xl border border-stone-200 shadow-sm flex items-center justify-between gap-3 flex-wrap">
+          <div className="mb-5 p-4 bg-black rounded-xl border border-stone-700 shadow-sm flex items-center justify-between gap-3 flex-wrap">
             <div className="min-w-0">
-              <p className="text-[12px] font-semibold text-ink">
+              <p className="text-[12px] font-semibold text-white">
                 ChatGPT không tạo được ảnh thumbnail
               </p>
-              <p className="text-[11px] text-ink-muted mt-0.5">
+              <p className="text-[11px] text-stone-300 mt-0.5">
                 Đổi sang fal.ai để tạo thumbnail, hoặc bỏ qua bước này.
               </p>
             </div>

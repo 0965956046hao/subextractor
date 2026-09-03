@@ -79,7 +79,8 @@ export type Stage =
   | "thumbnail_review"
   | "youtube"
   | "done"
-  | "error";
+  | "error"
+  | "wm_error";
 
 export const STEP_STAGE: Record<string, number> = {
   resolving: 0,
@@ -1234,7 +1235,7 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 
 // ── Queue ──────────────────────────────────────────────────────────────────
 
-let queue: { id: string; startStep: number }[] = [];
+let queue: { id: string; startStep: number; force?: boolean }[] = [];
 let processing = false;
 const abortedPipelines = new Set<string>();
 // Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).
@@ -1507,7 +1508,7 @@ function enqueue(id: string, startStep = 0, force = false) {
     );
     return;
   }
-  queue.push({ id, startStep });
+  queue.push({ id, startStep, force });
   processQueue();
 }
 
@@ -1540,8 +1541,8 @@ async function processQueue() {
   if (processing) return;
   if (queue.length === 0) return;
   processing = true;
-  const { id, startStep } = queue.shift()!;
-  await runPipeline(id, startStep);
+  const { id, startStep, force } = queue.shift()!;
+  await runPipeline(id, startStep, force);
   processing = false;
   processQueue();
 }
@@ -2377,18 +2378,46 @@ async function runPipeline(id: string, startStep = 4, force = false) {
           } catch (e) {
             appendLog(
               id,
-              `[wm] Xoá watermark lỗi: ${e instanceof Error ? e.message : e}`,
+              `[wm] Luồng SSE delogo bị ngắt: ${e instanceof Error ? e.message : e} — đang xác nhận kết quả...`,
             );
             delogoFailed = true;
           }
         }
 
+        // Phục hồi: nếu stream SSE bị ngắt (network error) nhưng ffmpeg thực tế
+        // đã xong, hãy xác nhận qua endpoint status thay vì báo lỗi sai.
+        if (delogoFailed) {
+          try {
+            for (let attempt = 0; attempt < 45 && delogoFailed; attempt++) {
+              await new Promise((r) => setTimeout(r, 2000));
+              const st = await fetch(`/api/delogo/${videoId}/status`);
+              if (st.ok) {
+                const sd = await st.json();
+                if (sd.exists && sd.valid) {
+                  delogoFailed = false;
+                  appendLog(
+                    id,
+                    "[wm] delogo.mp4 đã hoàn tất (xác nhận qua status) — tiếp tục.",
+                  );
+                  patch(id, {
+                    progress: 100,
+                    stepProgress: stepProgressFor("watermark_region", 100),
+                  });
+                  break;
+                }
+              }
+            }
+          } catch {
+            // ignore — giữ delogoFailed = true
+          }
+        }
+
         // Nếu delogo thất bại → dừng pipeline (OCR đã chạy xong).
         if (delogoFailed) {
-          patch(id, { status: "error", stage: "error" });
+          patch(id, { status: "error", stage: "wm_error", failedStep: 5 });
           appendLog(
             id,
-            "[wm] Xoá watermark thất bại — dừng pipeline. Vui lòng chọn lại vùng và thử lại.",
+            "[wm] Xoá watermark thất bại. Nếu file delogo.mp4 đã được tạo, nhấn 'Thử lại' để tiếp tục luồng bình thường.",
           );
           return;
         }

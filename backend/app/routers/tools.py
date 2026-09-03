@@ -1106,27 +1106,34 @@ async def delogo_video(
         y2_pixel = int(round(bottom * height))
 
         # --------------------------------------------------------
-        # Clamp coordinates
+        # Clamp coordinates.
+        # FFmpeg's delogo filter (v9.x) requires the logo rectangle
+        # to stay STRICTLY inside the frame: touching any edge
+        # (x==0, y==0, x+w==W or y+h==H) fails with
+        # "Logo area is outside of the frame". Leave a safety margin
+        # so a watermark spanning a screen edge still works.
         # --------------------------------------------------------
 
+        margin = 2
+
         x = max(
-            0,
-            min(x, width - 1)
+            margin,
+            min(x, width - margin)
         )
 
         y = max(
-            0,
-            min(y, height - 1)
+            margin,
+            min(y, height - margin)
         )
 
         x2_pixel = max(
             x + 1,
-            min(x2_pixel, width)
+            min(x2_pixel, width - margin)
         )
 
         y2_pixel = max(
             y + 1,
-            min(y2_pixel, height)
+            min(y2_pixel, height - margin)
         )
 
         # ========================================================
@@ -1223,6 +1230,15 @@ async def delogo_video(
     # ============================================================
     # 7. Build FFmpeg filter
     # ============================================================
+
+    if not delogo_filters:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No valid watermark region after clamping to frame bounds. "
+                "Watermark regions are too small or outside the video."
+            ),
+        )
 
     video_filter = ",".join(
         delogo_filters
@@ -1325,6 +1341,7 @@ async def delogo_video(
         assert proc.stderr is not None
 
         last_progress_pct = 0
+        _hb_counter = [0]
 
         # ffmpeg periodic stats line (frame=… fps=…) — bỏ khỏi log live để dễ đọc
         # (tiến trình % đã được parse riêng từ -progress pipe:1).
@@ -1400,6 +1417,11 @@ async def delogo_video(
             except Empty:
                 if proc.poll() is not None:
                     break
+                # Keepalive: giữ kết nối SSE sống trong lúc encode dài
+                # (proxy/server có thể ngắt kết nối idle trước khi ffmpeg xong).
+                _hb_counter[0] += 1
+                if _hb_counter[0] % 4 == 0:  # ~ mỗi 2s
+                    yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
                 continue
             if item[0] == "log":
                 yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"

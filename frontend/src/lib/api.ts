@@ -94,7 +94,9 @@ export interface ContextImages {
   images: string[];
 }
 
-export async function getContextImages(videoId: string): Promise<ContextImages> {
+export async function getContextImages(
+  videoId: string,
+): Promise<ContextImages> {
   const res = await api.get(`/context-images/${videoId}`);
   return res.data;
 }
@@ -244,11 +246,14 @@ export async function reTranslateLine(
   sourceLang: string,
   targetLang: string,
 ): Promise<string> {
-  const res = await api.post<{ text: string }>(`/srt/${videoId}/re-translate-line`, {
-    index,
-    source_lang: sourceLang,
-    target_lang: targetLang,
-  });
+  const res = await api.post<{ text: string }>(
+    `/srt/${videoId}/re-translate-line`,
+    {
+      index,
+      source_lang: sourceLang,
+      target_lang: targetLang,
+    },
+  );
   return res.data.text;
 }
 
@@ -507,10 +512,11 @@ export async function updateVoiceMapLine(
   index: number,
   voiceType: string,
 ): Promise<{ status: string; index: number; voice_type: string }> {
-  const res = await api.patch<{ status: string; index: number; voice_type: string }>(
-    `/voice-map/${videoId}/line`,
-    { index, voice_type: voiceType },
-  );
+  const res = await api.patch<{
+    status: string;
+    index: number;
+    voice_type: string;
+  }>(`/voice-map/${videoId}/line`, { index, voice_type: voiceType });
   return res.data;
 }
 
@@ -531,10 +537,11 @@ export async function regenerateTtsLine(
   index: number,
   voiceType: string,
 ): Promise<{ status: string; index: number; voice_type: string }> {
-  const res = await api.post<{ status: string; index: number; voice_type: string }>(
-    `/tts/${videoId}/regenerate-line`,
-    { index, voice_type: voiceType },
-  );
+  const res = await api.post<{
+    status: string;
+    index: number;
+    voice_type: string;
+  }>(`/tts/${videoId}/regenerate-line`, { index, voice_type: voiceType });
   return res.data;
 }
 
@@ -542,13 +549,14 @@ export async function rebuildFullAudio(
   videoId: string,
   opts?: { muteOriginal?: boolean; originalGainDb?: number },
 ): Promise<{ status: string; audio_url: string; size: number }> {
-  const res = await api.post<{ status: string; audio_url: string; size: number }>(
-    `/tts/${videoId}/rebuild-full-audio`,
-    {
-      mute_original: opts?.muteOriginal ?? true,
-      original_gain_db: opts?.originalGainDb ?? 0,
-    },
-  );
+  const res = await api.post<{
+    status: string;
+    audio_url: string;
+    size: number;
+  }>(`/tts/${videoId}/rebuild-full-audio`, {
+    mute_original: opts?.muteOriginal ?? true,
+    original_gain_db: opts?.originalGainDb ?? 0,
+  });
   return res.data;
 }
 
@@ -568,10 +576,11 @@ export async function checkTtsAlignment(
   videoId: string,
   lang = "vi",
 ): Promise<{ issues: AlignmentIssue[]; total: number; checked: number }> {
-  const res = await api.get<{ issues: AlignmentIssue[]; total: number; checked: number }>(
-    `/tts/${videoId}/check-alignment`,
-    { params: { lang } },
-  );
+  const res = await api.get<{
+    issues: AlignmentIssue[];
+    total: number;
+    checked: number;
+  }>(`/tts/${videoId}/check-alignment`, { params: { lang } });
   return res.data;
 }
 
@@ -579,11 +588,18 @@ export async function setTtsSpeed(
   videoId: string,
   index: number,
   speed: number,
-): Promise<{ status: string; index: number; speed: number; new_duration: number }> {
-  const res = await api.post<{ status: string; index: number; speed: number; new_duration: number }>(
-    `/tts/${videoId}/set-speed`,
-    { index, speed },
-  );
+): Promise<{
+  status: string;
+  index: number;
+  speed: number;
+  new_duration: number;
+}> {
+  const res = await api.post<{
+    status: string;
+    index: number;
+    speed: number;
+    new_duration: number;
+  }>(`/tts/${videoId}/set-speed`, { index, speed });
   return res.data;
 }
 
