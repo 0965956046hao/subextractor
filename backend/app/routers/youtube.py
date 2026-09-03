@@ -169,6 +169,7 @@ Original description: {body.original_description or "unknown"}
             model=settings.gemini_model,
             contents=prompt,
             config={"temperature": 0.3},
+            _timeout=settings.gemini_timeout,
         )
         raw = response.text.strip()
         # Strip markdown code fences

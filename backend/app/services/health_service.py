@@ -80,6 +80,7 @@ def check_gemini() -> dict:
                 genai_generate_content_factory,
                 model=settings.gemini_model,
                 contents="Reply with exactly: OK",
+                _timeout=settings.gemini_timeout,
             )
             # The key is valid if the call succeeded; text may be empty when the
             # model finishes on MAX_TOKENS. Treat a non-exception response as healthy.
