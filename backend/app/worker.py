@@ -1322,6 +1322,10 @@ async def _apply_pipeline_preset(job: dict) -> str | None:
         job["thumbnail"] = "gpt"
     if cfg.get("autoUploadYoutube") is not None:
         job["auto_upload_youtube"] = bool(cfg["autoUploadYoutube"])
+    if cfg.get("youtubeChannel"):
+        job["youtube_channel"] = str(cfg["youtubeChannel"])
+    if cfg.get("colorFilter"):
+        job["color_filter"] = cfg["colorFilter"]
     if cfg.get("region"):
         job["region"] = cfg["region"]
     if cfg.get("subtitleStyle"):

@@ -27,6 +27,8 @@ function collectCurrentConfig(p: Pipeline): Record<string, unknown> {
     useFalThumbnail: p.useFalThumbnail,
     useGptThumbnail: p.useGptThumbnail,
     autoUploadYoutube: p.autoUploadYoutube,
+    youtubeChannel: p.youtubeChannel,
+    colorFilter: p.colorFilter,
     region: p.region,
     subtitleStyle: p.subtitleStyle,
     removeWatermarkRegions: p.removeWatermarkRegions,
@@ -50,31 +52,54 @@ export default function PipelineSavePanel({
     return (
       <button
         type="button"
-        className="btn-island btn-island-primary"
+        className="btn-island-primary group text-sm !px-5 !py-2.5"
         onClick={() => setOpen(true)}
       >
-        {t("preset.save")}
+        <span className="tracking-tight">{t("preset.save")}</span>
+        <span className="btn-island-icon">
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+            <polyline points="17 21 17 13 7 13 7 21" />
+            <polyline points="7 3 7 8 15 8" />
+          </svg>
+        </span>
       </button>
     );
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-wrap">
       <input
-        className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/20"
+        className="flex-1 min-w-[160px] rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/20"
         placeholder={t("preset.namePlaceholder")}
         value={name}
         onChange={(e) => setName(e.target.value)}
+        autoFocus
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setOpen(false);
+            setName("");
+            setErr("");
+          }
+        }}
       />
       <button
         type="button"
-        className="shrink-0 rounded-xl border border-white/[0.09] bg-accent/90 px-3 py-2 text-[12px] font-medium text-white hover:bg-accent cursor-pointer disabled:opacity-50"
-        disabled={busy}
+        className="btn-island-primary btn-sm disabled:opacity-50"
+        disabled={busy || !name.trim()}
         onClick={async () => {
           setBusy(true);
           setErr("");
           try {
-            await createPipelinePreset(name, collectCurrentConfig(p));
+            await createPipelinePreset(name.trim(), collectCurrentConfig(p));
             setOpen(false);
             setName("");
             onSaved();
@@ -87,7 +112,18 @@ export default function PipelineSavePanel({
       >
         {t("preset.confirm")}
       </button>
-      {err && <span className="text-red-500 text-xs">{err}</span>}
+      <button
+        type="button"
+        className="btn-island-secondary btn-sm"
+        onClick={() => {
+          setOpen(false);
+          setName("");
+          setErr("");
+        }}
+      >
+        {t("preset.cancel")}
+      </button>
+      {err && <span className="text-danger text-xs w-full">{err}</span>}
     </div>
   );
 }

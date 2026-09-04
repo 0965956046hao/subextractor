@@ -294,11 +294,14 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [presetId, setPresetId] = useState<string>("");
   const [pipelinePresets, setPipelinePresets] = useState<PipelinePreset[]>([]);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const presetSnapshotRef = useRef<Record<string, unknown> | null>(null);
   const [presetSeed, setPresetSeed] = useState<{
     region: Region | null;
     subtitleStyle: SubtitleStyle | null;
     removeWatermarkRegions: Region[];
     removeWatermarkEnabled: boolean;
+    colorFilter: import("@/stores/pipeline-store").ColorFilter | null;
   } | null>(null);
 
   useEffect(() => {
@@ -676,6 +679,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       setUseGptThumbnail(cfg.useGptThumbnail);
     if (typeof cfg.autoUploadYoutube === "boolean")
       setAutoUploadYoutube(cfg.autoUploadYoutube);
+    if (typeof cfg.youtubeChannel === "string") setYtChannel(cfg.youtubeChannel);
     setPresetSeed({
       region: (cfg.region as Region | null) ?? null,
       subtitleStyle: (cfg.subtitleStyle as SubtitleStyle | null) ?? null,
@@ -685,7 +689,72 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           ? cfg.removeWatermarkEnabled
           : Array.isArray(cfg.removeWatermarkRegions) &&
             cfg.removeWatermarkRegions.length > 0,
+      colorFilter: (cfg.colorFilter as import("@/stores/pipeline-store").ColorFilter | null) ?? null,
     });
+  };
+
+  const restorePresetSnapshot = () => {
+    const s = presetSnapshotRef.current;
+    if (s) {
+      if (typeof s.srcLang === "string") setSrcLang(s.srcLang as any);
+      if (typeof s.regionMode === "string") setRegionMode(s.regionMode as "manual" | "auto");
+      if (typeof s.translateOn === "boolean") setTranslateOn(s.translateOn);
+      if (typeof s.translateTarget === "string") setTranslateTarget(s.translateTarget as any);
+      if (typeof s.dubOn === "boolean") setDubOn(s.dubOn);
+      if (typeof s.dubEngine === "string") setDubEngine(s.dubEngine as any);
+      if (typeof s.voiceLang === "string") setVoiceLang(s.voiceLang as any);
+      if (typeof s.dubVoice === "string") setDubVoice(s.dubVoice);
+      if (typeof s.muteOriginal === "boolean") setMuteOriginal(s.muteOriginal);
+      if (typeof s.keepOriginalEnabled === "boolean") setKeepOriginalEnabled(s.keepOriginalEnabled);
+      if (typeof s.originalGainDb === "number") setOriginalGainDb(s.originalGainDb);
+      if (typeof s.multiVoice === "boolean") setMultiVoice(s.multiVoice);
+      if (typeof s.autoFitSubs === "boolean") setAutoFitSubs(s.autoFitSubs);
+      if (typeof s.watermarkOn === "boolean") setWatermarkOn(s.watermarkOn);
+      if (typeof s.watermarkPreset === "string") setWatermarkPreset(s.watermarkPreset as any);
+      if (typeof s.removeWatermarkEnabled === "boolean") setRemoveWmEnabled(s.removeWatermarkEnabled);
+      if (typeof s.checkSubs === "boolean") setCheckSubs(s.checkSubs);
+      if (typeof s.checkVoice === "boolean") setCheckVoice(s.checkVoice);
+      if (typeof s.useFalThumbnail === "boolean") setUseFalThumbnail(s.useFalThumbnail);
+      if (typeof s.useGptThumbnail === "boolean") setUseGptThumbnail(s.useGptThumbnail);
+      if (typeof s.autoUploadYoutube === "boolean") setAutoUploadYoutube(s.autoUploadYoutube);
+      if (typeof s.youtubeChannel === "string") setYtChannel(s.youtubeChannel);
+      presetSnapshotRef.current = null;
+    }
+    setPresetSeed(null);
+  };
+
+  const selectPreset = (id: string) => {
+    if (id === presetId) {
+      // Click dòng đang chọn → bỏ chọn, restore config tay
+      setPresetId("");
+      restorePresetSnapshot();
+      setPresetOpen(false);
+      return;
+    }
+    if (!presetId) {
+      // Lưu config tay hiện tại để bỏ chọn thì restore
+      presetSnapshotRef.current = {
+        srcLang, regionMode, translateOn, translateTarget, dubOn,
+        dubEngine, voiceLang, dubVoice, muteOriginal, keepOriginalEnabled,
+        originalGainDb, multiVoice, autoFitSubs, watermarkOn, watermarkPreset,
+        removeWatermarkEnabled: removeWmEnabled, checkSubs, checkVoice,
+        useFalThumbnail, useGptThumbnail, autoUploadYoutube,
+        youtubeChannel: ytChannel,
+      };
+    }
+    setPresetId(id);
+    const p = pipelinePresets.find((x) => x.id === id);
+    if (p) applyPreset(p.config);
+    setPresetOpen(false);
+  };
+
+  const deletePreset = async (id: string) => {
+    await deletePipelinePreset(id);
+    setPipelinePresets((prev) => prev.filter((x) => x.id !== id));
+    if (id === presetId) {
+      setPresetId("");
+      restorePresetSnapshot();
+    }
   };
 
   const handleAdd = () => {
@@ -724,6 +793,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateTarget,
       dubOn,
       voiceLang,
+      presetSeed?.colorFilter ?? null,
     );
     setUrl("");
     setSelectedId(id);
@@ -785,6 +855,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateOn,
       translateTarget,
       dubOn,
+      colorFilter: presetSeed?.colorFilter ?? null,
     });
     setUploaded(null);
     setSelectedId(id);
@@ -1116,40 +1187,76 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </button>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
-                <select
-                  className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 cursor-pointer"
-                  value={presetId}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    setPresetId(id);
-                    const p = pipelinePresets.find((x) => x.id === id);
-                    if (p) applyPreset(p.config);
-                  }}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setPresetOpen((v) => !v)}
+                  className="w-full flex items-center justify-between gap-2 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-accent/20 cursor-pointer"
                 >
-                  <option value="">{t("preset.select")}</option>
-                  {pipelinePresets.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                {presetId && (
-                  <button
-                    type="button"
-                    className="flex items-center justify-center h-[34px] w-[34px] shrink-0 rounded-xl border border-white/[0.09] bg-black/25 text-[12px] text-ink hover:bg-white/[0.06] cursor-pointer"
-                    title={t("preset.delete")}
-                    onClick={async () => {
-                      await deletePipelinePreset(presetId);
-                      setPipelinePresets((prev) =>
-                        prev.filter((x) => x.id !== presetId),
-                      );
-                      setPresetId("");
-                      setPresetSeed(null);
-                    }}
+                  <span className="truncate">
+                    {pipelinePresets.find((x) => x.id === presetId)?.name ?? t("preset.select")}
+                  </span>
+                  <svg
+                    className={`w-3.5 h-3.5 flex-shrink-0 text-ink-muted transition-transform ${presetOpen ? "rotate-180" : ""}`}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   >
-                    ✕
-                  </button>
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                {presetOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setPresetOpen(false)} />
+                    <div className="absolute z-50 left-0 right-0 mt-1.5 rounded-xl border border-white/[0.09] bg-[#1a1a20] shadow-xl overflow-hidden max-h-[240px] overflow-y-auto">
+                      {pipelinePresets.length === 0 && (
+                        <p className="px-3 py-2.5 text-[12px] text-ink-muted text-center">
+                          {t("preset.empty")}
+                        </p>
+                      )}
+                      {pipelinePresets.map((p) => (
+                        <div
+                          key={p.id}
+                          className={`flex items-center gap-1 pr-1 ${p.id === presetId ? "bg-accent/15" : "hover:bg-white/[0.05]"}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => selectPreset(p.id)}
+                            className="flex-1 min-w-0 text-left px-3 py-2 text-[12px] text-ink truncate cursor-pointer"
+                            title={p.id === presetId ? t("preset.deselect") : p.name}
+                          >
+                            {p.id === presetId && <span className="text-accent mr-1.5">✓</span>}
+                            {p.name}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deletePreset(p.id);
+                            }}
+                            title={t("preset.delete")}
+                            className="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg text-ink-muted hover:text-danger hover:bg-danger/15 transition-colors cursor-pointer"
+                          >
+                            <svg
+                              className="w-3.5 h-3.5"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth={1.5}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
               <div className="mt-4 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08] overflow-hidden p-5">
