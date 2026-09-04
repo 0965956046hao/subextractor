@@ -1922,6 +1922,54 @@ async function runPrep(id: string, startStep = 0) {
       }
     }
 
+    // 3.5 Watermark region early selection (collect before heavy processing)
+    // Nếu bật xoá watermark, cho phép kéo chọn vùng ngay sau khi chỉnh vị trí sub
+    // để lưu trước và xử lý một mạch (OCR → delogo → ... không phải dừng giữa chừng).
+    {
+      const curWM = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+      if (curWM?.removeWatermarkEnabled) {
+        const hasRegions = (curWM.removeWatermarkRegions?.length ?? 0) > 0;
+        if (!hasRegions && videoId) {
+          patch(id, { stage: "watermark_region", resumeStep: 4 });
+          appendLog(id, "Kéo chọn vùng watermark cần xoá trên video — có thể chọn nhiều vùng, nhấn Xác nhận để tiếp tục...");
+          // Gửi Telegram Mini App để chọn trên điện thoại (nếu có)
+          try {
+            const tunnelUrl = process.env.NEXT_PUBLIC_TUNNEL_URL ?? "";
+            if (tunnelUrl) {
+              const videoUrl = `${tunnelUrl}/api/video/${videoId}/video.mp4?duration=10`;
+              const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
+                method: "POST",
+                headers: JSON_HEADERS,
+                body: JSON.stringify({
+                  video_url: videoUrl,
+                  button_text: "🧹 Chọn vùng watermark",
+                  mode: "watermark",
+                }),
+              });
+              if (tgRes.ok) {
+                appendLog(id, "[wm] Đã gửi Telegram Mini App để chọn vùng watermark.");
+              }
+            }
+          } catch {
+            // ignore — Telegram not configured
+          }
+          const wmRegions = await waitForWatermarkRegion(id);
+          patch(id, { removeWatermarkRegions: wmRegions });
+          appendLog(
+            id,
+            `[wm] Đã chọn ${wmRegions.length} vùng watermark: ${wmRegions
+              .map(
+                (r, i) =>
+                  `#${i + 1} (${((r.x2 - r.x1) * 100).toFixed(0)}×${((r.y2 - r.y1) * 100).toFixed(0)}%)`,
+              )
+              .join(", ")}`,
+          );
+        } else if (hasRegions) {
+          appendLog(id, `Đã có ${curWM.removeWatermarkRegions.length} vùng watermark — bỏ qua chọn vùng.`);
+        }
+      }
+    }
+
     // Prep done → enqueue the heavy processing into the sequential queue.
     enqueue(id, 4);
   } catch (e) {
