@@ -419,6 +419,34 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
                 indices=missing_indices,
             )
             written_names = {p.name for p in written}
+
+            # Retry failed segments (job succeeded but some segments missing)
+            retry_indices, retry_texts = _find_failed_segments(
+                written_names, missing_indices, missing_texts, prefix="segment"
+            )
+            if retry_indices:
+                if log_fn:
+                    log_fn(f"  ⚠ {len(retry_indices)} segment thất bại, đang retry...", level="warning")
+                retry_written = generate_segments_to_dir(
+                    retry_texts,
+                    out_dir,
+                    voice=voice_name,
+                    rate=rate,
+                    prefix="segment",
+                    progress_callback=cb,
+                    log_fn=log_fn,
+                    indices=retry_indices,
+                )
+                written_names.update({p.name for p in retry_written})
+                # Check if retry still has failures
+                still_failed = _find_failed_segments(
+                    written_names, retry_indices, retry_texts, prefix="segment"
+                )[0]
+                if still_failed:
+                    logger.warning("CapCut TTS retry still failed for %d segments", len(still_failed))
+                    if log_fn:
+                        log_fn(f"  ⚠ Retry vẫn thất bại {len(still_failed)} segment, chèn khoảng lặng.", level="warning")
+
         except Exception as _e:
             # Lỗi service (vd file trả về khổng lồ bị xoá bởi download_audio) →
             # chèn khoảng lặng cho các dòng thiếu thay vì phá toàn bộ job.
@@ -675,6 +703,26 @@ def synthesize_srt_capcut_multi(
             ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
         log_fn(ok_note, level="success" if synth_fail == 0 else "warning")
     return audio_files
+
+
+def _find_failed_segments(
+    written_names: set[str],
+    expected_indices: list[int],
+    expected_texts: list[str],
+    prefix: str = "segment",
+) -> tuple[list[int], list[str]]:
+    """Compare expected segments vs actually written files; return failed (indices, texts).
+
+    Files are named ``{prefix}_{index:04d}.mp3`` per `generate_segments_to_dir` convention.
+    """
+    failed_indices: list[int] = []
+    failed_texts: list[str] = []
+    for idx, text in zip(expected_indices, expected_texts):
+        fname = f"{prefix}_{idx:04d}.mp3"
+        if fname not in written_names:
+            failed_indices.append(idx)
+            failed_texts.append(text)
+    return failed_indices, failed_texts
 
 
 def _create_silence(out_path: Path, duration_sec: float):

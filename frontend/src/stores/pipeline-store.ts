@@ -1936,7 +1936,6 @@ async function runPrep(id: string, startStep = 0) {
       finishedAt: Date.now(),
     });
     reportPipeline(id, true);
-  } finally {
     liveRunners.delete(id);
   }
 }
