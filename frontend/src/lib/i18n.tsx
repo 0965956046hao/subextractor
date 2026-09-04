@@ -436,6 +436,11 @@ const dictionaries = {
     "preview.fontSize": "Font size",
     "preview.marginV": "Bottom margin",
     "preview.marginH": "Horizontal margin",
+    "preview.colors": "Colors",
+    "preview.textColor": "Text color",
+    "preview.outlineColor": "Outline color",
+    "preview.boxColor": "Box color",
+    "preview.outlineWidth": "Outline width",
     "preview.confirm": "Confirm subtitle",
 
     // RegionSelector
@@ -1362,6 +1367,11 @@ const dictionaries = {
     "preview.fontSize": "Cỡ chữ",
     "preview.marginV": "Khoảng cách đáy",
     "preview.marginH": "Khoảng cách ngang",
+    "preview.colors": "Màu sắc",
+    "preview.textColor": "Màu chữ",
+    "preview.outlineColor": "Màu viền",
+    "preview.boxColor": "Màu nền",
+    "preview.outlineWidth": "Độ dày viền",
     "preview.confirm": "Xác nhận phụ đề",
 
     // RegionSelector
