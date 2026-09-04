@@ -15,6 +15,9 @@ import os
 import random
 import threading
 import time
+from collections.abc import Callable
+from contextvars import ContextVar
+import contextlib
 
 from tenacity import (
     retry,
@@ -51,10 +54,57 @@ def _is_retryable(e: Exception) -> bool:
 
 # Trả về True nếu muốn retry (lỗi quá tải), False nếu fail dứt điểm.
 def _should_retry(e: Exception) -> bool:
+    raise_if_gemini_cancelled()
     retryable = _is_retryable(e)
     if retryable:
         logger.info("Gemini transient error (%s), retrying…", e)
     return retryable
+
+
+# ── Cooperative cancellation for Gemini retries ──────────────────────────
+# Worker jobs run in a ThreadPoolExecutor and cancel cooperatively via
+# `job["cancelled"]`. `run_in_executor` does NOT propagate contextvars into
+# the worker thread, so each sync entry point must open the scope itself:
+#   with gemini_cancel_scope(lambda: job.get("cancelled")):
+#       ... gemini calls ...
+# Without this, a cancelled job keeps hammering Gemini until all retry
+# attempts are exhausted (status shows "cancelled" but logs keep flowing).
+CancelCheck = Callable[[], bool]
+
+_cancel_check: ContextVar[CancelCheck | None] = ContextVar(
+    "gemini_cancel_check", default=None
+)
+
+
+@contextlib.contextmanager
+def gemini_cancel_scope(is_cancelled: CancelCheck):
+    """Abort in-flight Gemini retries when `is_cancelled()` becomes True."""
+    token = _cancel_check.set(is_cancelled)
+    try:
+        yield
+    finally:
+        _cancel_check.reset(token)
+
+
+def raise_if_gemini_cancelled() -> None:
+    """Raise JobCancelled if the surrounding cancel scope was triggered."""
+    cb = _cancel_check.get()
+    if cb is not None and cb():
+        from app.services.job_utils import JobCancelled
+
+        raise JobCancelled()
+
+
+def _sleep_interruptible(seconds: float) -> None:
+    """Sleep in small slices so cancellation aborts the backoff promptly."""
+    step = 0.25
+    end = time.time() + seconds
+    while True:
+        raise_if_gemini_cancelled()
+        remaining = end - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(step, remaining))
 
 
 gemini_retry = retry(
@@ -160,6 +210,7 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
 
     last_err: Exception | None = None
     for i in range(_max_attempts):
+        raise_if_gemini_cancelled()
         key = _next_key(keys)
         try:
             fn = fn_factory(key, timeout=_timeout)
@@ -174,7 +225,7 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
                     "Gemini call failed on key %s (attempt %d/%d): %s — rotating key, backoff %.1fs",
                     _mask(key), i + 1, _max_attempts, e, delay,
                 )
-                time.sleep(delay)
+                _sleep_interruptible(delay)
     raise last_err  # type: ignore[misc]
 
 

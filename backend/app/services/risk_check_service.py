@@ -21,11 +21,12 @@ from app.config import settings
 from app.services.media_utils import _srt_path, _srt_best_path
 from app.services.srt_utils import entries_to_srt, parse_srt
 from app.services.gemini_array import build_numbered_payload
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
 from app.services.retry_utils import (
     gemini_call_rotating,
     configured_gemini_keys,
     genai_generate_content_factory,
+    gemini_cancel_scope,
 )
 
 logger = logging.getLogger(__name__)
@@ -250,7 +251,9 @@ def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_i
         def _log(msg: str, level: str = "info"):
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
-        risks = check_subtitle_risks(video_id, lang=lang, log_fn=_log)
+        risks = None
+        with gemini_cancel_scope(lambda: job.get("cancelled")):
+            risks = check_subtitle_risks(video_id, lang=lang, log_fn=_log)
 
         out_dir = settings.temp_dir / "risk_check"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -275,10 +278,13 @@ def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_i
             "type": "done", "progress": 100, "message": "Kiểm tra rủi ro hoàn tất",
         })
 
+    except JobCancelled:
+        raise
     except Exception as e:
         logger.exception("Risk-check failed")
         job["status"] = "error"
         job["error"] = str(e)
         notify_ws_sync(loop, ws_clients, job_id, {
-            "type": "error", "message": f"Lỗi kiểm tra rủi ro: {e}",
+            "type": "error",
+            "message": f"Lỗi kiểm tra rủi ro: {e}",
         })

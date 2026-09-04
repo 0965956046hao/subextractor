@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from app.config import settings
+from app.services.job_utils import JobCancelled
 from app.services.retry_utils import (
     gemini_retry,
     configured_gemini_keys,
@@ -353,6 +354,8 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
         response = gemini_retry(chat.send_message)([*uploaded_files, prompt])
 
         context = response.text.strip()
+    except JobCancelled:
+        raise
     except Exception as e:
         logger.exception("Gemini Vision context generation failed: %s", e)
         return None

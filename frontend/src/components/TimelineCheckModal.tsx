@@ -11,6 +11,7 @@ import {
   getSrtRiskResult,
   validateSrtTimeline,
   reTranslateLine,
+  getOriginalLine,
 } from "@/lib/api";
 import type {
   SrtEntry,
@@ -255,6 +256,9 @@ export default function TimelineCheckModal({
   const [zoom, setZoom] = useState(4);
   const [editingIndex, setEditingIndex] = useState(-1);
   const [retranslatingIndex, setRetranslatingIndex] = useState(-1);
+  const [originalTexts, setOriginalTexts] = useState<Record<number, string>>({});
+  const [originalOpen, setOriginalOpen] = useState<Record<number, boolean>>({});
+  const [loadingOriginalIndex, setLoadingOriginalIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const riskAbortRef = useRef<AbortController | null>(null);
@@ -433,6 +437,30 @@ export default function TimelineCheckModal({
     });
   }, [recomputeTimelineIssues]);
 
+  const toggleOriginalText = useCallback(
+    async (index: number) => {
+      if (originalOpen[index]) {
+        setOriginalOpen((prev) => ({ ...prev, [index]: false }));
+        return;
+      }
+      if (originalTexts[index] !== undefined) {
+        setOriginalOpen((prev) => ({ ...prev, [index]: true }));
+        return;
+      }
+      setLoadingOriginalIndex(index);
+      try {
+        const res = await getOriginalLine(videoId, index);
+        setOriginalTexts((prev) => ({ ...prev, [index]: res.text }));
+        setOriginalOpen((prev) => ({ ...prev, [index]: true }));
+      } catch (e) {
+        setCheckError(e instanceof Error ? e.message : t("timeline.originalFailed" as string));
+      } finally {
+        setLoadingOriginalIndex(-1);
+      }
+    },
+    [videoId, originalOpen, originalTexts]
+  );
+
   const reTranslateEntry = useCallback(
     async (index: number) => {
       setRetranslatingIndex(index);
@@ -452,6 +480,16 @@ export default function TimelineCheckModal({
   );
 
   const deleteEntry = useCallback((index: number) => {
+    setOriginalTexts((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
+    setOriginalOpen((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
     setEntries((prev) => {
       const next = prev.filter((e) => e.index !== index).map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
       setTimeout(() => recomputeTimelineIssues(next), 0);
@@ -678,6 +716,9 @@ export default function TimelineCheckModal({
     setActiveIndex(-1);
     setCheckError("");
     setLoadError("");
+    setOriginalTexts({});
+    setOriginalOpen({});
+    setLoadingOriginalIndex(-1);
     try {
       const es = await getSrtEntries(videoId);
       setEntries(es);
@@ -912,6 +953,25 @@ export default function TimelineCheckModal({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            toggleOriginalText(entry.index);
+                          }}
+                          disabled={loadingOriginalIndex === entry.index}
+                          className="text-[10px] font-medium text-ink-muted hover:text-sky-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1 disabled:opacity-60 disabled:cursor-wait"
+                          title={t("timeline.viewOriginalTitle" as string)}
+                        >
+                          {loadingOriginalIndex === entry.index ? (
+                            <IconSpinner className="w-3 h-3" />
+                          ) : (
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          )}
+                          {t("timeline.viewOriginal" as string)}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
                             reTranslateEntry(entry.index);
                           }}
                           disabled={retranslatingIndex === entry.index}
@@ -974,13 +1034,21 @@ export default function TimelineCheckModal({
                             isIssue
                               ? "text-danger"
                               : isRisk
-                              ? "text-amber-800"
-                              : active
-                                ? "text-accent font-medium"
-                                : "text-ink"
+                                ? "text-amber-800"
+                                : active
+                                  ? "text-accent font-medium"
+                                  : "text-ink"
                           }`}
                         >
                           {entry.text}
+                        </p>
+                      )}
+                      {originalOpen[entry.index] && originalTexts[entry.index] !== undefined && (
+                        <p className="text-[11px] leading-snug mt-1 pl-2 border-l-2 border-sky-400/50 text-ink-light italic line-clamp-3">
+                          <span className="not-italic font-medium text-sky-400/90">
+                            {t("timeline.originalLabel" as string)}{" "}
+                          </span>
+                          {originalTexts[entry.index]}
                         </p>
                       )}
                       {risk?.note && (

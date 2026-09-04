@@ -39,7 +39,7 @@ export const STEPS = [
   { label: "OCR trích phụ đề", detail: "Nhận dạng chữ trong vùng đã chọn" },
   {
     label: "Xoá watermark",
-    detail: "Chọn vùng & FFmpeg delogo xoá watermark (có thể tắt)",
+    detail: "Chọn vùng trước OCR, FFmpeg delogo sau OCR (có thể tắt)",
   },
   { label: "Phân tích ngữ cảnh", detail: "Gemini Vision phân tích video" },
   {
@@ -710,18 +710,26 @@ export const usePipelineStore = create<PipelineState>()(
       confirmWatermarkRegions: (id, regions) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
+        // Chọn vùng giờ diễn ra trước OCR (runPrep): quay lại subtitle_preview.
+        // Nếu phụ đề đã xong (chờ sau OCR, pipeline cũ) thì sang delogo như trước.
+        const needStyle = !s.autoFit && !s.subtitleStyle;
         set((st) => ({
           pipelines: st.pipelines.map((p) =>
             p.id === id
               ? {
                   ...p,
                   removeWatermarkRegions: regions,
-                  stage: "wm_delogo",
+                  stage: needStyle ? "subtitle_preview" : "wm_delogo",
                 }
               : p,
           ),
         }));
         confirmWatermarkRegionAction(id, regions);
+        // Pipeline khôi phục sau reload: không còn runner sống → chạy tiếp.
+        if (!liveRunners.has(id)) {
+          if (needStyle) runPrep(id, s.resumeStep ?? 3);
+          else enqueue(id, 5);
+        }
       },
       confirmKeepOriginal: (id, ranges) => {
         patch(id, { keepOriginalRanges: ranges });
@@ -1979,6 +1987,58 @@ async function runPrep(id: string, startStep = 0) {
       }
     }
 
+    // 2.5 Watermark region (early): chọn vùng TRƯỚC OCR để user không phải
+    // chờ giữa pipeline. FFmpeg delogo vẫn chạy sau OCR trong runPipeline.
+    if (startStep <= 3) {
+      const prep = usePipelineStore
+        .getState()
+        .pipelines.find((x) => x.id === id);
+      if (prep?.removeWatermarkEnabled) {
+        const storedWm = prep.removeWatermarkRegions ?? [];
+        if (storedWm.length === 0) {
+          patch(id, { stage: "watermark_region", resumeStep: 3 });
+          appendLog(
+            id,
+            "[wm] Kéo vùng watermark cần xoá trên video (chọn trước khi OCR)...",
+          );
+
+          // Send Telegram Mini App button for watermark selection.
+          // Domain lấy từ NEXT_PUBLIC_TUNNEL_URL (frontend/.env.local).
+          if (videoId) {
+            try {
+              const wmVideoUrl = `${process.env.NEXT_PUBLIC_TUNNEL_URL ?? ""}/api/video/${videoId}/video.mp4?duration=10`;
+              const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
+                method: "POST",
+                headers: JSON_HEADERS,
+                body: JSON.stringify({
+                  video_url: wmVideoUrl,
+                  button_text: "🖼️ Chọn vùng watermark",
+                  mode: "watermark",
+                }),
+              });
+              if (tgRes.ok) {
+                appendLog(id, "[wm] Đã gửi Telegram Mini App để chọn vùng.");
+              }
+            } catch {
+              // ignore — Telegram not configured or failed
+            }
+          }
+
+          const wmRegions = await waitForWatermarkRegion(id);
+          patch(id, { removeWatermarkRegions: wmRegions });
+          appendLog(
+            id,
+            `[wm] Đã chọn ${wmRegions.length} vùng — delogo sẽ chạy sau OCR.`,
+          );
+        } else {
+          appendLog(
+            id,
+            `[wm] Đã có ${storedWm.length} vùng watermark — bỏ qua chọn lại.`,
+          );
+        }
+      }
+    }
+
     // 3. Subtitle style preview: only when NOT auto-fit (manual adjust).
     if (startStep <= 3) {
       if (cur.autoFit) {
@@ -2245,8 +2305,12 @@ async function runPipeline(id: string, startStep = 4, force = false) {
     if (startStep <= 5 && cur.removeWatermarkEnabled) {
       markStepStart(id, 5);
 
-      // 5a. Chọn vùng watermark nếu chưa có
-      if (cur.removeWatermarkRegions.length === 0) {
+      // 5a. Vùng watermark thường đã được chọn trước OCR (runPrep).
+      // Fallback cho pipeline cũ: chờ chọn 1 lần nếu vẫn chưa có.
+      const preWm =
+        usePipelineStore.getState().pipelines.find((x) => x.id === id)
+          ?.removeWatermarkRegions ?? [];
+      if (preWm.length === 0) {
         patch(id, { stage: "watermark_region", resumeStep: 5 });
         appendLog(id, "[wm] Chờ kéo vùng watermark cần xoá trên video...");
 
@@ -2282,6 +2346,11 @@ async function runPipeline(id: string, startStep = 4, force = false) {
                 `#${i + 1} (${((r.x2 - r.x1) * 100).toFixed(0)}×${((r.y2 - r.y1) * 100).toFixed(0)}%)`,
             )
             .join(", ")}`,
+        );
+      } else {
+        appendLog(
+          id,
+          `[wm] Dùng ${preWm.length} vùng đã chọn trước OCR — bỏ qua bước chọn.`,
         );
       }
 
@@ -3288,6 +3357,13 @@ async function runRestorePaused() {
 
       // Interactive waits: nothing to do — the confirm/resolve handlers resume.
       if (p.stage === "region" || p.stage === "subtitle_preview") continue;
+      // Watermark selection now happens up-front in prep (before OCR):
+      // resume prep so the user can pick regions. Legacy post-OCR wait
+      // (resumeStep 5) falls through to the heavy resume below.
+      if (p.stage === "watermark_region" && (p.resumeStep ?? 5) <= 3) {
+        runPrep(p.id, p.resumeStep ?? 3);
+        continue;
+      }
       if (p.stage === "thumbnail_review") continue;
       if (p.timelineCheck?.waiting) continue;
 

@@ -12,12 +12,14 @@ from app.services.context_service import (
     append_translation_context,
     _load_capcut_voice_catalog,
 )
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
 from app.services.gemini_array import build_numbered_payload, gemini_map_texts
 from app.services.retry_utils import (
     configured_gemini_keys,
     gemini_call_rotating,
     genai_generate_content_factory,
+    gemini_cancel_scope,
+    raise_if_gemini_cancelled,
 )
 
 logger = logging.getLogger(__name__)
@@ -323,6 +325,7 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
     total_batches = (total + batch_size - 1) // batch_size
 
     for bi, batch_start in enumerate(range(0, total, batch_size)):
+        raise_if_gemini_cancelled()
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
 
@@ -637,6 +640,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     total_batches = (len(entries) + batch_size - 1) // batch_size
 
     for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
+        raise_if_gemini_cancelled()
         batch = entries[batch_start:batch_start + batch_size]
         texts = [e.text for e in batch]
 
@@ -748,15 +752,16 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
                 "phase": "translating",
             })
 
-        result = translate_srt(
-            video_id,
-            source_lang=job.get("source_lang", "zh"),
-            target_lang=job.get("target_lang", "vi"),
-            use_custom_srt=job.get("use_custom_srt", False),
-            multi_voice=job.get("multi_voice", False),
-            log_fn=_log,
-            progress_callback=_progress,
-        )
+        with gemini_cancel_scope(lambda: job.get("cancelled")):
+            result = translate_srt(
+                video_id,
+                source_lang=job.get("source_lang", "zh"),
+                target_lang=job.get("target_lang", "vi"),
+                use_custom_srt=job.get("use_custom_srt", False),
+                multi_voice=job.get("multi_voice", False),
+                log_fn=_log,
+                progress_callback=_progress,
+            )
 
         job["progress"] = 100
         job["phase"] = "done"
@@ -768,6 +773,8 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             "message": "Dịch hoàn tất",
         })
 
+    except JobCancelled:
+        raise
     except Exception as e:
         logger.exception("Translation failed")
         job["status"] = "error"

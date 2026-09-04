@@ -1872,6 +1872,12 @@ async def run_risk_check_job(
         job["progress"] = 100
         await job_log_async(job, ws_clients, "Kiểm tra rủi ro hoàn tất.", "success")
 
+    except JobCancelled:
+        logger.info("risk_check job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy kiểm tra rủi ro.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
     except asyncio.TimeoutError:
         logger.error("risk_check job %s: TIMEOUT", job_id)
         job["status"] = "error"
@@ -1901,10 +1907,16 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
         await notify_ws(ws_clients, job_id, {"type": "progress", "progress": 20, "phase": "context"})
 
         loop = asyncio.get_event_loop()
-        context = await loop.run_in_executor(
-            _executor,
-            lambda: generate_video_context(video_id, target_lang=target_lang),
-        )
+
+        def _run():
+            from app.services.retry_utils import gemini_cancel_scope
+            with gemini_cancel_scope(lambda: job.get("cancelled")):
+                return generate_video_context(video_id, target_lang=target_lang)
+
+        context = await loop.run_in_executor(_executor, _run)
+
+        if job.get("cancelled"):
+            raise JobCancelled()
 
         if context:
             job["status"] = "done"
@@ -1917,6 +1929,12 @@ async def run_context_job(jobs: dict, ws_clients: dict, job_id: str):
             await job_log_async(job, ws_clients, "Không tìm thấy ảnh ngữ cảnh để phân tích.", "warn")
             await notify_ws(ws_clients, job_id, {"type": "done", "progress": 100})
 
+    except JobCancelled:
+        logger.info("context job %s: cancelled", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        await job_log_async(job, ws_clients, "Đã hủy phân tích ngữ cảnh.", "warn")
+        await notify_ws(ws_clients, job_id, {"type": "cancelled"})
     except Exception as e:
         logger.exception("context job %s: FAILED", job_id)
         job["status"] = "error"

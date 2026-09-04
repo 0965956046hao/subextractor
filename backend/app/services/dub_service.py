@@ -19,7 +19,8 @@ from app.services.media_utils import (
     _get_audio_duration,
     _merge_audio_path,
 )
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
+from app.services.retry_utils import gemini_cancel_scope
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
 from app.services.translation_service import load_voice_map, generate_voice_map
 
@@ -737,17 +738,19 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         def _log(msg: str, level: str = "info"):
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
-        out = dub_audio_only(
-            video_id,
-            voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
-            tts_engine=job.get("tts_engine", "google"),
-            mute_original=job.get("mute_original", True),
-            original_gain_db=job.get("original_gain_db", 0.0),
-            multi_voice=job.get("multi_voice", False),
-            progress_callback=progress,
-            log_fn=_log,
-            keep_ranges=job.get("keep_ranges"),
-        )
+        out = None
+        with gemini_cancel_scope(lambda: job.get("cancelled")):
+            out = dub_audio_only(
+                video_id,
+                voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
+                tts_engine=job.get("tts_engine", "google"),
+                mute_original=job.get("mute_original", True),
+                original_gain_db=job.get("original_gain_db", 0.0),
+                multi_voice=job.get("multi_voice", False),
+                progress_callback=progress,
+                log_fn=_log,
+                keep_ranges=job.get("keep_ranges"),
+            )
 
         job["status"] = "done"
         job["progress"] = 100
@@ -756,6 +759,8 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "done", "progress": 100, "video_id": video_id,
         })
+    except JobCancelled:
+        raise
     except Exception as e:
         logger.exception("dub failed")
         job["status"] = "error"

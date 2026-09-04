@@ -324,6 +324,33 @@ async def re_translate_srt_line(video_id: str, request: Request):
     return {"status": "ok", "index": index, "text": new_text}
 
 
+# ── GET /api/srt/{video_id}/original-line ──
+# Read the source-language text of ONE SRT line (same resolution as re-translate:
+# subtitles_original.srt by index, fallback to the current line text).
+
+@router.get("/api/srt/{video_id}/original-line")
+async def get_original_srt_line(video_id: str, index: int = Query(..., ge=1)):
+    srt_path = _srt_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    entry = next((e for e in current_entries if e.index == index), None)
+    if entry is None:
+        raise HTTPException(404, f"Không tìm thấy dòng #{index}")
+
+    source_text = entry.text
+    has_original = False
+    orig_path = srt_path.with_name("subtitles_original.srt")
+    if orig_path.exists():
+        orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
+        src = next((e for e in orig_entries if e.index == index), None)
+        if src is not None:
+            source_text = src.text
+            has_original = True
+
+    return {"index": index, "text": source_text, "has_original": has_original}
+
+
 # ── POST /api/srt/{video_id}/rewrite-line ──
 # Rewrite a single SRT line using Gemini (make it shorter, keep meaning).
 

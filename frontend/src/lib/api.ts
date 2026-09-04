@@ -265,6 +265,17 @@ export async function updateSrt(
   await api.put(`/srt/${videoId}`, { content });
 }
 
+export async function getOriginalLine(
+  videoId: string,
+  index: number,
+): Promise<{ index: number; text: string; has_original: boolean }> {
+  const res = await api.get<{ index: number; text: string; has_original: boolean }>(
+    `/srt/${videoId}/original-line`,
+    { params: { index } },
+  );
+  return res.data;
+}
+
 export async function reTranslateLine(
   videoId: string,
   index: number,
