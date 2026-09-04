@@ -187,8 +187,31 @@ export async function openBrowser(options?: {
 
 /** Kill any Chrome/Cốc Cốc running with the given user-data-dir (profile lock). */
 export function killChromeOnProfile(profileDir: string): void {
+  // Windows: pgrep không tồn tại -> dùng WMIC / tasklist để tìm process có --user-data-dir
+  if (process.platform === "win32") {
+    try {
+      const out = execSync(
+        `wmic process where "CommandLine like '%user-data-dir=${profileDir.replace(/\\/g, "\\\\")}%' and Name like '%chrome%' or Name like '%browser%'" get ProcessId /format:list`,
+        { encoding: "utf8" },
+      );
+      const pids = [...out.matchAll(/ProcessId=(\d+)/g)].map((m) => m[1]);
+      for (const pid of pids) {
+        try {
+          process.kill(Number(pid), "SIGTERM");
+        } catch {}
+      }
+      if (pids.length) return;
+      // Fallback: tasklist + findstr (WMIC may be deprecated on Win11)
+      try {
+        const taskOut = execSync('tasklist /FI "IMAGENAME eq chrome.exe" /FO CSV /NH', { encoding: "utf8" });
+        // Không giết hàng loạt nếu không match chính xác profile - tránh kill Chrome người dùng
+      } catch {}
+    } catch {
+      // no matches
+    }
+    return;
+  }
   try {
-    const browserName = IS_COC_COC ? "coccoc" : "chrome";
     const out = execSync(`pgrep -f "user-data-dir=${profileDir}"`, {
       encoding: "utf8",
     });
