@@ -367,6 +367,15 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
     # files are reused as-is, so a retry continues from where it left off.
     # Lines whose content is ≥80% similar to the previous line are skipped:
     # no voice API call — a silent placeholder is created instead.
+    # Load previous failure-silence marker to force retry for first sentences
+    failed_marker = out_dir / ".failed_silence.json"
+    failed_silence: set[int] = set()
+    try:
+        if failed_marker.exists():
+            failed_silence = set(json.loads(failed_marker.read_text(encoding="utf-8")))
+    except Exception:
+        failed_silence = set()
+
     missing_indices: List[int] = []
     missing_texts: List[str] = []
     silent_indices: set[int] = set()
@@ -376,6 +385,13 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         target = out_dir / f"{idx:04d}.mp3"
         if not entry.text.strip():
             continue
+        # If this idx was a previous failure-silence, force regenerate (delete stale silence)
+        if idx in failed_silence and target.exists():
+            try:
+                target.unlink()
+            except Exception:
+                pass
+            failed_silence.discard(idx)
         if target.exists() and target.stat().st_size > 0:
             prev_text = entry.text.strip()
             continue
@@ -387,6 +403,14 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         missing_indices.append(idx)
         missing_texts.append(entry.text.strip())
         prev_text = entry.text.strip()
+    # Persist updated failed list (cleared entries that will be retried)
+    try:
+        if failed_silence:
+            failed_marker.write_text(json.dumps(sorted(failed_silence)), encoding="utf-8")
+        elif failed_marker.exists():
+            failed_marker.unlink(missing_ok=True)
+    except Exception:
+        pass
 
     written_names = set()
     if missing_texts:
@@ -422,9 +446,19 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         except Exception as _e:
             # Lỗi service (vd file trả về khổng lồ bị xoá bởi download_audio) →
             # chèn khoảng lặng cho các dòng thiếu thay vì phá toàn bộ job.
+            # Đánh dấu failed_silence để lần sau retry thay vì cache silence.
             logger.warning("CapCut TTS lỗi (có thể do file khổng lồ): %s", _e)
             if log_fn:
                 log_fn(f"  ⚠ CapCut TTS lỗi: {_e}. Các dòng thiếu sẽ chèn khoảng lặng.", level="warning")
+            new_failed = set(missing_indices)
+            try:
+                existing = set()
+                if failed_marker.exists():
+                    existing = set(json.loads(failed_marker.read_text(encoding="utf-8")))
+                existing.update(new_failed)
+                failed_marker.write_text(json.dumps(sorted(existing)), encoding="utf-8")
+            except Exception:
+                pass
             for idx in missing_indices:
                 sp = out_dir / f"{idx:04d}.mp3"
                 _create_silence(sp, max(entries[idx - 1].end - entries[idx - 1].start, 0.5))
@@ -467,6 +501,15 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         synth_fail += 1
         if log_fn:
             log_fn(f"  ✗ Dòng {idx}/{total}: thất bại (chèn khoảng lặng)", level="warning")
+        # Mark for retry next run
+        try:
+            existing = set()
+            if failed_marker.exists():
+                existing = set(json.loads(failed_marker.read_text(encoding="utf-8")))
+            existing.add(idx)
+            failed_marker.write_text(json.dumps(sorted(existing)), encoding="utf-8")
+        except Exception:
+            pass
         silent_path = out_dir / f"{idx:04d}.mp3"
         _create_silence(silent_path, max(entry.end - entry.start, 0.5))
         audio_files.append(silent_path)
@@ -482,6 +525,16 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         if synth_fail:
             ok_note += f" {synth_fail} dòng lỗi (đã chèn khoảng lặng)."
         log_fn(ok_note, level="success" if (synth_fail == 0 and silenced == 0) else "warning")
+    # Clear failed marker if all succeeded
+    if synth_fail == 0 and failed_marker.exists() and not missing_texts:
+        try:
+            # Remove entries that are now successful from marker
+            data = set(json.loads(failed_marker.read_text(encoding="utf-8")))
+            # Keep only those still missing (should be none)
+            if not data.intersection(set(range(1, total + 1))):
+                failed_marker.unlink(missing_ok=True)
+        except Exception:
+            pass
     return audio_files
 
 

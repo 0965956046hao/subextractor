@@ -2,12 +2,26 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import type { Region } from "@/lib/api";
+import { testOcrColor } from "@/lib/api";
 import VideoPlayer from "@/components/VideoPlayer";
 import { useI18n } from "@/lib/i18n";
+import type { ColorFilter } from "@/stores/pipeline-store";
+import { DEFAULT_COLOR_FILTER } from "@/stores/pipeline-store";
 
 interface Props {
   videoId: string;
-  onConfirmed: (region: Region, startTime?: number) => void;
+  onConfirmed: (region: Region, startTime?: number, colorFilter?: ColorFilter | null) => void;
+  initialColorFilter?: ColorFilter | null;
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const m = hex.trim().match(/^#?([0-9a-fA-F]{6})$/);
+  if (!m) return [255, 255, 255];
+  const h = m[1];
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  return `#${[r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
 }
 
 const HANDLE_RADIUS = 6;
@@ -37,7 +51,7 @@ type DragState =
   | { type: "move"; startX: number; startY: number; rect: Region }
   | { type: "resize"; handle: HandleId; startX: number; startY: number; rect: Region };
 
-export default function RegionSelector({ videoId, onConfirmed }: Props) {
+export default function RegionSelector({ videoId, onConfirmed, initialColorFilter }: Props) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -52,6 +66,11 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [startTime, setStartTime] = useState<number | null>(null);
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(initialColorFilter ?? DEFAULT_COLOR_FILTER);
+  const [eyedropper, setEyedropper] = useState(false);
+  const previewRef = useRef<HTMLCanvasElement>(null);
+  const [testText, setTestText] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
 
   // ── Canvas rendering ──
   const redraw = useCallback(() => {
@@ -114,6 +133,68 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
     if (size.w > 0 && size.h > 0) { scheduleRedraw(); }
   }, [size, scheduleRedraw]);
 
+  // ── Eyedropper ──
+  const handleEyedropperPick = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const c = canvasRef.current;
+    const v = videoRef.current;
+    if (!c || !v) return;
+    // Draw current video frame to offscreen canvas to sample color
+    const off = document.createElement("canvas");
+    off.width = c.width;
+    off.height = c.height;
+    const ctx = off.getContext("2d");
+    if (!ctx) return;
+    try {
+      ctx.drawImage(v, 0, 0, off.width, off.height);
+      const rect = c.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left) * (off.width / rect.width));
+      const y = Math.round((e.clientY - rect.top) * (off.height / rect.height));
+      const data = ctx.getImageData(Math.max(0, Math.min(x, off.width - 1)), Math.max(0, Math.min(y, off.height - 1)), 1, 1).data;
+      setColorFilter((prev) => ({ ...prev, color: rgbToHex(data[0], data[1], data[2]), enabled: true }));
+    } catch {}
+    setEyedropper(false);
+  }, []);
+
+  // ── Preview mask ──
+  useEffect(() => {
+    const c = previewRef.current;
+    const v = videoRef.current;
+    const r = rectRef.current;
+    if (!c || !v || !r || !colorFilter.enabled) {
+      if (c) {
+        const ctx = c.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, c.width, c.height);
+      }
+      return;
+    }
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const w = c.width, h = c.height;
+    // Draw cropped region
+    const vw = v.videoWidth || w;
+    const vh = v.videoHeight || h;
+    const sx = r.x1 * vw, sy = r.y1 * vh, sw = (r.x2 - r.x1) * vw, sh = (r.y2 - r.y1) * vh;
+    if (sw <= 0 || sh <= 0) return;
+    ctx.clearRect(0, 0, w, h);
+    try {
+      ctx.drawImage(v, sx, sy, sw, sh, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      const [tr, tg, tb] = hexToRgb(colorFilter.color);
+      const luma = 0.299 * tr + 0.587 * tg + 0.114 * tb;
+      const bg = luma > 128 ? 0 : 255;
+      const tol = colorFilter.tolerance;
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const dr = d[i] - tr, dg = d[i + 1] - tg, db = d[i + 2] - tb;
+        const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+        if (dist > tol) {
+          d[i] = bg; d[i + 1] = bg; d[i + 2] = bg;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    } catch {}
+  }, [colorFilter, rect, currentTime, size]);
+
   // ── Pointer events ──
   const getPos = (cx: number, cy: number) => {
     const b = canvasRef.current?.getBoundingClientRect();
@@ -150,6 +231,10 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (eyedropper) {
+      handleEyedropperPick(e);
+      return;
+    }
     e.preventDefault();
     const pos = getPos(e.clientX, e.clientY);
     (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
@@ -232,8 +317,8 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
   // ── Keyboard ──
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === " " || e.key === "Space") { e.preventDefault(); togglePlay(); }
-    else if (e.key === "Enter" && regionUsable(rectRef.current)) onConfirmed(rectRef.current, startTime ?? undefined);
-  }, [onConfirmed, startTime]);
+    else if (e.key === "Enter" && regionUsable(rectRef.current)) onConfirmed(rectRef.current, startTime ?? undefined, colorFilter.enabled ? colorFilter : null);
+  }, [onConfirmed, startTime, colorFilter]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -282,7 +367,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
             ref={canvasRef}
             width={size.w}
             height={size.h}
-            className="absolute inset-0 touch-none"
+            className={`absolute inset-0 touch-none ${eyedropper ? "cursor-crosshair" : ""}`}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -342,6 +427,83 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
         </div>
       </div>
 
+      {/* Color filter panel */}
+      <div className="glass-panel rounded-2xl p-4 sm:p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">{t("region.colorFilter" as string)}</p>
+            <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">{t("region.colorFilterHint" as string)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setColorFilter((p) => ({ ...p, enabled: !p.enabled }))}
+            className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${colorFilter.enabled ? "bg-accent" : "bg-black/10"}`}
+          >
+            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${colorFilter.enabled ? "left-[22px]" : "left-0.5"}`} />
+          </button>
+        </div>
+        {colorFilter.enabled && (
+          <>
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="flex items-center gap-2">
+                <span className="text-[11px] text-ink-muted">{t("region.color" as string)}</span>
+                <input type="color" value={colorFilter.color} onChange={(e) => setColorFilter((p) => ({ ...p, color: e.target.value.toUpperCase() }))} className="w-10 h-8 rounded cursor-pointer bg-transparent" />
+              </label>
+              <input type="text" value={colorFilter.color} onChange={(e) => setColorFilter((p) => ({ ...p, color: e.target.value }))} placeholder="#FFFFFF" className="w-28 px-2 py-1.5 text-[12px] font-mono text-ink bg-white/[0.04] border border-white/[0.10] rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/30" />
+              <button type="button" onClick={() => setEyedropper((v) => !v)} className={`px-3 py-1.5 text-[11px] font-medium rounded-lg transition-colors cursor-pointer ${eyedropper ? "bg-accent text-white" : "bg-white/[0.05] text-ink-muted hover:bg-white/[0.11]"}`}>
+                {eyedropper ? t("region.eyedropperActive" as string) : t("region.eyedropper" as string)}
+              </button>
+              <span className="w-6 h-6 rounded-full ring-1 ring-white/20" style={{ background: colorFilter.color }} />
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] text-ink-muted">{t("region.tolerance" as string)}</span>
+              <input type="range" min={0} max={100} value={colorFilter.tolerance} onChange={(e) => setColorFilter((p) => ({ ...p, tolerance: Number(e.target.value) }))} className="flex-1 accent-accent" />
+              <span className="text-[12px] font-mono tabular-nums text-accent font-semibold w-8">{colorFilter.tolerance}</span>
+            </div>
+            <div className="rounded-xl overflow-hidden ring-1 ring-white/[0.08] bg-black/20">
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.1em] text-ink-muted bg-white/[0.04]">{t("region.previewMask" as string)}</div>
+              <canvas ref={previewRef} width={320} height={100} className="w-full h-[100px] object-contain bg-black" />
+              {!regionUsable(r) && <p className="px-3 py-2 text-[11px] text-ink-light text-center">{t("region.previewNeedRegion" as string)}</p>}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                disabled={!regionUsable(r) || testing}
+                onClick={async () => {
+                  if (!r) return;
+                  setTesting(true);
+                  setTestText(null);
+                  try {
+                    const res = await testOcrColor(videoId, r, colorFilter.enabled ? colorFilter : null, currentTime);
+                    setTestText(res.text || t("region.testEmpty" as string));
+                  } catch (e) {
+                    setTestText(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setTesting(false);
+                  }
+                }}
+                className="px-3 py-1.5 text-[11px] font-medium bg-accent text-white rounded-lg hover:bg-accent/80 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                {testing ? (
+                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+                )}
+                {testing ? t("region.testing" as string) : t("region.testOcr" as string)}
+              </button>
+              {testText !== null && (
+                <span className="text-[11px] text-ink px-2 py-1 rounded-lg bg-white/[0.06] ring-1 ring-white/[0.08] max-w-[60%] truncate" title={testText}>
+                  {testText}
+                </span>
+              )}
+              {testText !== null && (
+                <button type="button" onClick={() => setTestText(null)} className="text-[11px] text-ink-light hover:text-ink cursor-pointer">✕</button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Confirm bar */}
       {regionUsable(r) && (
         <div className="glass-panel rounded-2xl p-4 sm:p-5" style={{ animation: "fade-in 0.9s cubic-bezier(0.32,0.72,0,1) forwards" }}>
@@ -349,7 +511,7 @@ export default function RegionSelector({ videoId, onConfirmed }: Props) {
             <span className="text-xs sm:text-sm text-ink-muted font-mono tracking-tight">
               x: {r.x1.toFixed(3)} y: {r.y1.toFixed(3)} &rarr; x: {r.x2.toFixed(3)} y: {r.y2.toFixed(3)}
             </span>
-            <button onClick={() => onConfirmed(r, startTime ?? undefined)} className="btn-island-primary group text-sm">
+            <button onClick={() => onConfirmed(r, startTime ?? undefined, colorFilter.enabled ? colorFilter : null)} className="btn-island-primary group text-sm">
               {t("region.extract" as string)}
               <span className="btn-island-icon">
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">

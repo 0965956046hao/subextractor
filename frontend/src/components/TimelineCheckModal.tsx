@@ -127,6 +127,7 @@ function AddEntryModal({
   const [error, setError] = useState("");
 
   const handleSubmit = () => {
+    setError("");
     const start = parseSrtTime(startStr);
     const end = parseSrtTime(endStr);
     if (start == null || end == null) {
@@ -137,12 +138,22 @@ function AddEntryModal({
       setError(t("timeline.startBeforeEnd" as string));
       return;
     }
+    if (end - start < MIN_DURATION) {
+      setError(t("timeline.minDurationError" as string, { min: String(MIN_DURATION) }));
+      return;
+    }
     if (!text.trim()) {
       setError(t("timeline.textRequired" as string));
       return;
     }
     onAdd(start, end, text.trim());
   };
+
+  useEffect(() => {
+    setStartStr(secToSrt(currentTime));
+    setEndStr(secToSrt(currentTime + 2));
+    setError("");
+  }, [currentTime]);
 
   return createPortal(
     <div
@@ -246,6 +257,7 @@ export default function TimelineCheckModal({
   const [retranslatingIndex, setRetranslatingIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const riskAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -398,11 +410,28 @@ export default function TimelineCheckModal({
     [seekTo, pps]
   );
 
-  const patchEntry = useCallback((index: number, patch: Partial<SrtEntry>) => {
-    setEntries((prev) =>
-      prev.map((e) => (e.index === index ? { ...e, ...patch } : e))
-    );
+  const recomputeTimelineIssues = useCallback((ents: SrtEntry[]) => {
+    const sorted = [...ents].sort((a, b) => a.start - b.start || a.end - b.end);
+    const issues: TimelineIssue[] = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const e = sorted[i];
+      if (e.end <= e.start) issues.push({ index: e.index, type: "negative_duration", message: `Negative duration #${e.index}`, start: e.start, end: e.end });
+      if (i > 0 && e.start < sorted[i - 1].end) issues.push({ index: e.index, type: "overlap", message: `Overlap #${e.index} with #${sorted[i - 1].index}`, start: e.start, end: e.end, prev_index: sorted[i - 1].index });
+      if (i > 0 && e.start < sorted[i - 1].start) issues.push({ index: e.index, type: "out_of_order", message: `Out of order #${e.index}`, start: e.start, end: e.end, prev_index: sorted[i - 1].index });
+    }
+    setTimelineIssues(issues);
+    // Content/timing changed → risks stale
+    setRisks([]);
   }, []);
+
+  const patchEntry = useCallback((index: number, patch: Partial<SrtEntry>) => {
+    setEntries((prev) => {
+      const next = prev.map((e) => (e.index === index ? { ...e, ...patch, startLabel: patch.start != null ? secToSrt(patch.start) : e.startLabel, endLabel: patch.end != null ? secToSrt(patch.end) : e.endLabel } : e));
+      // Recompute issues on next tick to avoid setState during render
+      setTimeout(() => recomputeTimelineIssues(next), 0);
+      return next;
+    });
+  }, [recomputeTimelineIssues]);
 
   const reTranslateEntry = useCallback(
     async (index: number) => {
@@ -424,8 +453,9 @@ export default function TimelineCheckModal({
 
   const deleteEntry = useCallback((index: number) => {
     setEntries((prev) => {
-      const next = prev.filter((e) => e.index !== index);
-      return next.map((e, i) => ({ ...e, index: i + 1 }));
+      const next = prev.filter((e) => e.index !== index).map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
+      setTimeout(() => recomputeTimelineIssues(next), 0);
+      return next;
     });
     setTimelineIssues((prev) =>
       prev
@@ -453,11 +483,14 @@ export default function TimelineCheckModal({
         };
         const next = [...prev, newEntry];
         next.sort((a, b) => a.start - b.start || a.end - b.end);
-        return next.map((e, i) => ({ ...e, index: i + 1 }));
+        const reindexed = next.map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
+        setTimeout(() => recomputeTimelineIssues(reindexed), 0);
+        return reindexed;
       });
       setShowAddModal(false);
+      setRisks([]);
     },
-    [],
+    [recomputeTimelineIssues],
   );
 
   const handleBlockPointerDown = useCallback(
@@ -538,43 +571,68 @@ export default function TimelineCheckModal({
     [scrubTo, pps, effectiveDuration]
   );
 
-  const performRiskCheck = useCallback(async () => {
+  const performRiskCheck = useCallback(async (signal?: AbortSignal) => {
     const { job_id } = await startSrtRiskCheck(videoId, targetLang);
     for (let i = 0; i < 600; i++) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       await new Promise((r) => setTimeout(r, 1000));
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const st = await getJobStatus(job_id);
       if (st.status === "done") break;
       if (st.status === "error") throw new Error(st.error || t("timeline.riskCheckFailed" as string));
       if (i === 599) throw new Error(t("timeline.riskCheckTimeout" as string));
     }
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const result = await getSrtRiskResult(videoId);
+    if (signal?.aborted) return;
     setRisks(result.risks ?? []);
   }, [videoId, targetLang]);
 
   const runRiskCheck = useCallback(async () => {
+    if (checking || saving) return;
+    const ctrl = new AbortController();
+    riskAbortRef.current?.abort();
+    riskAbortRef.current = ctrl;
     setChecking(true);
     setCheckError("");
     try {
-      await performRiskCheck();
+      await performRiskCheck(ctrl.signal);
     } catch (e) {
+      if ((e as DOMException)?.name === "AbortError") return;
       setCheckError(e instanceof Error ? e.message : t("timeline.riskCheckFailed" as string));
     } finally {
+      if (riskAbortRef.current === ctrl) riskAbortRef.current = null;
       setChecking(false);
     }
-  }, [performRiskCheck]);
+  }, [performRiskCheck, checking, saving]);
+
+  useEffect(() => () => riskAbortRef.current?.abort(), []);
 
   const saveAndRecheck = useCallback(async () => {
+    if (checking || saving) return;
+    // Local overlap validation before save
+    for (let i = 1; i < entries.length; i++) {
+      if (entries[i].start < entries[i - 1].end) {
+        setCheckError(t("timeline.saveOverlapError" as string));
+        return;
+      }
+    }
+    const ctrl = new AbortController();
+    riskAbortRef.current?.abort();
+    riskAbortRef.current = ctrl;
     setSaving(true);
     setCheckError("");
     try {
       await updateSrt(videoId, entriesToSrt(entries));
-      await performRiskCheck();
+      await performRiskCheck(ctrl.signal);
     } catch (e) {
+      if ((e as DOMException)?.name === "AbortError") return;
       setCheckError(e instanceof Error ? e.message : t("timeline.saveRecheckFailed" as string));
     } finally {
+      if (riskAbortRef.current === ctrl) riskAbortRef.current = null;
       setSaving(false);
     }
-  }, [videoId, entries, performRiskCheck]);
+  }, [videoId, entries, performRiskCheck, checking, saving]);
 
   const saveAndContinue = useCallback(async () => {
     setSaving(true);

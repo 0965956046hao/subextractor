@@ -2647,7 +2647,7 @@ function DetailView({
             )}
             <RegionSelector
               videoId={p.videoId}
-              onConfirmed={(r) => confirmRegion(p.id, r)}
+              onConfirmed={(r, _st, cf) => confirmRegion(p.id, r, cf)}
             />
           </div>
         )}

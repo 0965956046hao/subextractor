@@ -31,6 +31,7 @@ async def start_processing(
         )
 
     video_path = resolve_video_path(req.video_id)
+    color_filter = req.color_filter.model_dump() if req.color_filter else None
     job = enqueue_job(
         jobs=jobs,
         video_path=str(video_path),
@@ -41,6 +42,7 @@ async def start_processing(
         ocr_type=req.ocr_type,
         start_time=req.start_time,
         end_time=req.end_time,
+        color_filter=color_filter,
     )
     await job_queue.put(job["job_id"])
     return JobStatus(

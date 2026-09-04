@@ -175,6 +175,7 @@ export interface Pipeline {
   removeWatermarkRegions: Region[];
   checkSubs: boolean;
   checkVoice: boolean;
+  colorFilter: ColorFilter | null;
   timelineCheck: TimelineCheck | null;
   voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
@@ -200,6 +201,18 @@ export interface VoiceCheck {
   waiting: boolean;
   open: boolean;
 }
+
+export interface ColorFilter {
+  enabled: boolean;
+  color: string;
+  tolerance: number;
+}
+
+export const DEFAULT_COLOR_FILTER: ColorFilter = {
+  enabled: false,
+  color: "#FFFFFF",
+  tolerance: 30,
+};
 
 export interface DubOptions {
   engine: "google" | "capcut";
@@ -249,6 +262,7 @@ interface PipelineState {
     translateTarget?: string,
     dubOn?: boolean,
     voiceLang?: string,
+    colorFilter?: ColorFilter | null,
   ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
@@ -273,6 +287,7 @@ interface PipelineState {
     translateTarget?: string;
     dubOn?: boolean;
     voiceLang?: string;
+    colorFilter?: ColorFilter | null;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -280,7 +295,7 @@ interface PipelineState {
   removePipeline: (id: string) => void;
   clearFinished: () => void;
   rerunPipeline: (id: string, step: number) => void;
-  confirmRegion: (id: string, region: Region) => void;
+  confirmRegion: (id: string, region: Region, colorFilter?: ColorFilter | null) => void;
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
   hydrate: (pipelines: Pipeline[]) => void;
@@ -331,6 +346,7 @@ function newPipeline(
   translateTarget = "vi",
   dubOn = true,
   voiceLang = "",
+  colorFilter: ColorFilter | null = null,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -384,6 +400,7 @@ function newPipeline(
     removeWatermarkRegions,
     checkSubs,
     checkVoice,
+    colorFilter,
     timelineCheck: null,
     voiceCheck: null,
     resumeStep: null,
@@ -437,6 +454,7 @@ export const usePipelineStore = create<PipelineState>()(
         translateTarget = "vi",
         dubOn = true,
         voiceLang = "",
+        colorFilter = null,
       ) => {
         const id = Math.random().toString(36).slice(2, 10);
         set((s) => ({
@@ -465,6 +483,7 @@ export const usePipelineStore = create<PipelineState>()(
               translateTarget,
               dubOn,
               voiceLang,
+              colorFilter,
             ),
           ],
         }));
@@ -497,6 +516,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.translateTarget ?? "vi",
           input.dubOn ?? true,
           input.voiceLang ?? "",
+          input.colorFilter ?? null,
         );
         // Uploaded file is already registered on the backend: skip resolve + merge
         // and start directly at region selection (step 2).
@@ -642,7 +662,7 @@ export const usePipelineStore = create<PipelineState>()(
           enqueue(id, step, true);
         }
       },
-      confirmRegion: (id, region) => {
+      confirmRegion: (id, region, colorFilter) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
         set((st) => ({
@@ -651,6 +671,7 @@ export const usePipelineStore = create<PipelineState>()(
               ? {
                   ...p,
                   region,
+                  ...(colorFilter !== undefined ? { colorFilter: colorFilter ?? null } : {}),
                   stage: p.autoFit ? "processing" : "subtitle_preview",
                 }
               : p,
@@ -2184,6 +2205,9 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             region,
             lang: ocrLang,
             ocr_type: ocrType,
+            ...(cur.colorFilter?.enabled
+              ? { color_filter: cur.colorFilter }
+              : {}),
           }),
         });
         let pd: Record<string, unknown> = {};

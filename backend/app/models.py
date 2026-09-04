@@ -13,6 +13,12 @@ class Region(BaseModel):
 OcrType = Literal["rapid", "apple"]
 
 
+class ColorFilter(BaseModel):
+    enabled: bool = False
+    color: str = "#FFFFFF"
+    tolerance: int = Field(default=30, ge=0, le=100)
+
+
 class ProcessRequest(BaseModel):
     video_id: str
     region: Region
@@ -21,6 +27,7 @@ class ProcessRequest(BaseModel):
     ocr_type: OcrType = "apple"
     start_time: float | None = None  # Skip frames before this timestamp (seconds)
     end_time: float | None = None    # Stop at this timestamp (seconds)
+    color_filter: ColorFilter | None = None
 
 
 class LogEntry(BaseModel):

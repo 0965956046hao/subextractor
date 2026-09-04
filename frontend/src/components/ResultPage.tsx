@@ -13,6 +13,7 @@ interface Props {
   lang?: OcrLang;
   ocrType?: OcrType;
   startTime?: number;
+  colorFilter?: import("@/lib/api").ColorFilter | null;
   onReset: () => void;
   onDone?: () => void;
   onViewLibrary?: () => void;
@@ -267,6 +268,7 @@ export default function ResultPage({
   lang = "ch",
   ocrType = "apple",
   startTime,
+  colorFilter,
   onReset,
   onDone,
   onViewLibrary,
@@ -348,7 +350,7 @@ export default function ResultPage({
     (async () => {
       try {
         appendLog(t("result.sendingRequest"));
-        const job = await startProcess(videoId, region, lang, ocrType, undefined, startTime);
+        const job = await startProcess(videoId, region, lang, ocrType, undefined, startTime, undefined, colorFilter);
         jobIdRef.current = job.job_id;
         setPhase("queued");
         connectWs(job.job_id);

@@ -63,6 +63,7 @@ def enqueue_job(
     ocr_type: str = "apple",
     start_time: float | None = None,
     end_time: float | None = None,
+    color_filter: dict | None = None,
 ) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -75,6 +76,7 @@ def enqueue_job(
         "ocr_type": ocr_type,
         "start_time": start_time,
         "end_time": end_time,
+        "color_filter": color_filter,
         "job_type": "ocr",
         "status": "queued",
         "phase": "",
@@ -153,24 +155,41 @@ def _ocr_segment_entries(
     end_time: float,
     progress_cb,
     text_cb=None,
+    color_filter: dict | None = None,
 ) -> list[tuple[float, float, str]]:
     """OCR a single time segment and return its (start, end, text) entries."""
-    crops = (
-        (crop_region(frame, region), ts)
+    def _gen():
         for frame, ts in stream_frames_generator(
             video_path, target_fps, start_time=start_time, end_time=end_time
-        )
-    )
+        ):
+            yield (crop_region(frame, region), ts)
+
+    # Wrap crops to inject color_filter into ocr_region_cached via closure
+    # We monkey-patch generate_srt_entries' engine call by passing color_filter through
+    # a small wrapper: override engine.ocr_region_cached to include filter.
+
+    # Instead, create a small wrapper engine that injects filter
+    orig_cached = engine.ocr_region_cached
+
+    def filtered_cached(crop):
+        return orig_cached(crop, color_filter)
+
+    crops = _gen()
     # Mỗi segment dùng đúng 1 engine riêng (dHash cache + language độc lập),
     # nên không cần khoá chung. Vẫn giữ lock cho an toàn nếu engine bị chia sẻ.
     with engine.lock():
         engine.set_lang(lang)
-        return generate_srt_entries(
-            crops, engine,
-            progress_callback=progress_cb,
-            text_callback=text_cb,
-            total_frames=None,
-        )
+        # Temporarily patch
+        engine.ocr_region_cached = filtered_cached  # type: ignore
+        try:
+            return generate_srt_entries(
+                crops, engine,
+                progress_callback=progress_cb,
+                text_callback=text_cb,
+                total_frames=None,
+            )
+        finally:
+            engine.ocr_region_cached = orig_cached  # type: ignore
 
 
 def process_job_sync(
@@ -185,8 +204,12 @@ def process_job_sync(
     lang: str,
     start_time: float | None = None,
     end_time: float | None = None,
+    color_filter: dict | None = None,
 ):
-    logger.info("job %s: extracting frames... (start=%s, end=%s)", job_id, start_time, end_time)
+    # color_filter may be passed via job dict for backwards compat
+    if color_filter is None:
+        color_filter = job.get("color_filter")
+    logger.info("job %s: extracting frames... (start=%s, end=%s, color_filter=%s)", job_id, start_time, end_time, color_filter)
     t0 = time.time()
 
     import cv2
@@ -266,7 +289,7 @@ def process_job_sync(
 
         entries = _ocr_segment_entries(
             video_path, region, target_fps, engine_pool[0], lang,
-            eff_start, eff_end, progress_cb, text_cb,
+            eff_start, eff_end, progress_cb, text_cb, color_filter,
         )
 
         job["progress"] = 100
@@ -331,7 +354,7 @@ def process_job_sync(
                 ex.submit(
                     _ocr_segment_entries,
                     video_path, region, target_fps, engine_pool[i], lang,
-                    s, e, make_progress_cb(), text_cb,
+                    s, e, make_progress_cb(), text_cb, color_filter,
                 )
                 for i, (s, e) in enumerate(bounds)
             ]

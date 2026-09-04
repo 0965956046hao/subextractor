@@ -171,6 +171,27 @@ export const OCR_TYPES: { value: OcrType; label: string; hint: string }[] = [
   { value: "rapid", label: "ocr.type.rapid", hint: "ocr.type.rapid.hint" },
 ];
 
+export interface ColorFilter {
+  enabled: boolean;
+  color: string;
+  tolerance: number;
+}
+
+export async function testOcrColor(
+  videoId: string,
+  region: Region,
+  colorFilter: ColorFilter | null,
+  time: number,
+  lang: OcrLang = "ch",
+  ocrType: OcrType = "apple",
+): Promise<{ text: string; masked: boolean }> {
+  const res = await api.post<{ text: string; masked: boolean }>(
+    `/preview/ocr-color/${videoId}`,
+    { region, color_filter: colorFilter, time, lang, ocr_type: ocrType },
+  );
+  return res.data;
+}
+
 export async function startProcess(
   videoId: string,
   region: Region,
@@ -179,6 +200,7 @@ export async function startProcess(
   signal?: AbortSignal,
   startTime?: number | null,
   endTime?: number | null,
+  colorFilter?: ColorFilter | null,
 ): Promise<JobStatus> {
   const res = await api.post<JobStatus>(
     "/process",
@@ -189,6 +211,7 @@ export async function startProcess(
       ocr_type: ocrType,
       ...(startTime != null && startTime > 0 ? { start_time: startTime } : {}),
       ...(endTime != null && endTime > 0 ? { end_time: endTime } : {}),
+      ...(colorFilter?.enabled ? { color_filter: colorFilter } : {}),
     },
     { signal },
   );

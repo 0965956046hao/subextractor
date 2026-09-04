@@ -625,6 +625,80 @@ def _render_preview_image(
     return Response(content=buf.tobytes(), media_type="image/jpeg")
 
 
+# ── POST /api/preview/ocr-color/{video_id} ──
+@router.post("/api/preview/ocr-color/{video_id}")
+async def preview_ocr_color(video_id: str, request: Request):
+    """Test OCR with color filter on a single frame (for RegionSelector test button)."""
+    import cv2
+    video_path = _video_path(video_id)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    region = body.get("region")
+    if not region or not all(k in region for k in ("x1", "y1", "x2", "y2")):
+        raise HTTPException(422, "region required")
+    color_filter = body.get("color_filter")
+    time_sec = float(body.get("time") or 0)
+    lang = body.get("lang") or "ch"
+    ocr_type = body.get("ocr_type") or "apple"
+
+    from fastapi.concurrency import run_in_threadpool
+
+    def _run():
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise HTTPException(500, "Không đọc được video")
+        if time_sec > 0:
+            cap.set(cv2.CAP_PROP_POS_MSEC, time_sec * 1000)
+        ok, frame = cap.read()
+        cap.release()
+        if not ok or frame is None:
+            raise HTTPException(500, "Không đọc được frame")
+        from app.services.video_processor import crop_region
+        crop = crop_region(frame, region)
+        if crop.size == 0:
+            return {"text": "", "masked": False}
+        # Apply color mask if enabled
+        masked = False
+        if color_filter and color_filter.get("enabled"):
+            try:
+                from app.services.color_mask import apply_color_mask
+                crop = apply_color_mask(crop, color_filter.get("color", "#FFFFFF"), int(color_filter.get("tolerance", 30)))
+                masked = True
+            except Exception:
+                pass
+        # OCR
+        text = ""
+        try:
+            # Try to reuse app engines
+            engines = getattr(request.app.state, "ocr_engines", None)
+            engine = None
+            if engines and ocr_type in engines:
+                pool = engines[ocr_type]
+                engine = pool[0] if isinstance(pool, list) and pool else pool
+            if engine is not None:
+                # Use thread-safe call
+                with engine.lock():
+                    engine.set_lang(lang)
+                    text = engine.ocr_image(crop)
+            else:
+                raise RuntimeError("no engine")
+        except Exception:
+            # Fallback: create ad-hoc RapidOCR
+            try:
+                from app.services.ocr_engine import OCREngine
+                tmp = OCREngine()
+                tmp.set_lang(lang)
+                text = tmp.ocr_image(crop)
+            except Exception as e:
+                raise HTTPException(500, f"OCR failed: {e}")
+        return {"text": text.strip(), "masked": masked}
+
+    return await run_in_threadpool(_run)
+
+
 # ── GET /api/delogo/{video_id}/status ──
 
 @router.get("/api/delogo/{video_id}/status")

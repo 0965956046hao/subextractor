@@ -569,14 +569,30 @@ def build_full_audio(
     # changed. Keeps re-runs of the dub step fast when per-entry mp3 cache was
     # cleaned up (e.g. a crashed run that already produced a full voice track).
     voice_dir = out_dir / voice_name.replace("-", "_")
-    newest_mp3 = max(
-        (p.stat().st_mtime for p in (voice_dir.glob("*.mp3") if voice_dir.exists() else [])),
-        default=0.0,
-    )
+    # Scan all voice subdirs for newest mp3 (multi-voice stores in default dir but check all)
+    newest_mp3 = 0.0
+    for vd in out_dir.iterdir():
+        if vd.is_dir() and vd.name != "separated":
+            try:
+                for p in vd.glob("*.mp3"):
+                    newest_mp3 = max(newest_mp3, p.stat().st_mtime)
+            except Exception:
+                pass
+    # If there are pending failed silences, force regenerate to fix first sentences
+    failed_marker = voice_dir / ".failed_silence.json"
+    has_failed = False
+    try:
+        if failed_marker.exists():
+            data = json.loads(failed_marker.read_text(encoding="utf-8"))
+            if isinstance(data, list) and len(data) > 0:
+                has_failed = True
+    except Exception:
+        pass
     full_voice_ok = (
         full_voice.exists() and full_voice.stat().st_size > 0
         and full_voice.stat().st_mtime >= newest_mp3
         and _voice_matches()
+        and not has_failed
     )
     # Chống tái sử dụng full_voice.mp3 bị cụt (vd lần trước bị timeout giữa chừng):
     # file phải đủ dài phủ tới dòng phụ đề cuối mới được tái dùng.

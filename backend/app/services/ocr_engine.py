@@ -47,9 +47,28 @@ class BaseOCREngine:
     def ocr_image(self, image: np.ndarray) -> str:
         raise NotImplementedError
 
-    def ocr_region_cached(self, crop: np.ndarray) -> str:
+    def ocr_region_cached(self, crop: np.ndarray, color_filter=None) -> str:
         if crop.size == 0:
             return ""
+        # Apply color mask before dHash/cache so filtered view is cached
+        # — handle both dict (worker job) and pydantic object
+        enabled = False
+        color = "#FFFFFF"
+        tolerance = 30
+        if isinstance(color_filter, dict):
+            enabled = bool(color_filter.get("enabled", False))
+            color = color_filter.get("color", "#FFFFFF")
+            tolerance = color_filter.get("tolerance", 30)
+        elif color_filter is not None:
+            enabled = bool(getattr(color_filter, "enabled", False))
+            color = getattr(color_filter, "color", "#FFFFFF")
+            tolerance = getattr(color_filter, "tolerance", 30)
+        if enabled:
+            try:
+                from app.services.color_mask import apply_color_mask
+                crop = apply_color_mask(crop, color, tolerance)
+            except Exception:
+                pass
         if (
             self._prev_crop is not None
             and self._hit_streak < settings.ocr_cache_max_streak
