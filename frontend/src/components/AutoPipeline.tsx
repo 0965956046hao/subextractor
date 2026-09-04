@@ -308,6 +308,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [removeWmRegions, setRemoveWmRegions] = useState<Region[]>([]);
   const [checkSubs, setCheckSubs] = useState(false);
   const [checkVoice, setCheckVoice] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
   const [googleVoices, setGoogleVoices] = useState<CapCutVoice[]>([]);
@@ -660,6 +661,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateOn,
       translateTarget,
       dubOn,
+      playbackSpeed,
     );
     setUrl("");
     setSelectedId(id);
@@ -710,6 +712,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateOn,
       translateTarget,
       dubOn,
+      playbackSpeed,
     });
     setUploaded(null);
     setSelectedId(id);
@@ -1553,6 +1556,44 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         </button>
                       </div>
                     )}
+                  </div>
+
+                  {/* Playback speed */}
+                  <div className="mt-4 border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          Tốc độ video
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          Điều chỉnh nhanh/chậm — xử lý thêm ~5-15% thời gian encode
+                        </p>
+                      </div>
+                      <span className="text-[13px] font-mono font-bold text-accent min-w-[48px] text-right">{playbackSpeed.toFixed(2)}x</span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      {[0.75, 1.0, 1.25, 1.5, 2.0].map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => setPlaybackSpeed(s)}
+                          className={`px-3 py-1.5 rounded-full text-[11px] font-medium transition-colors cursor-pointer ${playbackSpeed === s ? "bg-accent text-white" : "bg-white/[0.06] text-ink-light hover:bg-white/[0.10]"}`}
+                        >
+                          {s}x
+                        </button>
+                      ))}
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={2.0}
+                        step={0.05}
+                        value={playbackSpeed}
+                        onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
+                        className="flex-1 min-w-[120px] accent-accent"
+                      />
+                    </div>
+                    <p className="text-[10px] text-ink-light mt-1.5">
+                      0.5x chậm — 2.0x nhanh. Phụ đề & audio tự động đồng bộ. Encode lại video nên tăng 5-15% thời gian.
+                    </p>
                   </div>
 
                   <div className="mt-4 border-t border-white/[0.07] pt-4">

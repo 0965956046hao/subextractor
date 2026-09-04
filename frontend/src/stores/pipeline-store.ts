@@ -173,6 +173,7 @@ export interface Pipeline {
   removeWatermarkRegions: Region[];
   checkSubs: boolean;
   checkVoice: boolean;
+  playbackSpeed: number;
   timelineCheck: TimelineCheck | null;
   voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
@@ -244,6 +245,7 @@ interface PipelineState {
     translateOn?: boolean,
     translateTarget?: string,
     dubOn?: boolean,
+    playbackSpeed?: number,
   ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
@@ -265,6 +267,7 @@ interface PipelineState {
     translateOn?: boolean;
     translateTarget?: string;
     dubOn?: boolean;
+    playbackSpeed?: number;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -320,6 +323,7 @@ function newPipeline(
   translateOn = true,
   translateTarget = "vi",
   dubOn = true,
+  playbackSpeed = 1.0,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -372,6 +376,7 @@ function newPipeline(
     removeWatermarkRegions,
     checkSubs,
     checkVoice,
+    playbackSpeed,
     timelineCheck: null,
     voiceCheck: null,
     resumeStep: null,
@@ -422,6 +427,7 @@ export const usePipelineStore = create<PipelineState>()(
         translateOn = true,
         translateTarget = "vi",
         dubOn = true,
+        playbackSpeed = 1.0,
       ) => {
         const id = Math.random().toString(36).slice(2, 10);
         set((s) => ({
@@ -447,6 +453,7 @@ export const usePipelineStore = create<PipelineState>()(
               translateOn,
               translateTarget,
               dubOn,
+              playbackSpeed,
             ),
           ],
         }));
@@ -476,6 +483,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.translateOn ?? true,
           input.translateTarget ?? "vi",
           input.dubOn ?? true,
+          input.playbackSpeed ?? 1.0,
         );
         // Uploaded file is already registered on the backend: skip resolve + merge
         // and start directly at region selection (step 2).
@@ -2811,17 +2819,25 @@ async function runPipeline(id: string, startStep = 4) {
       } catch {
         // ignore
       }
-      if (hardcodedExists && !cur.watermark) {
+      const needSpeedReencode = (cur.playbackSpeed ?? 1.0) !== 1.0;
+      if (hardcodedExists && !cur.watermark && !needSpeedReencode) {
         appendLog(id, "Video đã có phụ đề cứng — bỏ qua encode.");
         markStepSkipped(id, 9);
       } else {
         if (hardcodedExists) {
-          appendLog(
-            id,
-            "Đã có phụ đề cứng nhưng bật watermark — encode lại để chèn watermark.",
-          );
+          if (needSpeedReencode) {
+            appendLog(id, `Đã có phụ đề cứng nhưng tốc độ ${cur.playbackSpeed}x ≠1 — encode lại để chỉnh tốc độ.`);
+          } else {
+            appendLog(
+              id,
+              "Đã có phụ đề cứng nhưng bật watermark — encode lại để chèn watermark.",
+            );
+          }
         }
         appendLog(id, "FFmpeg nhúng SRT (ASS black box) vào video...");
+        if (cur.playbackSpeed && cur.playbackSpeed !== 1.0) {
+          appendLog(id, `Tốc độ video: ${cur.playbackSpeed}x — sẽ scale video/audio/subtitle khi encode.`);
+        }
         const hr = await fetch(`/api/hardcode/${videoId}`, {
           method: "POST",
           headers: JSON_HEADERS,
@@ -2836,6 +2852,7 @@ async function runPipeline(id: string, startStep = 4) {
             watermark_preset: cur.watermark
               ? cur.watermarkPreset || null
               : null,
+            playback_speed: cur.playbackSpeed ?? 1.0,
           }),
         });
         const hd = await hr.json();
