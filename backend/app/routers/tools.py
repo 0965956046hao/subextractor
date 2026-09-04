@@ -16,8 +16,89 @@ from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_sim
 from app.services.context_service import load_video_context, generate_video_context
 import subprocess
 import math
+import platform
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_video_encoder_candidates() -> list[list[str]]:
+    """
+    Return a prioritized list of H.264 encoder argument lists for the current platform.
+    Each entry is a list of FFmpeg args (e.g., ["-c:v", "h264_nvenc", "-b:v", "8M"]).
+    """
+    system = platform.system().lower()
+    
+    # Check available encoders
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        encoders = out.stdout or ""
+    except Exception:
+        encoders = ""
+    
+    candidates: list[list[str]] = []
+    
+    if system == "windows":
+        if "h264_nvenc" in encoders:
+            candidates.append(["-c:v", "h264_nvenc", "-b:v", "8M"])
+        if "h264_qsv" in encoders:
+            candidates.append(["-c:v", "h264_qsv", "-b:v", "8M"])
+        if "h264_amf" in encoders:
+            candidates.append(["-c:v", "h264_amf", "-b:v", "8M"])
+        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+    
+    elif system == "darwin":
+        if "h264_videotoolbox" in encoders:
+            candidates.append(["-c:v", "h264_videotoolbox", "-b:v", "8M"])
+        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+    
+    else:  # Linux
+        if "h264_nvenc" in encoders:
+            candidates.append(["-c:v", "h264_nvenc", "-b:v", "8M"])
+        if "h264_qsv" in encoders:
+            candidates.append(["-c:v", "h264_qsv", "-b:v", "8M"])
+        if "h264_vaapi" in encoders:
+            candidates.append(["-c:v", "h264_vaapi", "-b:v", "8M"])
+        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+    
+    return candidates
+
+
+def _test_encoder(encoder_args: list[str]) -> bool:
+    """Test if an encoder works by running a tiny encode test."""
+    try:
+        # Use a 1-frame test: color source -> encoder -> null
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.04",  # 1 frame @ 25fps
+            *encoder_args,
+            "-f", "null", "-"
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _get_best_video_encoder() -> list[str]:
+    """
+    Detect the best available H.264 encoder that actually works at runtime.
+    Tries candidates in priority order and returns the first working one.
+    """
+    candidates = _get_video_encoder_candidates()
+    
+    for enc in candidates:
+        if _test_encoder(enc):
+            logger.info(f"[delogo] Selected working encoder: {enc[1]}")
+            return enc
+        else:
+            logger.warning(f"[delogo] Encoder {enc[1]} failed test, trying next...")
+    
+    # Should never reach here since libx264 is always in candidates
+    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
 
 
 def _original_download_name(video_id: str, suffix: str, ext: str = ".mp4") -> str:
@@ -1232,6 +1313,8 @@ async def delogo_video(
     # 8. FFmpeg command
     # ============================================================
 
+    v_enc = _get_best_video_encoder()
+
     ffmpeg_cmd = [
         "ffmpeg",
         "-y",
@@ -1243,19 +1326,7 @@ async def delogo_video(
         video_filter,
 
         # Re-encode video because delogo modifies frames
-        "-c:v",
-        "h264_videotoolbox",
-        # "libx264",
-
-        "-b:v",
-        "10M",
-
-        # Good quality
-        # "-preset",
-        # "medium",
-
-        # "-crf",
-        # "18",
+        *v_enc,
 
         # Keep audio without re-encoding
         "-c:a",
