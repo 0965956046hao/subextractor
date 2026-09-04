@@ -80,6 +80,12 @@ function entriesToSrt(entries: SrtEntry[]): string {
     .join("\n");
 }
 
+function parseSrtTime(s: string): number | null {
+  const m = s.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})$/);
+  if (!m) return null;
+  return parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseInt(m[3]) + parseInt(m[4]) / 1000;
+}
+
 const RISK_LABELS: Record<string, string> = {
   NOT_TRANSLATED: "timeline.risk.notTranslated",
   TIMELINE_OVERLAP: "timeline.risk.overlap",
@@ -103,6 +109,111 @@ interface DragState {
   origStart: number;
   origEnd: number;
   grabOffset: number;
+}
+
+function AddEntryModal({
+  currentTime,
+  onAdd,
+  onClose,
+}: {
+  currentTime: number;
+  onAdd: (start: number, end: number, text: string) => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const [startStr, setStartStr] = useState(secToSrt(currentTime));
+  const [endStr, setEndStr] = useState(secToSrt(currentTime + 2));
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+
+  const handleSubmit = () => {
+    const start = parseSrtTime(startStr);
+    const end = parseSrtTime(endStr);
+    if (start == null || end == null) {
+      setError(t("timeline.invalidTimeFormat" as string));
+      return;
+    }
+    if (start >= end) {
+      setError(t("timeline.startBeforeEnd" as string));
+      return;
+    }
+    if (!text.trim()) {
+      setError(t("timeline.textRequired" as string));
+      return;
+    }
+    onAdd(start, end, text.trim());
+  };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div
+        className="double-bezel w-full max-w-sm"
+        onClick={(e) => e.stopPropagation()}
+        style={{ animation: "scale-in 0.25s cubic-bezier(0.32,0.72,0,1) forwards" }}
+      >
+        <div className="double-bezel-inner p-5 space-y-4">
+          <p className="text-sm font-semibold text-ink">{t("timeline.addEntryTitle" as string)}</p>
+
+          {error && (
+            <div className="rounded-xl bg-danger-muted ring-1 ring-danger/15 px-3 py-2 text-[12px] text-danger">
+              {error}
+            </div>
+          )}
+
+          <label className="block">
+            <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em] mb-1 block">
+              {t("timeline.startTime" as string)}
+            </span>
+            <input
+              type="text"
+              value={startStr}
+              onChange={(e) => setStartStr(e.target.value)}
+              placeholder="HH:MM:SS,ms"
+              className="w-full rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em] mb-1 block">
+              {t("timeline.endTime" as string)}
+            </span>
+            <input
+              type="text"
+              value={endStr}
+              onChange={(e) => setEndStr(e.target.value)}
+              placeholder="HH:MM:SS,ms"
+              className="w-full rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em] mb-1 block">
+              {t("timeline.text" as string)}
+            </span>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={3}
+              className="w-full rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[13px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 resize-none"
+            />
+          </label>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button onClick={onClose} className="btn-island-secondary btn-sm">
+              {t("timeline.cancel" as string)}
+            </button>
+            <button onClick={handleSubmit} className="btn-island-primary btn-sm">
+              {t("timeline.addEntry" as string)}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 export default function TimelineCheckModal({
@@ -134,6 +245,7 @@ export default function TimelineCheckModal({
   const [editingIndex, setEditingIndex] = useState(-1);
   const [retranslatingIndex, setRetranslatingIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -327,6 +439,26 @@ export default function TimelineCheckModal({
     );
     setActiveIndex(-1);
   }, []);
+
+  const addEntry = useCallback(
+    (start: number, end: number, text: string) => {
+      setEntries((prev) => {
+        const newEntry: SrtEntry = {
+          index: 0,
+          start,
+          end,
+          startLabel: secToSrt(start),
+          endLabel: secToSrt(end),
+          text,
+        };
+        const next = [...prev, newEntry];
+        next.sort((a, b) => a.start - b.start || a.end - b.end);
+        return next.map((e, i) => ({ ...e, index: i + 1 }));
+      });
+      setShowAddModal(false);
+    },
+    [],
+  );
 
   const handleBlockPointerDown = useCallback(
     (e: React.PointerEvent, index: number, mode: Exclude<DragMode, null>) => {
@@ -527,6 +659,16 @@ export default function TimelineCheckModal({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-accent text-white hover:bg-accent/80 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                title={t("timeline.addEntry" as string)}
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                {t("timeline.addEntry" as string)}
+              </button>
               <button
                 onClick={runRiskCheck}
                 disabled={checking || entries.length === 0}
@@ -968,6 +1110,14 @@ export default function TimelineCheckModal({
           </div>
         </div>
       </div>
+
+      {showAddModal && (
+        <AddEntryModal
+          currentTime={currentTime}
+          onAdd={addEntry}
+          onClose={() => setShowAddModal(false)}
+        />
+      )}
     </div>,
     document.body
   );
