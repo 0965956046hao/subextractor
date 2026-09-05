@@ -10,6 +10,10 @@ from app.services.retry_utils import (
     configured_gemini_keys,
     _next_key,
     genai_generate_content_factory,
+    gemini_model_chain,
+    raise_if_gemini_cancelled,
+    _is_retryable,
+    _sleep_interruptible,
 )
 
 logger = logging.getLogger(__name__)
@@ -350,8 +354,42 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
         # the client be garbage-collected before the request is sent, raising
         # "Cannot send a request, as the client has been closed" (see
         # retry_utils.genai_generate_content_factory docstring).
-        chat = client.chats.create(model=settings.gemini_model)
-        response = gemini_retry(chat.send_message)([*uploaded_files, prompt])
+        # Model fallback: lỗi retryable (429/503/5xx) thì đổi sang model kế
+        # tiếp (tối đa 2 lượt mỗi model); hết chuỗi mới bỏ qua như cũ.
+        response = None
+        last_err: Exception | None = None
+        chain = gemini_model_chain(settings.gemini_model)
+        logger.info(
+            "Context: model %s%s",
+            chain[0],
+            f" (+{len(chain) - 1} fallbacks)" if len(chain) > 1 else "",
+        )
+        for model in chain:
+            raise_if_gemini_cancelled()
+            chat = client.chats.create(model=model)
+            for attempt in range(2):
+                try:
+                    response = chat.send_message([*uploaded_files, prompt])
+                    break
+                except JobCancelled:
+                    raise
+                except Exception as e:
+                    last_err = e
+                    if not _is_retryable(e):
+                        raise
+                    logger.info(
+                        "Context model %s failed (attempt %d/2): %s",
+                        model, attempt + 1, e,
+                    )
+                    if attempt == 0:
+                        _sleep_interruptible(3)
+            if response is not None:
+                if model != settings.gemini_model:
+                    logger.info("Context fell back to model %s", model)
+                break
+            logger.info("Context switching to next model after %s failed", model)
+        if response is None:
+            raise last_err or RuntimeError("Context generation failed on all models")
 
         context = response.text.strip()
     except JobCancelled:

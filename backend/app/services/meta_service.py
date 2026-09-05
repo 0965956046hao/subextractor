@@ -2,10 +2,16 @@
 
 import json
 import logging
-import os
 
 from app.config import settings
 from app.services.context_service import load_video_context, load_share_text
+from app.services.job_utils import JobCancelled
+from app.services.retry_utils import (
+    configured_gemini_keys,
+    gemini_model_chain,
+    raise_if_gemini_cancelled,
+    _is_retryable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +45,6 @@ Output ONLY the JSON object, no markdown, no explanation.
 """
 
 
-def _read_user_config() -> dict:
-    cf = settings.temp_dir / "user_config.json"
-    if cf.exists():
-        try:
-            return json.loads(cf.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
-
-
 def _original_name(video_id: str) -> str:
     """Lấy tên gốc của video từ videos/{video_id}/meta.json (bỏ đuôi .mp4)."""
     meta = settings.temp_dir / "videos" / video_id / "meta.json"
@@ -65,13 +61,10 @@ def generate_video_meta(video_id: str) -> dict:
     context = load_video_context(video_id) or ""
     share_text = load_share_text(video_id) or ""
 
-    api_key = (
-        settings.gemini_api_key
-        or os.environ.get("GEMINI_API_KEY", "")
-        or _read_user_config().get("gemini_api_key", "")
-    )
-    if not api_key:
+    keys = configured_gemini_keys()
+    if not keys:
         raise RuntimeError("Gemini API key not configured")
+    api_key = keys[0]
 
     try:
         from google import genai
@@ -89,8 +82,32 @@ def generate_video_meta(video_id: str) -> dict:
     # (automatic function calling) của SDK và chỉ thực hiện 1 lượt truy vấn
     # thay vì nhiều round-trip (tối đa 10) → nhanh hơn, không làm proxy
     # frontend reset socket (ECONNRESET) khi meta generation chạy lâu.
-    chat = client.chats.create(model=settings.gemini_model)
-    response = chat.send_message(prompt, config={"temperature": 0.3})
+    # Model fallback: lỗi retryable thì đổi model kế tiếp, hết mới báo lỗi.
+    response = None
+    last_err: Exception | None = None
+    chain = gemini_model_chain(settings.gemini_model)
+    logger.info(
+        "Meta: model %s%s",
+        chain[0],
+        f" (+{len(chain) - 1} fallbacks)" if len(chain) > 1 else "",
+    )
+    for model in chain:
+        raise_if_gemini_cancelled()
+        chat = client.chats.create(model=model)
+        try:
+            response = chat.send_message(prompt, config={"temperature": 0.3})
+            if model != settings.gemini_model:
+                logger.info("Meta fell back to model %s", model)
+            break
+        except JobCancelled:
+            raise
+        except Exception as e:
+            last_err = e
+            if not _is_retryable(e):
+                raise
+            logger.info("Meta model %s failed: %s — trying next model", model, e)
+    if response is None:
+        raise last_err or RuntimeError("Meta generation failed on all models")
     raw = response.text.strip()
     raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     meta = json.loads(raw)

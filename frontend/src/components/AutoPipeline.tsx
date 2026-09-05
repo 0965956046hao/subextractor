@@ -2615,6 +2615,7 @@ function DetailView({
     (s) => s.resolveThumbnailFallback,
   );
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
+  const uploadYoutubeNow = usePipelineStore((s) => s.uploadYoutubeNow);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
@@ -3061,6 +3062,20 @@ function DetailView({
                         )}
                       </div>
                     )}
+                    {i === 12 &&
+                      p.videoId &&
+                      (p.status === "done" || p.status === "error") &&
+                      p.stepSkipped[12] && (
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={() => uploadYoutubeNow(p.id)}
+                            className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer"
+                          >
+                            {tr("pipeline.uploadYoutubeNow")}
+                          </button>
+                        </div>
+                      )}
                     {(active || done) && !skipped && (
                       <div className="mt-1.5 h-1 rounded-full bg-white/[0.08] overflow-hidden">
                         <div

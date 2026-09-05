@@ -192,7 +192,18 @@ def genai_generate_content_factory(key: str, timeout: float | None = None):
     return _call
 
 
-def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: float | None = None, **kwargs):
+def gemini_model_chain(primary: str | None = None) -> list[str]:
+    """Ordered model list: primary first, then configured fallbacks (deduped)."""
+    chain = [primary or settings.gemini_model]
+    raw = settings.gemini_fallback_models or ""
+    parts = [p.strip() for p in raw.split(",")] if isinstance(raw, str) else list(raw)
+    for m in parts:
+        if m and m not in chain:
+            chain.append(m)
+    return chain
+
+
+def gemini_call_rotating(fn_factory, *args, _max_attempts: int | None = None, _timeout: float | None = None, _models: list[str] | None = None, **kwargs):
     """Call a Gemini API with automatic key rotation on quota/rate-limit errors.
 
     `fn_factory(api_key: str, timeout: float | None)` must return the bound
@@ -200,7 +211,8 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
 
     - No keys configured → raises the friendly "set a key" error.
     - Retryable error (429/RESOURCE_EXHAUSTED/QUOTA/...): rotate to the next key
-      and retry, up to `_max_attempts` total (each attempt uses a fresh key).
+      AND switch to the next model in the chain, up to `_max_attempts` total
+      (default: one attempt per model in the chain, so every model is tried).
     - Non-retryable errors are raised immediately.
     - `_timeout` (seconds) is forwarded to each `generate_content` call.
     """
@@ -208,9 +220,20 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
     if not keys:
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
+    primary = kwargs.pop("model", None) or settings.gemini_model
+    models = _models or gemini_model_chain(primary)
+    max_attempts = _max_attempts if _max_attempts is not None else len(models)
+    logger.info(
+        "Gemini call: model %s%s",
+        models[0],
+        f" (+{len(models) - 1} fallbacks)" if len(models) > 1 else "",
+    )
+
     last_err: Exception | None = None
-    for i in range(_max_attempts):
+    for i in range(max_attempts):
         raise_if_gemini_cancelled()
+        model = models[i % len(models)]
+        kwargs["model"] = model
         key = _next_key(keys)
         try:
             fn = fn_factory(key, timeout=_timeout)
@@ -219,11 +242,12 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
             last_err = e
             if not _should_retry(e):
                 raise
-            if i < _max_attempts - 1:
+            if i < max_attempts - 1:
+                nxt = models[(i + 1) % len(models)]
                 delay = random.uniform(2, 8)
                 logger.info(
-                    "Gemini call failed on key %s (attempt %d/%d): %s — rotating key, backoff %.1fs",
-                    _mask(key), i + 1, _max_attempts, e, delay,
+                    "Gemini call failed on key %s model %s (attempt %d/%d): %s — switching to model %s, backoff %.1fs",
+                    _mask(key), model, i + 1, max_attempts, e, nxt, delay,
                 )
                 _sleep_interruptible(delay)
     raise last_err  # type: ignore[misc]

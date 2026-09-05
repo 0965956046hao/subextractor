@@ -317,6 +317,8 @@ interface PipelineState {
   ) => void;
   resolveThumbnailFallback: (id: string, choice: "fal" | "skip") => void;
   restorePaused: () => void;
+  /** Upload YouTube thủ công cho pipeline đã xong mà quên tick auto-upload. */
+  uploadYoutubeNow: (id: string) => void;
 }
 
 function emptySteps<T>(v: T): T[] {
@@ -946,6 +948,50 @@ export const usePipelineStore = create<PipelineState>()(
       restorePaused: () => {
         runRestorePaused();
       },
+      // Upload YouTube thủ công (pipeline đã xong nhưng quên tick auto-upload).
+      // Không đụng status/stage — chỉ chạy step 12 + log, BE đã có endpoint.
+      uploadYoutubeNow: async (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.videoId) return;
+        if (s.status !== "done" && s.status !== "error") return;
+        if (youtubeUploading.has(id)) return;
+        const videoId = s.videoId;
+        youtubeUploading.add(id);
+        try {
+          patch(id, { autoUploadYoutube: true });
+          markStepStart(id, 12);
+          appendLog(id, "Upload YouTube thủ công (kèm meta)...");
+          const channelId = s.youtubeChannel || "";
+          const ur = await fetch(
+            `/api/youtube/upload/${videoId}${channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ""}`,
+            { method: "POST" },
+          );
+          const ud = await ur.json();
+          if (ur.ok && ud.job_id) {
+            const us = await pollYoutubeUpload(ud.job_id, (t) => {
+              setStepProgress(id, 12, t.progress);
+              recalcOverall(id);
+              if (t.logs) appendBackendLogs(id, t.logs);
+            });
+            if (us.status === "done") {
+              appendLog(id, "Upload YouTube hoàn tất!");
+              markStepEnd(id, 12);
+            } else {
+              appendLog(id, `Upload YouTube thất bại: ${us.error || "lỗi"}`);
+              markStepSkipped(id, 12);
+            }
+          } else {
+            appendLog(id, `Không upload được: ${ud.detail || "chưa cấu hình"}`);
+            markStepSkipped(id, 12);
+          }
+        } catch {
+          appendLog(id, "Upload YouTube lỗi.");
+          markStepSkipped(id, 12);
+        } finally {
+          youtubeUploading.delete(id);
+          reportPipeline(id, true);
+        }
+      },
     }),
     {
       name: "ste-pipelines",
@@ -1265,6 +1311,8 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 // ── Queue ──────────────────────────────────────────────────────────────────
 
 let queue: { id: string; startStep: number; force?: boolean }[] = [];
+// Upload YouTube thủ công đang chạy (ngoài queue pipeline chính).
+const youtubeUploading = new Set<string>();
 let processing = false;
 const abortedPipelines = new Set<string>();
 // Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).

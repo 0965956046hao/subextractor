@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # Gemini translation
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
+    # Model dự phòng (phân tách dấu phẩy): model lỗi retryable (429/503/5xx)
+    # thì tự đổi sang model kế tiếp; hết danh sách mới báo lỗi. Override bằng
+    # env STE_gemini_fallback_models. Model chính luôn được thử đầu tiên.
+    gemini_fallback_models: str = (
+        "gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite,"
+        "gemini-3.5-flash,gemini-3.6-flash,gemini-3.7-flash,gemini-3.8-flash"
+    )
     gemini_timeout: int = 300  # seconds (5 phút) per API call
 
     # Google Cloud TTS
