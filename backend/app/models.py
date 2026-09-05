@@ -98,6 +98,7 @@ class TelegramAutoRequest(BaseModel):
     auto_upload_youtube: bool = False
     youtube_channel: str = ""
     pipeline_preset: str = ""
+    playback_speed: float = 1.0
 
 
 class PipelineState(BaseModel):

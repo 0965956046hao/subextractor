@@ -549,8 +549,10 @@ async def run_hardcode_job(
         partial_path.unlink(missing_ok=True)
         partial_path.with_suffix(".ass").unlink(missing_ok=True)
 
+        playback_speed = float(job.get("playback_speed", 1.0) or 1.0)
         if (
             not job.get("watermark")
+            and abs(playback_speed - 1.0) < 0.01
             and final_path.exists()
             and final_path.stat().st_size > 0
             and _duration_covers(video_path, str(final_path))
@@ -1743,6 +1745,7 @@ async def run_telegram_auto_job(
             "auto_fit": job.get("auto_fit", True),
             "region": region,
             "style": selected_style,
+            "playback_speed": float(job.get("playback_speed", 1.0) or 1.0),
         }
         await run_hardcode_job(jobs, ws_clients, hc_job_id)
         if jobs[hc_job_id].get("status") == "done":

@@ -1620,12 +1620,13 @@ async def hardcode_subtitles(video_id: str, request: Request):
     ws_clients = get_ws_clients(request)
     queue = get_job_queue(request)
 
-    # Optional body: { auto_fit, region, style, watermark: bool, watermark_preset: id }
+    # Optional body: { auto_fit, region, style, watermark: bool, watermark_preset: id, playback_speed }
     auto_fit = False
     region = None
     style = None
     watermark = False
     watermark_preset = None
+    playback_speed = 1.0
     try:
         raw = await request.json()
         if isinstance(raw, dict):
@@ -1640,6 +1641,14 @@ async def hardcode_subtitles(video_id: str, request: Request):
                 style = raw["style"]
             watermark = bool(raw.get("watermark", False))
             watermark_preset = raw.get("watermark_preset")
+            try:
+                ps = float(raw.get("playback_speed", 1.0))
+                if 0.5 <= ps <= 3.0:
+                    playback_speed = ps
+                elif 0.25 <= ps <= 4.0:
+                    playback_speed = max(0.5, min(3.0, ps))
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1659,11 +1668,12 @@ async def hardcode_subtitles(video_id: str, request: Request):
         "style": style,
         "watermark": watermark,
         "watermark_preset": watermark_preset,
+        "playback_speed": playback_speed,
     }
     jobs[job_id] = job
     logger.info(
-        "hardcode job %s: queued for %s (auto_fit=%s, watermark=%s, preset=%s)",
-        job_id, video_id, auto_fit, watermark, watermark_preset,
+        "hardcode job %s: queued for %s (auto_fit=%s, watermark=%s, preset=%s, speed=%s)",
+        job_id, video_id, auto_fit, watermark, watermark_preset, playback_speed,
     )
     await queue.put(job_id)
     return {"job_id": job_id}
