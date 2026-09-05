@@ -822,8 +822,10 @@ async def run_hardcode_job(
         _safe_unlink(partial_path)
         _safe_unlink(partial_path.with_suffix(".ass"))
 
+        playback_speed = float(job.get("playback_speed", 1.0) or 1.0)
         if (
             not job.get("watermark")
+            and abs(playback_speed - 1.0) < 0.01
             and final_path.exists()
             and final_path.stat().st_size > 0
             and _duration_covers(video_path, str(final_path))
@@ -1952,6 +1954,7 @@ async def run_telegram_auto_job(
             "region": region,
             "style": selected_style,
             "require_dub_audio": job.get("auto_dub", True),
+            "playback_speed": float(job.get("playback_speed", 1.0) or 1.0),
         }
         await run_hardcode_job(jobs, ws_clients, hc_job_id)
         if jobs[hc_job_id].get("status") == "done":

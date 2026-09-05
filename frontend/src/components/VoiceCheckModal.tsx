@@ -104,12 +104,13 @@ export default function VoiceCheckModal({
     return () => setMounted(false);
   }, []);
 
+  const langMap: Record<string, string> = {
+    vi: "vi-VN", en: "en-US", zh: "zh-CN", ja: "ja-JP", ko: "ko-KR",
+  };
+
   // Fetch all CapCut voices for the target language
   useEffect(() => {
     let cancelled = false;
-    const langMap: Record<string, string> = {
-      vi: "vi-VN", en: "en-US", zh: "zh-CN", ja: "ja-JP", ko: "ko-KR",
-    };
     getCapCutVoices(langMap[targetLang] || "vi-VN")
       .then((voices) => { if (!cancelled) setAllVoices(voices); })
       .catch(() => {});
@@ -406,7 +407,7 @@ export default function VoiceCheckModal({
   const handleBulkPreview = useCallback(async (voiceType: string) => {
     setBulkPreviewing(voiceType);
     try {
-      const blob = await capCutPreview(voiceType, t("voice.previewText" as string));
+      const blob = await capCutPreview(voiceType, t("voice.previewText" as string), langMap[targetLang] || "vi-VN");
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.onended = () => { URL.revokeObjectURL(url); setBulkPreviewing(null); };
@@ -415,7 +416,7 @@ export default function VoiceCheckModal({
     } catch {
       setBulkPreviewing(null);
     }
-  }, [t]);
+  }, [t, targetLang, langMap]);
 
   const scrollToEntry = useCallback((index: number) => {
     const el = entryRefs.current.get(index);

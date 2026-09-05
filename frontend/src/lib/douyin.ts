@@ -14,26 +14,7 @@ function getBrowserPath(): string {
   const envPath = process.env.BROWSER_PATH || process.env.CHROME_PATH;
   if (envPath && fs.existsSync(envPath)) return envPath;
 
-  const isCocCoc = process.env.BROWSER_TYPE === "coccoc" || process.env.USE_COC_COC === "true";
-
   if (process.platform === "win32") {
-    if (isCocCoc) {
-      const coccocCandidates = [
-        process.env.LOCALAPPDATA &&
-          path.join(
-            process.env.LOCALAPPDATA,
-            "CocCoc",
-            "Browser",
-            "Application",
-            "browser.exe"
-          ),
-        "C:\\Program Files\\CocCoc\\Browser\\Application\\browser.exe",
-        "C:\\Program Files (x86)\\CocCoc\\Browser\\Application\\browser.exe",
-      ].filter(Boolean) as string[];
-      const found = coccocCandidates.find((p) => fs.existsSync(p));
-      if (found) return found;
-    }
-    // Default: Chrome
     const chromeCandidates = [
       process.env.LOCALAPPDATA &&
         path.join(
@@ -46,16 +27,11 @@ function getBrowserPath(): string {
       "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
       "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     ].filter(Boolean) as string[];
-    return chromeCandidates.find((p) => fs.existsSync(p)) || chromeCandidates[0];
+    const foundChrome = chromeCandidates.find((p) => fs.existsSync(p));
+    return foundChrome || chromeCandidates[0];
   }
 
-  // macOS / Linux - check for Cốc Cốc first if requested
-  if (isCocCoc && process.platform === "darwin") {
-    const coccocPath = "/Applications/CocCoc.app/Contents/MacOS/CocCoc";
-    if (fs.existsSync(coccocPath)) return coccocPath;
-  }
-
-  // Default Chrome paths
+  // Default Chrome paths for macOS / Linux
   switch (process.platform) {
     case "darwin":
       return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -65,7 +41,6 @@ function getBrowserPath(): string {
 }
 
 export const CHROME_PATH = getBrowserPath();
-export const IS_COC_COC = process.env.BROWSER_TYPE === "coccoc" || process.env.USE_COC_COC === "true";
 
 export const CDP_URL = process.env.DOUYIN_CDP_URL || "http://localhost:9222";
 
@@ -155,7 +130,7 @@ export async function openBrowser(options?: {
       });
       if (headless) return { browser, persistent: true };
       const version = await browser.version();
-      const isHeadless = /headlesschrome/i.test(version) || (IS_COC_COC && /headless/i.test(version));
+      const isHeadless = /headlesschrome/i.test(version);
       if (isHeadless) {
         await browser.disconnect().catch(() => {});
         continue; // headless instance — not usable for a visible login
@@ -168,6 +143,16 @@ export async function openBrowser(options?: {
   }
   // For a visible login, make sure no headless instance holds our profile lock.
   if (!headless) killChromeOnProfile(PROFILE_DIR);
+
+  // Verify executable exists
+  try {
+    if (!fs.existsSync(CHROME_PATH)) {
+      throw new Error(`Browser executable not found at: ${CHROME_PATH}`);
+    }
+  } catch (e) {
+    throw new Error(`Cannot access browser executable: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   const browser = await puppeteer.launch({
     executablePath: CHROME_PATH,
     headless,
@@ -179,19 +164,22 @@ export async function openBrowser(options?: {
       "--disable-background-timer-throttling",
       "--disable-renderer-backgrounding",
       "--disable-features=Translate,MediaRouter",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
     ],
     defaultViewport: null,
+  }).catch((err) => {
+    throw new Error(`Puppeteer launch failed: ${err.message}`);
   });
   return { browser, persistent: false };
 }
 
-/** Kill any Chrome/Cốc Cốc running with the given user-data-dir (profile lock). */
+/** Kill any Chrome running with the given user-data-dir (profile lock). */
 export function killChromeOnProfile(profileDir: string): void {
-  // Windows: pgrep không tồn tại -> dùng WMIC / tasklist để tìm process có --user-data-dir
   if (process.platform === "win32") {
     try {
       const out = execSync(
-        `wmic process where "CommandLine like '%user-data-dir=${profileDir.replace(/\\/g, "\\\\")}%' and Name like '%chrome%' or Name like '%browser%'" get ProcessId /format:list`,
+        `wmic process where "CommandLine like '%user-data-dir=${profileDir.replace(/\\/g, "\\\\")}%' and Name like '%chrome%'" get ProcessId /format:list`,
         { encoding: "utf8" },
       );
       const pids = [...out.matchAll(/ProcessId=(\d+)/g)].map((m) => m[1]);
@@ -201,11 +189,6 @@ export function killChromeOnProfile(profileDir: string): void {
         } catch {}
       }
       if (pids.length) return;
-      // Fallback: tasklist + findstr (WMIC may be deprecated on Win11)
-      try {
-        const taskOut = execSync('tasklist /FI "IMAGENAME eq chrome.exe" /FO CSV /NH', { encoding: "utf8" });
-        // Không giết hàng loạt nếu không match chính xác profile - tránh kill Chrome người dùng
-      } catch {}
     } catch {
       // no matches
     }
@@ -269,7 +252,7 @@ export async function saveCookies(page: Page): Promise<number> {
     if (cookies.length === 0) return 0;
     const cleaned = toCookieParams(cookies);
     fs.mkdirSync(path.dirname(COOKIE_FILE), { recursive: true });
-    fs.writeFileSync(COOKIE_FILE, JSON.stringify(cleaned, null, 2));
+    fs.writeFileSync(COOKIE_FILE, JSON.stringify(cleaned, null, 2), "utf8");
     return cleaned.length;
   } catch {
     return 0;

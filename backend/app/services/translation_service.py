@@ -489,6 +489,7 @@ def _call_gemini(contents, config: dict):
         model=settings.gemini_model,
         contents=contents,
         config=config,
+        _timeout=settings.gemini_timeout,
     )
 
 

@@ -90,6 +90,7 @@ def gemini_map_texts(
                     "system_instruction": system_instruction,
                     "temperature": temperature,
                 },
+                _timeout=settings.gemini_timeout,
             )
             response_text = (response.text or "").strip()
         except Exception as e:  # noqa: BLE001

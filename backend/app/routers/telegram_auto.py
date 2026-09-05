@@ -60,6 +60,7 @@ async def telegram_auto(
         "thumbnail": body.thumbnail,
         "auto_upload_youtube": body.auto_upload_youtube,
         "youtube_channel": body.youtube_channel,
+        "playback_speed": body.playback_speed,
     }
     jobs[job_id] = job
     await queue.put(job_id)

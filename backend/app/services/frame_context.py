@@ -1,12 +1,10 @@
 """Generate context images for videos that have NO source-provided thumbnails.
 
 YouTube imports and local uploads don't carry Douyin-style cover/scene images.
-For those, we sample the video itself: **1 frame every ``interval_sec`` seconds
-(NO upper limit)**, then group the frames into sheets of ``frames_per_sheet``
-(scaled small + stitched). The more frames there are, the more context images
-(context sheets) are produced. All sheets are uploaded to Gemini (via
-``context_service.generate_video_context``) so translation/meta steps get
-visual context just like Douyin videos do.
+For those, we sample the video at **30-second intervals**, then group every 20
+frames into a stitched composite sheet (context_sheet_NNN.jpg).  The last batch
+keeps whatever frames remain (even if < 20).  This gives Gemini rich visual
+context across the entire video, regardless of length.
 """
 
 import logging
@@ -22,6 +20,8 @@ _ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 _CELL_W = 240
 _CELL_H = 135
 _COLS = 5
+_FRAME_INTERVAL = 30   # seconds between each sampled frame
+_FRAMES_PER_SHEET = 20 # frames stitched into one context image
 
 
 def _find_video_file(video_id: str) -> Path | None:
@@ -57,34 +57,67 @@ def _ffmpeg() -> str:
     return shutil.which("ffmpeg") or "ffmpeg"
 
 
+def _extract_frame(video: Path, timestamp: float, out: Path) -> bool:
+    """Extract a single frame at ``timestamp`` seconds, scaled to cell size."""
+    try:
+        proc = subprocess.run(
+            [
+                _ffmpeg(), "-ss", str(timestamp), "-i", str(video),
+                "-frames:v", "1",
+                "-vf", f"scale={_CELL_W}:{_CELL_H}",
+                "-y", str(out),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        return out.exists() and out.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def _stitch_sheet(frame_paths: list[Path], out_sheet: Path) -> bool:
+    """Stitch a list of frame images into a single tiled sheet."""
+    if not frame_paths:
+        return False
+    rows = (len(frame_paths) + _COLS - 1) // _COLS
+    cmd = [_ffmpeg(), "-y"]
+    for p in frame_paths:
+        cmd += ["-i", str(p)]
+    cmd += [
+        "-filter_complex",
+        f"tile={_COLS}x{rows}:padding=8:color=black",
+        str(out_sheet),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+        return out_sheet.exists() and out_sheet.stat().st_size > 0
+    except Exception:
+        return False
+
+
 def generate_context_frames(
     video_id: str,
-    interval_sec: int = 30,
-    frames_per_sheet: int = 20,
     force: bool = False,
 ) -> list[Path]:
-    """Sample 1 frame every ``interval_sec`` s (NO limit), then group frames into
-    sheets of ``frames_per_sheet`` (scaled small + stitched). The more frames, the
-    more context sheets are produced.
+    """Extract frames every 30 s and group every 20 frames into a stitched sheet.
 
     Saves:
       - ``context/{video_id}/thumbnail.jpg`` — first sampled frame (cover)
-      - ``context/{video_id}/context_images/context_sheet_000.jpg`` … — one
-        stitched sheet per ``frames_per_sheet`` frames (ảnh bối cảnh)
+      - ``context/{video_id}/context_images/context_sheet_000.jpg`` …
+        one sheet per batch of 20 frames (last batch may have fewer)
 
     Returns the list of sheet paths, or ``[]`` if generation failed.
-    Skips (returns existing sheets) when any sheet already exists unless ``force``.
+    Skips (returns existing sheets) when sheets already exist unless ``force``.
     """
     video = _find_video_file(video_id)
     if not video or not video.exists():
-        logger.warning("Video file not found for %s", video_id)
         return []
 
     ctx_dir = settings.temp_dir / "context" / video_id
     sheet_dir = ctx_dir / "context_images"
     existing = sorted(sheet_dir.glob("context_sheet_*.jpg")) if sheet_dir.exists() else []
     if existing and not force:
-        logger.info("Context sheets already exist for %s, skipping (use force=True to regenerate)", video_id)
+        logger.info("Context sheets already exist for %s (%d sheets), skipping", video_id, len(existing))
         return existing
 
     duration = _probe_duration(video)
@@ -92,184 +125,62 @@ def generate_context_frames(
         logger.warning("Cannot probe duration for %s, skip frame context", video_id)
         return []
 
-    # Sample every interval_sec seconds, unlimited.
+    # ── 1. Build timestamp list: 0, 30, 60, … < duration ──
     times: list[float] = []
     t = 0.0
     while t < duration:
         times.append(t)
-        t += interval_sec
+        t += _FRAME_INTERVAL
 
-    logger.info("Video %s: duration=%.1fs, will sample %d frames (every %ds)", video_id, duration, len(times), interval_sec)
+    if not times:
+        logger.warning("No timestamps for %s (duration=%.1f)", video_id, duration)
+        return []
+
+    # ── 2. Group timestamps into batches of _FRAMES_PER_SHEET ──
+    batches: list[list[float]] = []
+    for i in range(0, len(times), _FRAMES_PER_SHEET):
+        batches.append(times[i : i + _FRAMES_PER_SHEET])
 
     tmp = ctx_dir / "_frames_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     sheets: list[Path] = []
     try:
-        frames: list[Path] = []
-        for i, tt in enumerate(times):
-            out = tmp / f"f{i:05d}.jpg"
-            proc = subprocess.run(
-                [
-                    _ffmpeg(), "-ss", str(tt), "-i", str(video),
-                    "-frames:v", "1",
-                    "-vf",
-                    f"scale={_CELL_W}:{_CELL_H}",
-                    "-y", str(out),
-                ],
-                capture_output=True,
-                timeout=30,
-            )
-            if out.exists() and out.stat().st_size > 0:
-                frames.append(out)
-                logger.debug("Extracted frame %d at %.1fs: %s", i, tt, out.name)
-            else:
-                logger.warning("Frame %d at %.1fs extraction failed: %s", i, tt, proc.stderr[-200:].decode() if isinstance(proc.stderr, bytes) else proc.stderr[-200:])
-
-        if not frames:
-            logger.warning("No frames extracted for %s", video_id)
-            return []
-
         ctx_dir.mkdir(parents=True, exist_ok=True)
         sheet_dir.mkdir(parents=True, exist_ok=True)
 
-        # Cover = first sampled frame
-        shutil.copyfile(frames[0], ctx_dir / "thumbnail.jpg")
-        logger.info("Thumbnail saved: %s", ctx_dir / "thumbnail.jpg")
-
-        # Group frames into sheets - ALWAYS create at least 1 sheet if we have any frames
-        num_chunks = (len(frames) + frames_per_sheet - 1) // frames_per_sheet
-        logger.info("Creating %d context sheet(s) from %d frames (max %d per sheet)", num_chunks, len(frames), frames_per_sheet)
-        
-        for si in range(0, len(frames), frames_per_sheet):
-            chunk = frames[si : si + frames_per_sheet]
-            rows = (len(chunk) + _COLS - 1) // _COLS
-            sheet = sheet_dir / f"context_sheet_{si // frames_per_sheet:03d}.jpg"
-            
-            # Use hstack/vstack instead of tile filter (more compatible)
-            n = len(chunk)
-            inputs = []
-            for f in chunk:
-                inputs.extend(["-i", str(f)])
-            
-            # Build filter complex: scale each to exact size -> hstack rows -> vstack rows (if multiple rows)
-            filter_parts = []
-            for i in range(n):
-                filter_parts.append(f"[{i}:v]scale={_CELL_W}:{_CELL_H}[v{i}]")
-            
-            # Build rows using hstack, pad shorter rows with black frame files
-            row_labels = []
-            # Create a black frame file once for padding
-            black_frame = tmp / "black_frame.jpg"
-            if not black_frame.exists():
-                proc = subprocess.run(
-                    [_ffmpeg(), "-f", "lavfi", "-i", f"color=black:size={_CELL_W}x{_CELL_H}", "-frames:v", "1", "-y", str(black_frame)],
-                    capture_output=True, timeout=10,
-                )
-            
-            for r in range(rows):
-                start = r * _COLS
-                end = min(start + _COLS, n)
-                row_inputs = " ".join(f"[v{i}]" for i in range(start, end))
-                row_label = f"row{r}"
-                actual_cols = end - start
-                if actual_cols < _COLS:
-                    # Add black frame inputs for padding
-                    pad_count = _COLS - actual_cols
-                    for p in range(pad_count):
-                        pad_idx = n + p
-                        inputs.extend(["-i", str(black_frame)])
-                    # hstack real frames -> [real{r}] (only if >1 frame)
-                    if actual_cols > 1:
-                        filter_parts.append(f"{row_inputs}hstack=inputs={actual_cols}[real{r}]")
-                        real_label = f"real{r}"
-                    else:
-                        real_label = f"v{start}"  # single frame, use directly
-                    # hstack black frames -> [pad{r}] (only if >1 pad frame)
-                    if pad_count > 1:
-                        pad_indices = " ".join(f"[{n+p}:v]" for p in range(pad_count))
-                        filter_parts.append(f"{pad_indices}hstack=inputs={pad_count}[pad{r}]")
-                        pad_label = f"pad{r}"
-                    else:
-                        pad_label = f"[{n}:v]"  # single black frame, use directly
-                    # Combine real + pad
-                    filter_parts.append(f"[{real_label}] {pad_label}hstack=inputs=2[{row_label}]")
+        total_extracted = 0
+        for batch_idx, batch_times in enumerate(batches):
+            # Extract frames for this batch
+            batch_frames: list[Path] = []
+            for i, tt in enumerate(batch_times):
+                global_idx = batch_idx * _FRAMES_PER_SHEET + i
+                out = tmp / f"f{global_idx:05d}.jpg"
+                if _extract_frame(video, tt, out):
+                    batch_frames.append(out)
                 else:
-                    if actual_cols > 1:
-                        filter_parts.append(f"{row_inputs}hstack=inputs={actual_cols}[{row_label}]")
-                    else:
-                        # Single frame, just use it directly
-                        filter_parts.append(f"{row_inputs}[{row_label}]")
-                row_labels.append(row_label)
-            
-            # Stack rows vertically (only if multiple rows)
-            if rows > 1:
-                filter_parts.append(f"{' '.join(f'[{rl}]' for rl in row_labels)}vstack=inputs={rows}[out]")
-                final_label = "out"
-            else:
-                final_label = row_labels[0]
-            
-            # Add final output mapping
-            filter_complex = ";".join(filter_parts)
-            
-            # Use -update 1 for single image output
-            proc = subprocess.run(
-                [_ffmpeg(), *inputs, "-filter_complex", filter_complex, "-map", f"[{final_label}]", "-update", "1", "-y", str(sheet)],
-                capture_output=True,
-                timeout=60,
-            )
-            if sheet.exists() and sheet.stat().st_size > 0:
+                    logger.debug("Frame %d (%.1fs) for %s failed", global_idx, tt, video_id)
+
+            if not batch_frames:
+                logger.warning("Batch %d: no frames extracted for %s", batch_idx, video_id)
+                continue
+
+            total_extracted += len(batch_frames)
+
+            # Cover = first frame of first batch only
+            if batch_idx == 0:
+                shutil.copyfile(batch_frames[0], ctx_dir / "thumbnail.jpg")
+
+            # Stitch this batch into a sheet
+            sheet = sheet_dir / f"context_sheet_{batch_idx:03d}.jpg"
+            if _stitch_sheet(batch_frames, sheet):
                 sheets.append(sheet)
-                logger.info("Context sheet created: %s (%d frames, %d row%s)", sheet.name, len(chunk), rows, "s" if rows > 1 else "")
             else:
-                stderr = proc.stderr[-500:].decode() if isinstance(proc.stderr, bytes) else proc.stderr[-500:]
-                logger.warning("Stitch %s failed: %s", sheet.name, stderr)
-        
+                logger.warning("Stitch batch %d failed for %s", batch_idx, video_id)
+
         logger.info(
-            "Context generation complete for %s: %d frames → %d sheets",
-            video_id, len(frames), len(sheets),
+            "Context sheets generated for %s: %d frames → %d sheets",
+            video_id, total_extracted, len(sheets),
         )
         return sheets
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-
-
-def _stitch_frames_fallback(frames: list[Path], output_path: Path) -> bool:
-    """Fallback stitch using simple filter chain when tile filter fails."""
-    if not frames:
-        return False
-    try:
-        # Build filter: scale each frame then hstack/vstack
-        n = len(frames)
-        cols = min(5, n)
-        rows = (n + cols - 1) // cols
-        
-        # Create inputs
-        inputs = []
-        for f in frames:
-            inputs.extend(["-i", str(f)])
-        
-        # Build filter complex
-        filter_parts = []
-        for i in range(n):
-            filter_parts.append(f"[{i}:v]scale=240:135:force_original_aspect_ratio=decrease,pad=240:135:(ow-iw)/2:(oh-ih)/2[v{i}]")
-        
-        # Stack horizontally then vertically
-        hstack_parts = []
-        for r in range(rows):
-            start = r * cols
-            end = min(start + cols, n)
-            hstack_parts.append(f"[{' '.join(f'[v{i}]' for i in range(start, end))}]hstack=inputs={end-start}[row{r}]")
-        
-        vstack_part = f"[{' '.join(f'[row{r}]' for r in range(rows))}]vstack=inputs={rows}"
-        
-        filter_complex = ";".join(filter_parts + hstack_parts + [vstack_part])
-        
-        proc = subprocess.run(
-            [_ffmpeg(), *inputs, "-filter_complex", filter_complex, "-y", str(output_path)],
-            capture_output=True,
-            timeout=60,
-        )
-        return output_path.exists() and output_path.stat().st_size > 0
-    except Exception as e:
-        logger.warning("Fallback stitch failed: %s", e)
-        return False

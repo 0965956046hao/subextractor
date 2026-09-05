@@ -481,6 +481,47 @@ def _escape_fontfile(path: str | None) -> str:
     return path
 
 
+def _atempo_chain(speed: float) -> str:
+    """Build atempo filter chain for arbitrary speed (0.5-3.0).
+
+    FFmpeg atempo only supports 0.5-2.0 per filter, so chain multiple.
+    """
+    if abs(speed - 1.0) < 0.01:
+        return ""
+    # Decompose speed into factors within [0.5, 2.0]
+    factors: list[str] = []
+    s = float(speed)
+    # Handle >2.0 by splitting
+    while s > 2.0 + 1e-6:
+        factors.append("atempo=2.0")
+        s /= 2.0
+    while s < 0.5 - 1e-6:
+        factors.append("atempo=0.5")
+        s /= 0.5
+    factors.append(f"atempo={s:.4f}")
+    return ",".join(factors)
+
+
+def _scale_srt_speed(srt_content: str, speed: float) -> str:
+    """Scale SRT timestamps by 1/speed (faster video → earlier subs)."""
+    if abs(speed - 1.0) < 0.01:
+        return srt_content
+    from app.services.srt_utils import parse_srt, entries_to_srt, _fmt
+
+    entries = parse_srt(srt_content)
+    if not entries:
+        return srt_content
+    scaled = []
+    for e in entries:
+        ns = e.start / speed
+        ne = e.end / speed
+        # Ensure non-negative and end > start
+        if ne <= ns:
+            ne = ns + 0.1
+        scaled.append(e.model_copy(update={"start": ns, "end": ne, "startLabel": _fmt(ns), "endLabel": _fmt(ne)}))
+    return entries_to_srt(scaled)
+
+
 # ---------------------------------------------------------------------------
 # Subtitle preview render helpers (Pillow + OpenCV)
 # ---------------------------------------------------------------------------
@@ -626,8 +667,27 @@ def run_hardcode_sync(
     if (tw, th) != (vw, vh):
         _log(f"Nâng độ phân giải xuất: {vw}x{vh} → {tw}x{th} (tối thiểu 1080p).")
 
+    # ── Playback speed ─────────────────────────────────────────────────────
+    try:
+        playback_speed = float(job.get("playback_speed", 1.0) or 1.0)
+    except Exception:
+        playback_speed = 1.0
+    if playback_speed < 0.5:
+        playback_speed = 0.5
+    if playback_speed > 3.0:
+        playback_speed = 3.0
+    if abs(playback_speed - 1.0) >= 0.01:
+        _log(f"Tốc độ video: {playback_speed:.2f}x — sẽ scale video/audio/subtitle khi encode.")
+        logger.info("hardcode job %s: playback_speed=%s", job_id, playback_speed)
+    # Scaled duration for progress tracking
+    scaled_dur = total_dur / playback_speed if playback_speed and playback_speed > 0 else total_dur
+
     # ── ASS subtitle file ──────────────────────────────────────────────────
     srt_content = Path(srt_path_str).read_text(encoding="utf-8")
+    # Scale subtitle timestamps if speed != 1.0
+    if abs(playback_speed - 1.0) >= 0.01:
+        srt_content = _scale_srt_speed(srt_content, playback_speed)
+        _log(f"Đã scale {len(parse_srt(srt_content))} dòng phụ đề theo tốc độ {playback_speed:.2f}x.")
     style = get_subtitle_style()
     fixed_box_height = None
     if job.get("auto_fit") and job.get("region"):
@@ -801,13 +861,18 @@ def run_hardcode_sync(
     ass_fn_esc = ass_filename.replace("\\", "\\\\").replace(":", "\\:")
 
     if use_complex:
-        # ── Complex filter graph: scale → subtitles → overlay → drawtext ──
+        # ── Complex filter graph: scale → setpts → subtitles → overlay → drawtext ──
         fc_parts: list[str] = []
         last_out = "0:v"
 
         # Scale
         fc_parts.append(f"[{last_out}]scale={tw}:{th}:flags=lanczos[scaled]")
         last_out = "scaled"
+
+        # Playback speed (video)
+        if abs(playback_speed - 1.0) >= 0.01:
+            fc_parts.append(f"[{last_out}]setpts=PTS/{playback_speed}[spd]")
+            last_out = "spd"
 
         # Subtitles (libass)
         if has_libass:
@@ -847,7 +912,7 @@ def run_hardcode_sync(
                 font_opt = ""
             font_size = max(30, int(th * 0.04))
             gap = max(12, int(th * 0.022))
-            dur = total_dur if total_dur and total_dur > 0 else 1.0
+            dur = (scaled_dur if scaled_dur and scaled_dur > 0 else total_dur) if total_dur and total_dur > 0 else 1.0
             text_raw = watermark.get("text", "")
 
             # FFmpeg drawtext expression cho chữ chạy vòng quanh viền video.
@@ -899,12 +964,15 @@ def run_hardcode_sync(
 
         filter_complex = ";".join(fc_parts)
     else:
-        # ── Simple chain: just scale + subtitles via -vf ───────────────────
+        # ── Simple chain: just scale + setpts + subtitles via -vf ───────────
         vf_parts = [f"scale={tw}:{th}:flags=lanczos"]
+        if abs(playback_speed - 1.0) >= 0.01:
+            vf_parts.append(f"setpts=PTS/{playback_speed}")
         if has_libass:
             vf_parts.append(f"subtitles={ass_fn_esc}")
 
     # ── Encoder selection ──────────────────────────────────────────────────
+# ── Encoder selection ──────────────────────────────────────────────────
     v_enc = get_best_video_encoder()
     logger.info(f"hardcode job {job_id}: using video encoder {v_enc[1]}")
 
@@ -938,13 +1006,23 @@ def run_hardcode_sync(
         cmd += ["-map", f"[{last_out}]"]
     else:
         cmd += ["-vf", ",".join(vf_parts)]
+        # Map video (qua -vf) rõ ràng. ffmpeg TẮT tự động chọn stream ngay khi
+        # có bất kỳ -map nào → nếu chỉ map audio, video sẽ bị drop và file đầu
+        # ra chỉ có tiếng không có hình.
+        cmd += ["-map", "0:v"]
         cmd += ["-map", "0:v"]
 
-    # Audio mapping
+    # Audio mapping + speed (atempo)
     if use_external_audio:
         cmd += ["-map", f"{audio_idx}:a"]
     else:
         cmd += ["-map", "0:a?"]
+
+    # Audio speed: atempo chain (0.5-2.0 per filter, chain if needed)
+    if abs(playback_speed - 1.0) >= 0.01:
+        atempo = _atempo_chain(playback_speed)
+        if atempo:
+            cmd += ["-filter:a", atempo]
 
     cmd += v_enc
     cmd += ["-c:a", "aac", "-b:a", "128k"]
@@ -984,8 +1062,9 @@ def run_hardcode_sync(
                 try:
                     us = int(line.split("=", 1)[1])
                     secs = us / 1_000_000
-                    if total_dur and total_dur > 0:
-                        pct = min(99, int(secs / total_dur * 100))
+                    ref_dur = scaled_dur if abs(playback_speed - 1.0) >= 0.01 else total_dur
+                    if ref_dur and ref_dur > 0:
+                        pct = min(99, int(secs / ref_dur * 100))
                         if pct >= last_progress + 10:
                             last_progress = pct
                             job["progress"] = pct
@@ -1001,8 +1080,9 @@ def run_hardcode_sync(
                     ts = line.split("=", 1)[1]
                     h, m, s = ts.split(":")
                     secs = int(h) * 3600 + int(m) * 60 + float(s)
-                    if total_dur and total_dur > 0:
-                        pct = min(99, int(secs / total_dur * 100))
+                    ref_dur = scaled_dur if abs(playback_speed - 1.0) >= 0.01 else total_dur
+                    if ref_dur and ref_dur > 0:
+                        pct = min(99, int(secs / ref_dur * 100))
                         if pct >= last_progress + 10:
                             last_progress = pct
                             job["progress"] = pct
