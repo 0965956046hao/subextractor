@@ -76,22 +76,41 @@ def _extract_frame(video: Path, timestamp: float, out: Path) -> bool:
 
 
 def _stitch_sheet(frame_paths: list[Path], out_sheet: Path) -> bool:
-    """Stitch a list of frame images into a single tiled sheet."""
+    """Stitch a list of frame images into a single tiled sheet (Pillow).
+
+    Dùng Pillow thay cho ffmpeg tile vì ffmpeg 9 với nhiều input ảnh tĩnh
+    chỉ render frame đầu tiên (19 cell còn lại đen) — đã reproduce ở clip
+    8417c6567dac (mỗi sheet 1232x564 nhưng chỉ cell r0c0 có dữ liệu).
+    """
     if not frame_paths:
         return False
-    rows = (len(frame_paths) + _COLS - 1) // _COLS
-    cmd = [_ffmpeg(), "-y"]
-    for p in frame_paths:
-        cmd += ["-i", str(p)]
-    cmd += [
-        "-filter_complex",
-        f"tile={_COLS}x{rows}:padding=8:color=black",
-        str(out_sheet),
-    ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+        from PIL import Image
+    except ImportError:
+        logger.warning("Pillow not installed, cannot stitch sheet")
+        return False
+    rows = (len(frame_paths) + _COLS - 1) // _COLS
+    pad = 8
+    W = _COLS * _CELL_W + (_COLS + 1) * pad
+    H = rows * _CELL_H + (rows + 1) * pad
+    canvas = Image.new("RGB", (W, H), "black")
+    for idx, p in enumerate(frame_paths):
+        try:
+            im = Image.open(p).convert("RGB")
+        except Exception:
+            logger.debug("Cannot open frame %s for stitch", p)
+            continue
+        if im.size != (_CELL_W, _CELL_H):
+            im = im.resize((_CELL_W, _CELL_H), Image.BILINEAR)
+        r, c = divmod(idx, _COLS)
+        x = pad + c * (_CELL_W + pad)
+        y = pad + r * (_CELL_H + pad)
+        canvas.paste(im, (x, y))
+    try:
+        canvas.save(out_sheet, "JPEG", quality=92)
         return out_sheet.exists() and out_sheet.stat().st_size > 0
-    except Exception:
+    except Exception as e:
+        logger.warning("Pillow stitch failed for %s: %s", out_sheet, e)
         return False
 
 

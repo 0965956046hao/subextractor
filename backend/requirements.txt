@@ -6,6 +6,7 @@ rapidocr>=3.9.0,<4.0.0
 onnxruntime>=1.28.0,<2.0.0
 rapidfuzz>=3.9.0,<4.0.0
 pydantic-settings>=2.0.0,<3.0.0
+Pillow>=10.0.0
 tqdm>=4.66.0,<5.0.0
 tenacity>=8.2.0,<10.0.0
 pyobjc-framework-Vision>=10.0,<12.0
