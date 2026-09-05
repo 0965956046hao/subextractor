@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Parallel OCR: chia timeline video thành N đoạn và OCR đồng thời N đoạn.
     # 1 = tắt (xử lý tuần tự như cũ). N > 1 = chạy N luồng OCR song song.
     # Mỗi đoạn dùng 1 engine riêng (RapidOCR load N model vào RAM).
-    ocr_parallel_parts: int = 2
+    ocr_parallel_parts: int = 1
     # Chồng lấn giữa 2 đoạn liền kề (giây) để sub nằm ngay biên không bị cắt đôi;
     # phần trùng được gộp lại khi merge kết quả.
     ocr_parallel_overlap: float = 2.0
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # Gemini translation
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_model: str = "gemini-3.1-flash-lite"
 
     # Google Cloud TTS
     google_tts_credentials: str = ""

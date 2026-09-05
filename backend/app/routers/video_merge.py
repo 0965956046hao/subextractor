@@ -178,12 +178,40 @@ _READ_TIMEOUT = 60
 _MAX_RETRIES = 3
 
 
+def _ffmpeg_bin(name: str = "ffmpeg") -> str:
+    """Resolve ffmpeg/ffprobe binary on Windows (WinGet) and Unix."""
+    # Check PATH first
+    found = shutil.which(name)
+    if found:
+        return found
+    # WinGet Gyan.FFmpeg installs to versioned dir, not always in process PATH
+    import os, glob
+    # Common WinGet location
+    candidates = glob.glob(
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*-full_build\bin\ffmpeg.exe")
+    )
+    if name == "ffprobe":
+        candidates = [c.replace("ffmpeg.exe", "ffprobe.exe") for c in candidates]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    # Fallback extra locations
+    for p in [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\FFmpeg\bin\ffmpeg.exe",
+    ]:
+        pp = p.replace("ffmpeg.exe", f"{name}.exe") if name != "ffmpeg" else p
+        if Path(pp).exists():
+            return pp
+    return name  # let subprocess raise clear error
+
+
 def _probe_audio_codec(path: Path) -> str:
     """Return the audio codec name (e.g. 'aac', 'mp3', 'opus') via ffprobe."""
     try:
         proc = subprocess.run(
             [
-                "ffprobe", "-v", "error",
+                _ffmpeg_bin("ffprobe"), "-v", "error",
                 "-select_streams", "a:0",
                 "-show_entries", "stream=codec_name",
                 "-of", "default=noprint_wrappers=1:nokey=1",
@@ -491,7 +519,7 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
             logger.info("Audio codec is %s → re-encode to AAC", audio_codec or "unknown")
 
         cmd = [
-            "ffmpeg",
+            _ffmpeg_bin("ffmpeg"),
             "-y",
             "-i", str(video_path),
             "-i", str(audio_path),
