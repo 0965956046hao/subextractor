@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from app.config import settings
-from app.services.media_utils import _srt_path, _video_path, target_dims_min1080
+from app.services.media_utils import _srt_path, _video_path, target_dims_min1080, get_best_video_encoder
 from app.services.srt_utils import parse_srt
 
 logger = logging.getLogger(__name__)
@@ -206,11 +206,14 @@ def build_ffmpeg_export_cmd(
 
     filter_complex = ";".join(filter_parts)
 
+    v_enc = get_best_video_encoder()
+    logger.info(f"export job {video_id}: using video encoder {v_enc[1]}")
+
     cmd.extend([
         "-filter_complex", filter_complex,
         "-map", "[vout]",
         "-map", "[aout]",
-        "-c:v", "libx264", "-crf", "20", "-preset", "medium",
+        *v_enc,
         "-c:a", "aac", "-b:a", "256k",
         "-movflags", "+faststart",
         str(out_path),

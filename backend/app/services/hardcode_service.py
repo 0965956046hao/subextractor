@@ -18,7 +18,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.srt_utils import parse_srt
-from app.services.media_utils import _get_duration, _get_video_resolution, _merge_audio_path, target_dims_min1080
+from app.services.media_utils import _get_duration, _get_video_resolution, _merge_audio_path, target_dims_min1080, get_best_video_encoder
 from app.services.job_utils import JobCancelled, notify_ws_sync
 from app.routers.config_router import get_subtitle_style
 
@@ -905,21 +905,8 @@ def run_hardcode_sync(
             vf_parts.append(f"subtitles={ass_fn_esc}")
 
     # ── Encoder selection ──────────────────────────────────────────────────
-    def _has_videotoolbox() -> bool:
-        try:
-            out = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True, text=True, timeout=10,
-            )
-            return "h264_videotoolbox" in (out.stdout or "")
-        except Exception:
-            return False
-
-    use_vtb = _has_videotoolbox()
-    if use_vtb:
-        v_enc = ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
-    else:
-        v_enc = ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+    v_enc = get_best_video_encoder()
+    logger.info(f"hardcode job {job_id}: using video encoder {v_enc[1]}")
 
     # ── Assemble the full FFmpeg command ───────────────────────────────────
     # Input layout: [0]=video, [1]=audio (nếu có nguồn audio riêng), [last]=logo

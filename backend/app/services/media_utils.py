@@ -2,9 +2,83 @@
 
 import json
 import subprocess
+import platform
 from pathlib import Path
 
 from app.config import settings
+
+
+def _get_video_encoder_candidates() -> list[list[str]]:
+    """
+    Return a prioritized list of H.264 encoder argument lists for the current platform.
+    Each entry is a list of FFmpeg args (e.g., ["-c:v", "h264_nvenc", "-b:v", "8M"]).
+    """
+    system = platform.system().lower()
+
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+        encoders = out.stdout or ""
+    except Exception:
+        encoders = ""
+
+    candidates: list[list[str]] = []
+
+    if system == "windows":
+        if "h264_nvenc" in encoders:
+            candidates.append(["-c:v", "h264_nvenc", "-b:v", "8M"])
+        if "h264_qsv" in encoders:
+            candidates.append(["-c:v", "h264_qsv", "-b:v", "8M"])
+        if "h264_amf" in encoders:
+            candidates.append(["-c:v", "h264_amf", "-b:v", "8M"])
+        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+
+    elif system == "darwin":
+        if "h264_videotoolbox" in encoders:
+            candidates.append(["-c:v", "h264_videotoolbox", "-b:v", "8M"])
+        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+
+    else:
+        if "h264_nvenc" in encoders:
+            candidates.append(["-c:v", "h264_nvenc", "-b:v", "8M"])
+        if "h264_qsv" in encoders:
+            candidates.append(["-c:v", "h264_qsv", "-b:v", "8M"])
+        if "h264_vaapi" in encoders:
+            candidates.append(["-c:v", "h264_vaapi", "-b:v", "8M"])
+        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+
+    return candidates
+
+
+def _test_encoder(encoder_args: list[str]) -> bool:
+    """Test if an encoder works by running a tiny encode test."""
+    try:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.04",
+            *encoder_args,
+            "-f", "null", "-"
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def get_best_video_encoder() -> list[str]:
+    """
+    Detect the best available H.264 encoder that actually works at runtime.
+    Tries candidates in priority order and returns the first working one.
+    """
+    candidates = _get_video_encoder_candidates()
+
+    for enc in candidates:
+        if _test_encoder(enc):
+            return enc
+
+    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
 
 
 def _srt_path(video_id: str) -> Path:
