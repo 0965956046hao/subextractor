@@ -38,8 +38,9 @@ class Settings(BaseSettings):
 
     # Gemini translation
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_model: str = "gemini-3.1-flash-lite"
     gemini_timeout: int = 300  # seconds (5 phút) per API call
+    gemini_context_timeout: int = 300  # seconds per context-note / Vision call (5 phút, có retry)
 
     # Google Cloud TTS
     google_tts_credentials: str = ""

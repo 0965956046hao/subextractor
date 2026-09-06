@@ -257,7 +257,10 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
     # Use ONE key for the entire operation (upload + generate). File Store is
     # key-scoped: a file uploaded with key A is 403 when read by key B.
     api_key = _next_key(keys)
-    client = genai.Client(api_key=api_key)
+    from google.genai import types as _genai_types
+    _ctx_timeout = int(getattr(settings, "gemini_context_timeout", 300) * 1000)
+    _http_opts = _genai_types.HttpOptions(timeout=_ctx_timeout)
+    client = genai.Client(api_key=api_key, http_options=_http_opts)
 
     # Check if files already uploaded for this video_id AND by this key —
     # reuse to avoid spam. Files uploaded by a different key must be re-uploaded.
@@ -276,7 +279,7 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
             logger.info("Reused %d/%d files", len(uploaded_files), len(existing_names))
 
     if not uploaded_files:
-        # Upload fresh — concurrently (up to 8 at a time)
+        # Upload fresh — concurrently (up to 8 at a time), có timeout nhờ client http_options.
         def _upload_one(f):
             try:
                 gf = gemini_retry(client.files.upload)(file=str(f))
@@ -286,8 +289,20 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
                 logger.warning("Upload failed %s: %s", f.name, e)
                 return None
 
+        # Giới hạn thời gian upload tổng: tránh treo vô hạn nếu File Store stall.
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(_upload_one, local_images))
+            try:
+                futs = [pool.submit(_upload_one, f) for f in local_images]
+                results = []
+                for fut in concurrent.futures.as_completed(futs, timeout=getattr(settings, "gemini_context_timeout", 300) + 30):
+                    try:
+                        results.append(fut.result())
+                    except concurrent.futures.TimeoutError:
+                        logger.warning("Context upload timed out")
+                        break
+            except concurrent.futures.TimeoutError:
+                logger.warning("Context upload overall timeout")
+                results = []
 
         uploaded_files = [r for r in results if r is not None]
 
