@@ -14,11 +14,13 @@ export async function GET() {
   const cfg = readProfileConfig();
   const douyin = resolveProfileDir("douyin");
   const chatgpt = resolveProfileDir("chatgpt");
+  const gemini = resolveProfileDir("gemini");
   return NextResponse.json({
     config: cfg,
     resolved: {
       douyin: { path: douyin, exists: fs.existsSync(douyin) },
       chatgpt: { path: chatgpt, exists: fs.existsSync(chatgpt) },
+      gemini: { path: gemini, exists: fs.existsSync(gemini) },
     },
   });
 }
@@ -29,7 +31,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ detail: "Invalid body" }, { status: 400 });
   }
   const cfg: ProfileConfig = { ...readProfileConfig() };
-  for (const key of ["douyin", "chatgpt"] as const) {
+  for (const key of ["douyin", "chatgpt", "gemini"] as const) {
     const val = body[key];
     if (typeof val === "string") {
       const trimmed = val.trim();

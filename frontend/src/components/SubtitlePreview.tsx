@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Region, SubtitleStyle } from "@/lib/api";
+import { getAppConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import VideoPlayer from "@/components/VideoPlayer";
 
@@ -94,9 +95,44 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   );
 
   // Initial overlay at t=0, then re-render on slider changes (debounced).
+  // Kiểu dáng đã lưu ở Settings (/api/config → subtitle_style) được nạp làm
+  // giá trị khởi đầu để màn chọn vị trí sub "ăn" config.
   useEffect(() => {
-    fetchOverlay(fontSize, marginV, marginH, 0, true);
+    let alive = true;
+    getAppConfig()
+      .then((cfg) => {
+        if (!alive) return;
+        const s = cfg.subtitle_style;
+        if (s) {
+          if (typeof s.font_size === "number") setFontSize(s.font_size);
+          if (typeof s.margin_v === "number") setMarginV(s.margin_v);
+          if (typeof s.margin_h === "number") setMarginH(s.margin_h);
+          if (s.text_color) setTextColor(s.text_color);
+          if (s.outline_color) setOutlineColor(s.outline_color);
+          if (typeof s.outline_width === "number") setOutlineWidth(s.outline_width);
+          if (s.box_color) setBoxColor(s.box_color);
+          fetchOverlay(
+            s.font_size ?? 48,
+            s.margin_v ?? 40,
+            s.margin_h ?? 0,
+            0,
+            true,
+            {
+              text_color: s.text_color || "#FFFFFF",
+              outline_color: s.outline_color || "#000000",
+              outline_width: s.outline_width ?? 0,
+              box_color: s.box_color || "#000000",
+            },
+          );
+          return;
+        }
+        fetchOverlay(fontSize, marginV, marginH, 0, true);
+      })
+      .catch(() => {
+        if (alive) fetchOverlay(fontSize, marginV, marginH, 0, true);
+      });
     return () => {
+      alive = false;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

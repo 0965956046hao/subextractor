@@ -8,8 +8,10 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const douyin = resolveProfileDir("douyin");
   const chatgpt = resolveProfileDir("chatgpt");
+  const gemini = resolveProfileDir("gemini");
   return NextResponse.json({
     douyin: { exists: fs.existsSync(douyin), path: douyin },
     chatgpt: { exists: fs.existsSync(chatgpt), path: chatgpt },
+    gemini: { exists: fs.existsSync(gemini), path: gemini },
   });
 }

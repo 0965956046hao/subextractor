@@ -39,7 +39,6 @@ const dictionaries = {
     "settings.group.apis": "API Keys & Services",
     "settings.group.accounts": "Accounts & Integration",
     "settings.group.output": "Output Presets",
-    "settings.group.devtools": "Environment Tools",
     "settings.group.apis.hint": "Gemini · TTS · fal.ai",
     "lang.zh": "Chinese",
     "lang.en": "English",
@@ -155,9 +154,9 @@ const dictionaries = {
     "settings.fal.errSave": "Error saving FAL key.",
     "settings.fal.errDelete": "Error deleting FAL key.",
 
-    "settings.profile.title": "4. Profile Douyin & ChatGPT",
+    "settings.profile.title": "4. Profile Douyin & ChatGPT & Gemini",
     "settings.profile.desc":
-      "Click to open Chrome and log in — puppeteer opens a Chrome window, you log in (Douyin / ChatGPT) once, the info is saved to the profile and reused later.",
+      "Click to open Chrome and log in — puppeteer opens a Chrome window, you log in (Douyin / ChatGPT / Gemini) once, the info is saved to the profile and reused later.",
     "settings.profile.exists": "Profile created ✓",
     "settings.profile.missing": "No profile yet",
     "settings.profile.opening": "Opening Chrome...",
@@ -166,6 +165,8 @@ const dictionaries = {
       "Opened Chrome Douyin — the profile is saved automatically after login.",
     "settings.profile.openedChatgpt":
       "Opened Chrome ChatGPT — the profile is saved automatically after login.",
+    "settings.profile.openedGemini":
+      "Opened Chrome Gemini — the profile is saved automatically after login.",
     "settings.profile.errOpen": "Error opening Chrome to log in.",
 
     "settings.youtube.title": "5. YouTube upload",
@@ -306,22 +307,6 @@ const dictionaries = {
       "Or a Reel: facebook-uploader reel --video ./video.mp4 --description \"...\" --publish",
     "settings.facebook.guide.note":
       "Note: verify the current Meta Graph API version and required scopes before production use.",
-
-    "settings.env.title": "9. Environment tools",
-    "settings.env.desc":
-      "Check and install bundled tools (FFmpeg, Demucs, YouTube Uploader) if not already present.",
-    "settings.env.check": "Check",
-    "settings.env.install": "Install",
-    "settings.env.installing": "Installing...",
-    "settings.env.close": "Close",
-    "settings.env.refreshStatus": "Refresh status",
-    "settings.env.toolsInstalled": "All tools installed",
-    "settings.env.toolsMissing": "Some tools are missing",
-    "settings.env.toolOk": "{name}: installed",
-    "settings.env.toolMissing": "{name}: not installed",
-    "settings.env.extracting": "Extracting {name}...",
-    "settings.env.done": "{name} installed successfully",
-    "settings.env.error": "{name} installation failed",
 
     "settings.save": "Save configuration",
 
@@ -723,6 +708,8 @@ const dictionaries = {
     "pipeline.health.profileDouyinNo": "Douyin not configured",
     "pipeline.health.profileChatgptReady": "ChatGPT profile ready ({path})",
     "pipeline.health.profileChatgptMissing": "ChatGPT profile missing",
+    "pipeline.health.profileGeminiReady": "Gemini profile ready ({path})",
+    "pipeline.health.profileGeminiMissing": "Gemini profile missing",
     "pipeline.health.profileChatgptOk": "ChatGPT profile OK",
     "pipeline.health.profileChatgptNo": "ChatGPT not configured",
     "pipeline.health.backendDown": "Cannot connect to backend.",
@@ -1002,7 +989,6 @@ const dictionaries = {
     "settings.group.apis": "API Key & Dịch vụ",
     "settings.group.accounts": "Tài khoản & Tích hợp",
     "settings.group.output": "Cấu hình đầu ra",
-    "settings.group.devtools": "Công cụ môi trường",
     "settings.group.apis.hint": "Gemini · TTS · fal.ai",
     "lang.zh": "Tiếng Trung",
     "lang.en": "Tiếng Anh",
@@ -1118,9 +1104,9 @@ const dictionaries = {
     "settings.fal.errSave": "Lỗi lưu FAL key.",
     "settings.fal.errDelete": "Lỗi xoá FAL key.",
 
-    "settings.profile.title": "4. Profile Douyin & ChatGPT",
+    "settings.profile.title": "4. Profile Douyin & ChatGPT & Gemini",
     "settings.profile.desc":
-      "Bấm mở Chrome để đăng nhập — puppeteer mở cửa sổ Chrome, bạn đăng nhập (Douyin / ChatGPT) một lần, thông tin được lưu vào profile và tái sử dụng sau này.",
+      "Bấm mở Chrome để đăng nhập — puppeteer mở cửa sổ Chrome, bạn đăng nhập (Douyin / ChatGPT / Gemini) một lần, thông tin được lưu vào profile và tái sử dụng sau này.",
     "settings.profile.exists": "Đã tạo profile ✓",
     "settings.profile.missing": "Chưa có profile",
     "settings.profile.opening": "Đang mở Chrome...",
@@ -1129,6 +1115,8 @@ const dictionaries = {
       "Đã mở Chrome Douyin — đăng nhập xong là profile tự động được lưu.",
     "settings.profile.openedChatgpt":
       "Đã mở Chrome ChatGPT — đăng nhập xong là profile tự động được lưu.",
+    "settings.profile.openedGemini":
+      "Đã mở Chrome Gemini — đăng nhập xong là profile tự động được lưu.",
     "settings.profile.errOpen": "Lỗi mở Chrome để đăng nhập.",
 
     "settings.youtube.title": "5. YouTube upload",
@@ -1269,22 +1257,6 @@ const dictionaries = {
       "Hoặc Reel: facebook-uploader reel --video ./video.mp4 --description \"...\" --publish",
     "settings.facebook.guide.note":
       "Lưu ý: nên kiểm tra phiên bản Meta Graph API và quyền (scopes) hiện hành trước khi dùng thật.",
-
-    "settings.env.title": "9. Công cụ môi trường",
-    "settings.env.desc":
-      "Kiểm tra và cài đặt các công cụ đi kèm (FFmpeg, Demucs, YouTube Uploader) nếu chưa có.",
-    "settings.env.check": "Kiểm tra",
-    "settings.env.install": "Cài đặt",
-    "settings.env.installing": "Đang cài đặt...",
-    "settings.env.close": "Đóng",
-    "settings.env.refreshStatus": "Làm mới trạng thái",
-    "settings.env.toolsInstalled": "Tất cả công cụ đã sẵn sàng",
-    "settings.env.toolsMissing": "Một số công cụ chưa được cài đặt",
-    "settings.env.toolOk": "{name}: đã cài",
-    "settings.env.toolMissing": "{name}: chưa cài",
-    "settings.env.extracting": "Đang giải nén {name}...",
-    "settings.env.done": "{name} đã cài xong",
-    "settings.env.error": "{name} cài đặt thất bại",
 
     "settings.save": "Lưu cấu hình",
 
@@ -1680,6 +1652,8 @@ const dictionaries = {
     "pipeline.health.profileDouyinNo": "Douyin chưa cấu hình",
     "pipeline.health.profileChatgptReady": "Đã có profile ChatGPT ({path})",
     "pipeline.health.profileChatgptMissing": "Chưa có profile ChatGPT",
+    "pipeline.health.profileGeminiReady": "Đã có profile Gemini ({path})",
+    "pipeline.health.profileGeminiMissing": "Chưa có profile Gemini",
     "pipeline.health.profileChatgptOk": "Đã có profile ChatGPT",
     "pipeline.health.profileChatgptNo": "ChatGPT chưa cấu hình",
     "pipeline.health.backendDown": "Không kết nối được backend.",

@@ -11,6 +11,7 @@ import {
   getProfilesConfig,
   douyinLogin,
   chatgptLogin,
+  geminiLogin,
   createWatermarkPreset,
   updateWatermarkPreset,
   deleteWatermarkPreset,
@@ -256,9 +257,9 @@ export default function SettingsPage() {
   const [profileStatus, setProfileStatus] = useState<ProfilesCheck | null>(
     null,
   );
-  const [profileBusy, setProfileBusy] = useState<"douyin" | "chatgpt" | null>(
-    null,
-  );
+  const [profileBusy, setProfileBusy] = useState<
+    "douyin" | "chatgpt" | "gemini" | null
+  >(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [health, setHealth] = useState<PipelineHealth | null>(null);
@@ -288,10 +289,6 @@ export default function SettingsPage() {
   const [tgBusy, setTgBusy] = useState(false);
   const [tgCountdown, setTgCountdown] = useState(0);
   const tgQrCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [toolsStatus, setToolsStatus] = useState<Array<{name: string, display: string, installed: boolean}>>([]);
-  const [toolsInstalling, setToolsInstalling] = useState(false);
-  const [toolsLogs, setToolsLogs] = useState<Array<{tool: string, status: string, message: string}>>([]);
-  const [showToolsModal, setShowToolsModal] = useState(false);
   const [fbAppId, setFbAppId] = useState("");
   const [fbAppSecret, setFbAppSecret] = useState("");
   const [fbPageId, setFbPageId] = useState("");
@@ -365,8 +362,6 @@ export default function SettingsPage() {
         setLoading(false);
       }
     })();
-    // Check tools status on load
-    checkTools();
   }, []);
 
   const set = (patch: Partial<SubtitleStyle>) =>
@@ -426,21 +421,25 @@ export default function SettingsPage() {
     setWatermarkText(cfg.watermark_text || "");
   };
 
-  const handleProfileLogin = async (svc: "douyin" | "chatgpt") => {
+  const handleProfileLogin = async (svc: "douyin" | "chatgpt" | "gemini") => {
     setError("");
     setProfileBusy(svc);
     try {
       if (svc === "douyin") {
         await douyinLogin();
-      } else {
+      } else if (svc === "chatgpt") {
         await chatgptLogin();
+      } else {
+        await geminiLogin();
       }
       const pc = await getProfilesConfig();
       setProfileStatus(pc.resolved);
       setStatus(
         svc === "douyin"
           ? t("settings.profile.openedDouyin")
-          : t("settings.profile.openedChatgpt"),
+          : svc === "chatgpt"
+            ? t("settings.profile.openedChatgpt")
+            : t("settings.profile.openedGemini"),
       );
       setTimeout(() => setStatus(""), 4000);
     } catch (e) {
@@ -710,36 +709,6 @@ export default function SettingsPage() {
       setTgBusy(false);
     }
   };
-
-  // Environment tools check/install
-  const checkTools = async () => {
-    try {
-      const res = await fetch("/api/tools/check");
-      const data = await res.json();
-      setToolsStatus(data.tools || []);
-    } catch (e) {
-      console.error("[tools] check error:", e);
-    }
-  };
-
-  const handleInstallTools = async () => {
-    setToolsInstalling(true);
-    setToolsLogs([]);
-    setShowToolsModal(true);
-    try {
-      const res = await fetch("/api/tools/install", { method: "POST" });
-      const data = await res.json();
-      setToolsLogs(data.logs || []);
-      await checkTools();
-    } catch (e) {
-      console.error("[tools] install error:", e);
-      setToolsLogs(prev => [...prev, {tool: "error", status: "error", message: String(e)}]);
-    } finally {
-      setToolsInstalling(false);
-    }
-  };
-
-  const allToolsInstalled = toolsStatus.length > 0 && toolsStatus.every(t => t.installed);
 
   // Poll for Telegram connection when QR is showing
   useEffect(() => {
@@ -1149,8 +1118,9 @@ export default function SettingsPage() {
             </p>
 
             <div className="space-y-4">
-              {(["douyin", "chatgpt"] as const).map((svc) => {
-                const label = svc === "douyin" ? "Douyin" : "ChatGPT";
+              {(["douyin", "chatgpt", "gemini"] as const).map((svc) => {
+                const label =
+                  svc === "douyin" ? "Douyin" : svc === "chatgpt" ? "ChatGPT" : "Gemini";
                 const status = profileStatus?.[svc];
                 const busy = profileBusy === svc;
                 return (
@@ -2212,131 +2182,7 @@ export default function SettingsPage() {
       </div>
       </CollapsibleSection>
 
-      {/* -- Group: Environment Tools -- */}
-      <CollapsibleSection title={t("settings.group.devtools")}>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      {/* Environment tools section */}
-      <AnimatedBlock delay={320}>
-        <div className="double-bezel">
-          <div className="double-bezel-inner p-5 sm:p-6">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
-                {t("settings.env.title")}
-              </p>
-              <span className="tag">
-                {toolsStatus.length === 0
-                  ? "—"
-                  : allToolsInstalled
-                    ? t("settings.env.toolsInstalled")
-                    : t("settings.env.toolsMissing")}
-              </span>
-            </div>
-            <p className="text-[11px] text-ink-light mb-4">
-              {t("settings.env.desc")}
-            </p>
 
-            {toolsStatus.length > 0 && (
-              <div className="mb-3 space-y-1.5">
-                {toolsStatus.map((tool) => (
-                  <div
-                    key={tool.name}
-                    className="flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
-                  >
-                    <span className="text-[12px] text-ink">
-                      {tool.display}
-                    </span>
-                    <span className={`text-[11px] ${tool.installed ? "text-success" : "text-ink-light"}`}>
-                      {tool.installed ? "✓" : "—"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={checkTools}
-                disabled={toolsInstalling}
-                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-50"
-              >
-                <span className="tracking-tight">{t("settings.env.refreshStatus")}</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleInstallTools}
-                disabled={toolsInstalling || allToolsInstalled}
-                className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-50"
-              >
-                <span className="tracking-tight">
-                  {toolsInstalling ? t("settings.env.installing") : t("settings.env.install")}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </AnimatedBlock>
-      </div>
-      </CollapsibleSection>
-
-      {/* Tools install modal */}
-      {showToolsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="double-bezel w-full max-w-md mx-4">
-            <div className="double-bezel-inner p-5 sm:p-6">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
-                  {t("settings.env.install")}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowToolsModal(false)}
-                  className="text-ink-light hover:text-ink text-lg cursor-pointer"
-                >
-                  ×
-                </button>
-              </div>
-              <div className="max-h-64 overflow-y-auto space-y-1.5 mb-4">
-                {toolsLogs.length === 0 && !toolsInstalling && (
-                  <p className="text-[11px] text-ink-light">Chưa có log...</p>
-                )}
-                {toolsLogs.map((log, i) => (
-                  <div
-                    key={i}
-                    className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
-                  >
-                    <span className={`text-[11px] ${
-                      log.status === "done" ? "text-success" :
-                      log.status === "error" ? "text-danger" :
-                      log.status === "exists" ? "text-success" :
-                      "text-ink"
-                    }`}>
-                      {log.status === "done" || log.status === "exists" ? "✓ " :
-                       log.status === "error" ? "✗ " :
-                       log.status === "extracting" ? "⏳ " : "🔍 "}
-                      {log.message}
-                    </span>
-                  </div>
-                ))}
-                {toolsInstalling && toolsLogs.length === 0 && (
-                  <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2">
-                    <span className="text-[11px] text-ink animate-pulse">Đang kiểm tra...</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setShowToolsModal(false)}
-                  className="btn-island-secondary text-[11px] !px-4 !py-1.5 cursor-pointer"
-                >
-                  <span className="tracking-tight">{t("settings.env.close")}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );

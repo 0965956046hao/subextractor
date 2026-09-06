@@ -443,6 +443,7 @@ export interface ProfileCheck {
 export interface ProfilesCheck {
   douyin: ProfileCheck;
   chatgpt: ProfileCheck;
+  gemini: ProfileCheck;
 }
 
 export async function getProfilesCheck(): Promise<ProfilesCheck> {
@@ -453,6 +454,7 @@ export async function getProfilesCheck(): Promise<ProfilesCheck> {
 export interface ProfileConfig {
   douyin?: string;
   chatgpt?: string;
+  gemini?: string;
 }
 
 export interface ProfilesConfigResponse {
@@ -460,6 +462,7 @@ export interface ProfilesConfigResponse {
   resolved: {
     douyin: ProfileCheck;
     chatgpt: ProfileCheck;
+    gemini: ProfileCheck;
   };
 }
 

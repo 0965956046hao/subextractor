@@ -19,8 +19,8 @@ export const GEMINI_URL =
 
 export const GEMINI_PORT = Number(process.env.GEMINI_PORT || "9224");
 
-// Same profile dir as Douyin/ChatGPT so the Google login persists.
-export const GEMINI_PROFILE_DIR = resolveProfileDir("douyin");
+// Gemini profile (Settings → Profile): riêng hoặc dùng chung với Douyin.
+export const GEMINI_PROFILE_DIR = resolveProfileDir("gemini");
 
 export const GEMINI_HEADLESS =
   process.env.GEMINI_HEADLESS === undefined

@@ -953,6 +953,12 @@ function VideoCard({
             >
               {video.filename}
             </h3>
+            <p
+              className="text-[10px] font-mono text-ink-light truncate"
+              title={video.video_id}
+            >
+              ID: {video.video_id}
+            </p>
             {video.status && video.status !== "done" ? (
               <JobStatusBlock video={video} onCancel={onCancel} />
             ) : (

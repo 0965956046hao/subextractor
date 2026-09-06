@@ -387,6 +387,16 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
             })
             : tr("pipeline.health.profileChatgptMissing"),
         },
+        {
+          service: "gemini",
+          configured: !!profiles?.gemini?.exists,
+          healthy: !!profiles?.gemini?.exists,
+          message: profiles?.gemini?.exists
+            ? tr("pipeline.health.profileGeminiReady", {
+              path: profiles.gemini.path,
+            })
+            : tr("pipeline.health.profileGeminiMissing"),
+        },
       ];
       setHealth({ ...h, checks: [...h.checks, ...profileChecks] });
     } catch {
