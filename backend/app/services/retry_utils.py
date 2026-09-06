@@ -38,10 +38,19 @@ _RETRYABLE_HINTS = (
     "deadlineexceeded",
     "temporarilyunavailable",
     "backenderror",
+    "timeout",
+    "timedout",
+    "deadline",
 )
 
 
 def _is_retryable(e: Exception) -> bool:
+    # Timeout / network stall cũng retry (trước đây chỉ retry 429/503 → treo 40p không được retry).
+    if isinstance(e, TimeoutError):
+        return True
+    msg = str(e).lower()
+    if "timeout" in msg or "timed out" in msg or "deadline" in msg:
+        return True
     code = getattr(e, "code", None) or getattr(e, "status_code", None) or getattr(e, "status", None)
     if isinstance(code, int) and code in _RETRYABLE_CODES:
         return True
@@ -178,30 +187,38 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
     raise last_err  # type: ignore[misc]
 
 
-def upload_audio_to_gemini(audio_path, mime_type: str = "audio/wav") -> tuple[str, str]:
+def upload_audio_to_gemini(audio_path, mime_type: str = "audio/wav", timeout: float | None = None) -> tuple[str, str]:
     """Upload an audio file to Gemini Files API. Returns (uri, mime_type).
 
-    Uses the first configured Gemini API key.
+    Uses the first configured Gemini API key. Có timeout để tránh treo.
     """
     from google import genai
+    from google.genai import types as genai_types
 
     keys = configured_gemini_keys()
     if not keys:
         raise ValueError("GEMINI_API_KEY not set.")
-    client = genai.Client(api_key=keys[0])
+    if timeout is None:
+        timeout = getattr(settings, "gemini_context_timeout", 300)
+    http_options = genai_types.HttpOptions(timeout=int(timeout * 1000))
+    client = genai.Client(api_key=keys[0], http_options=http_options)
     uploaded = client.files.upload(file=str(audio_path), config={"mime_type": mime_type})
     return uploaded.uri, uploaded.mime_type
 
 
-def delete_gemini_file(uri: str):
+def delete_gemini_file(uri: str, timeout: float | None = None):
     """Delete a file from Gemini Files API by URI."""
     from google import genai
+    from google.genai import types as genai_types
 
     keys = configured_gemini_keys()
     if not keys:
         return
     try:
-        client = genai.Client(api_key=keys[0])
+        if timeout is None:
+            timeout = getattr(settings, "gemini_context_timeout", 300)
+        http_options = genai_types.HttpOptions(timeout=int(timeout * 1000))
+        client = genai.Client(api_key=keys[0], http_options=http_options)
         client.files.delete(name=uri)
     except Exception:
         pass
