@@ -971,6 +971,9 @@ const dictionaries = {
     "channel.urlDuplicate": "URL already exists",
     "channel.urlInvalid":
       "Only Douyin channel links supported (douyin.com/user/...)",
+    "channel.history": "Scan history",
+    "channel.historyEmpty": "No scan history yet.",
+    "channel.historyClear": "Clear",
   },
   vi: {
     // Layout
@@ -1918,6 +1921,9 @@ const dictionaries = {
     "channel.noTitle": "(không có tiêu đề)",
     "channel.urlDuplicate": "URL đã tồn tại",
     "channel.urlInvalid": "Chỉ hỗ trợ link kênh Douyin (douyin.com/user/...)",
+    "channel.history": "Lịch sử quét",
+    "channel.historyEmpty": "Chưa có lịch sử quét.",
+    "channel.historyClear": "Xoá",
   },
 } as const;
 

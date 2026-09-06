@@ -59,7 +59,7 @@ class DouyinConfig:
     remove_watermark: bool = False
     check_subs: bool = True
     check_voice: bool = True
-    thumbnail: str = "none"         # none | fal | gpt
+    thumbnail: str = "none"         # none | fal | gpt | gemini
     auto_upload_youtube: bool = False
     youtube_channel: str = ""
     pipeline_preset: str = ""       # pipeline config preset id (overrides below)
@@ -67,13 +67,47 @@ class DouyinConfig:
     # ── UI state ──
     screen: str = "main"            # main | voices | presets | pipresets | channels
     page: int = 0                   # pagination for list screens
+    simple: bool = False            # True: /douyin gọn — chỉ chọn preset + bắt đầu
 
 
 _configs: dict[int, DouyinConfig] = {}
 
 # Pending channel-watch videos awaiting subtitle preset pick:
 # key → {link, channel, preset_id}. Callback data stays tiny (64B limit).
+# Persisted to disk so buttons keep working across backend restarts.
 _cw_pending: dict[str, dict] = {}
+
+
+def _cw_pending_file():
+    from app.config import settings
+
+    d = settings.temp_dir / "channel_watch"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "pending.json"
+
+
+def _cw_pending_load() -> None:
+    import json
+
+    try:
+        p = _cw_pending_file()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _cw_pending.update(data)
+    except Exception:
+        pass
+
+
+def _cw_pending_save() -> None:
+    import json
+
+    try:
+        _cw_pending_file().write_text(
+            json.dumps(_cw_pending, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
 
 
 def register_cwsub(link: str, channel: str = "", desc: str = "") -> str:
@@ -84,6 +118,7 @@ def register_cwsub(link: str, channel: str = "", desc: str = "") -> str:
         _cw_pending.clear()
     key = uuid.uuid4().hex[:8]
     _cw_pending[key] = {"link": link, "channel": channel, "desc": desc, "preset_id": ""}
+    _cw_pending_save()
     return key
 
 
@@ -281,7 +316,7 @@ def _build_config_text(config: DouyinConfig, voices: list[dict]) -> str:
         f"Timeline: {'<b>Bật ✅</b>' if config.check_subs else 'Tắt'} · "
         f"Giọng đọc: {'<b>Bật ✅</b>' if config.check_voice else 'Tắt'}\n\n"
         "━━━ <b>Thumbnail</b> ━━━\n"
-        f"{mark(config.thumbnail, 'none', 'Không')} · {mark(config.thumbnail, 'fal', 'FAL')} · {mark(config.thumbnail, 'gpt', 'ChatGPT')}\n\n"
+        f"{mark(config.thumbnail, 'none', 'Không')} · {mark(config.thumbnail, 'fal', 'FAL')} · {mark(config.thumbnail, 'gpt', 'ChatGPT')} · {mark(config.thumbnail, 'gemini', 'Gemini')}\n\n"
         "━━━ <b>Preset pipeline</b> ━━━\n"
         f"{pp_name or 'Không'}\n\n"
         "━━━ <b>YouTube</b> ━━━\n"
@@ -293,6 +328,45 @@ def _build_config_text(config: DouyinConfig, voices: list[dict]) -> str:
 
 def _btn(label, data):
     return {"text": label, "callback_data": data}
+
+
+def _build_preset_picker_text(config: DouyinConfig) -> str:
+    """Text for the simplified /douyin entry: preset picker + start."""
+    pp_name = ""
+    if config.pipeline_preset:
+        pp_name = next(
+            (p.get("name", "") for p in _get_pipeline_presets() if p.get("id") == config.pipeline_preset),
+            "",
+        )
+    return (
+        "🎬 <b>Video Douyin mới</b>\n\n"
+        f"🔗 <code>{_shorten(config.url, 55)}</code>\n\n"
+        f"🗂 Preset: <b>{pp_name or 'Mặc định'}</b>\n\n"
+        "Chọn preset pipeline rồi bấm Bắt đầu:"
+    )
+
+
+def _build_preset_picker_keyboard(config: DouyinConfig) -> list[list[dict]]:
+    """Preset rows (toggle ✅) + Bắt đầu. Shared by /douyin entry."""
+    rows: list[list[dict]] = []
+    for p in _get_pipeline_presets():
+        mark = " ✅" if p.get("id") == config.pipeline_preset else ""
+        rows.append([_btn(f"🗂 {p.get('name', p.get('id', ''))}{mark}", f"tgcfg:pipeline_preset:{p.get('id', '')}")])
+    if config.pipeline_preset:
+        rows.append([_btn("❌ Bỏ chọn preset", "tgcfg:pipeline_preset:")])
+    rows.append([_btn("🚀 Bắt đầu", "tgcfg:confirm:yes")])
+    return rows
+
+
+async def _render_preset_picker(chat_id: int, config: DouyinConfig) -> None:
+    """Re-render the simplified picker in place (edit message)."""
+    from app.services.telegram_service import telegram_service
+
+    if config.message_id:
+        await telegram_service.edit_message(
+            chat_id, config.message_id,
+            _build_preset_picker_text(config), _build_preset_picker_keyboard(config),
+        )
 
 
 def _toggle_btn(label, field, value, current):
@@ -353,7 +427,8 @@ def _build_main_keyboard(config: DouyinConfig) -> list[list[dict]]:
          _flip_btn("Check giọng", "check_voice", config.check_voice)],
         [_toggle_btn("Thumb: Không", "thumbnail", "none", config.thumbnail),
          _toggle_btn("Thumb: FAL", "thumbnail", "fal", config.thumbnail),
-         _toggle_btn("Thumb: GPT", "thumbnail", "gpt", config.thumbnail)],
+         _toggle_btn("Thumb: GPT", "thumbnail", "gpt", config.thumbnail),
+         _toggle_btn("Thumb: Gemini", "thumbnail", "gemini", config.thumbnail)],
         [_toggle_btn("YouTube: Bật", "auto_upload_youtube", "true", str(config.auto_upload_youtube).lower()),
          _toggle_btn("YouTube: Tắt", "auto_upload_youtube", "false", str(config.auto_upload_youtube).lower())],
     ]
@@ -484,12 +559,12 @@ class TelegramBot:
             )
             return
 
-        config = DouyinConfig(url=url)
+        # Luồng gọn: chỉ chọn preset pipeline rồi bắt đầu (không mở bảng
+        # cấu hình chi tiết). Mọi option khác lấy mặc định/preset.
+        config = DouyinConfig(url=url, simple=True)
         _configs[chat_id] = config
-
-        voices = await _get_voices(config.dub_engine, config.voice_lang)
         msg_id = await telegram_service.send_message_with_keyboard(
-            chat_id, _build_config_text(config, voices), _build_config_keyboard(config, voices)
+            chat_id, _build_preset_picker_text(config), _build_preset_picker_keyboard(config)
         )
         config.message_id = msg_id
 
@@ -570,6 +645,10 @@ class TelegramBot:
             config.watermark_preset = value
         elif field == "pipeline_preset":
             config.pipeline_preset = value
+            if config.simple:
+                await telegram_service.answer_callback_query(cb_id)
+                await _render_preset_picker(chat_id, config)
+                return
         elif field == "youtube_channel":
             config.youtube_channel = value
         elif field in _BOOL_FIELDS:
@@ -624,6 +703,10 @@ class TelegramBot:
         key = parts[1] if len(parts) > 1 else ""
         action = ":".join(parts[2:]) if len(parts) > 2 else ""
         item = _cw_pending.get(key)
+        if item is None:
+            # Có thể backend vừa restart — nạp lại từ file.
+            _cw_pending_load()
+            item = _cw_pending.get(key)
 
         if chat_id is None:
             await telegram_service.answer_callback_query(cb_id)
@@ -653,6 +736,7 @@ class TelegramBot:
         if action.startswith("pp:"):
             preset_id = action[3:]
             item["preset_id"] = preset_id
+            _cw_pending_save()
             presets = _get_pipeline_presets()
             name = next((p.get("name", "") for p in presets if p.get("id") == preset_id), "")
             await telegram_service.answer_callback_query(cb_id, f"Đã chọn: {name or 'mặc định'}")
@@ -669,6 +753,7 @@ class TelegramBot:
             link = item.get("link", "")
             preset_id = item.get("preset_id", "")
             _cw_pending.pop(key, None)
+            _cw_pending_save()
             await telegram_service.answer_callback_query(cb_id, "🚀 Đang bắt đầu...")
             # Gửi tin nhắn lệnh như user gõ tay (để lưu vết), rồi chạy pipeline.
             await telegram_service.send_message(chat_id, f"/douyin {link}")

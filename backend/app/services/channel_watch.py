@@ -239,14 +239,22 @@ def read_status() -> dict:
         except Exception:
             continue
         videos = data.get("videos") if isinstance(data, dict) else []
+        if not isinstance(videos, list):
+            videos = []
         ch = data.get("channel") if isinstance(data, dict) else {}
+        try:
+            scanned_at = int(fp.stat().st_mtime)
+        except Exception:
+            scanned_at = 0
         channels.append({
             "id": (ch or {}).get("id", fp.stem),
             "name": (ch or {}).get("name", ""),
             "url": (ch or {}).get("url", ""),
-            "video_count": len(videos) if isinstance(videos, list) else 0,
+            "video_count": len(videos),
             "newest_desc": (videos[0].get("desc", "")[:80] if videos else ""),
             "newest_time": (videos[0].get("create_time", 0) if videos else 0),
+            "scanned_at": scanned_at,
+            "videos": videos[:10],
         })
     channels.sort(key=lambda c: c["newest_time"], reverse=True)
     return {

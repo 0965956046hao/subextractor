@@ -2666,7 +2666,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
       } else {
         patch(id, { stage: "context" });
         markStepStart(id, 6);
-        // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
+        // Resume: nếu ngữ cảnh đã có sẵn thì dùng lại (không tốn Gemini)
+        // và tính là HOÀN THÀNH chứ không phải bỏ qua.
         appendLog(id, "Kiểm tra ngữ cảnh đã có chưa…");
         let ctxExists = false;
         try {
@@ -2679,8 +2680,9 @@ async function runPipeline(id: string, startStep = 4, force = false) {
           // ignore
         }
         if (ctxExists) {
-          appendLog(id, "Ngữ cảnh đã có sẵn — bỏ qua.");
-          markStepSkipped(id, 6);
+          appendLog(id, "Ngữ cảnh đã tạo — dùng lại.");
+          patch(id, { contextOn: true });
+          markStepEnd(id, 6);
         } else {
           appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
           try {

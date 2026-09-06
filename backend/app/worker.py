@@ -1322,10 +1322,14 @@ async def _apply_pipeline_preset(job: dict) -> str | None:
         job["thumbnail"] = "fal"
     elif cfg.get("useGptThumbnail"):
         job["thumbnail"] = "gpt"
+    elif cfg.get("useGeminiThumbnail"):
+        job["thumbnail"] = "gemini"
     if cfg.get("autoUploadYoutube") is not None:
         job["auto_upload_youtube"] = bool(cfg["autoUploadYoutube"])
     if cfg.get("youtubeChannel"):
         job["youtube_channel"] = str(cfg["youtubeChannel"])
+    if cfg.get("youtubePlaylist"):
+        job["youtube_playlist"] = str(cfg["youtubePlaylist"])
     if cfg.get("colorFilter"):
         job["color_filter"] = cfg["colorFilter"]
     if cfg.get("region"):
@@ -1570,7 +1574,7 @@ async def run_telegram_auto_job(
         line_count = srt_text.count("-->")
         await _tg_send(chat_id, f"✅ OCR xong: {line_count} dòng phụ đề")
 
-        # ── Step 4: Context (needed for translate/dub quality) ──
+        # ── Step 3: Context (needed for translate/dub quality) ──
         if job.get("translate_on") or job.get("auto_dub"):
             job["phase"] = "context"
             await _tg_send(chat_id, "🧠 Đang phân tích ngữ cảnh video...")
@@ -1587,7 +1591,7 @@ async def run_telegram_auto_job(
             except Exception:
                 await _tg_send(chat_id, "⚠️ Phân tích ngữ cảnh thất bại (không quan trọng).")
 
-        # ── Step 5: Translate ──
+        # ── Step 4: Translate ──
         if job.get("translate_on"):
             job["phase"] = "translating"
             await _tg_send(chat_id, "🌐 Đang dịch phụ đề...")
@@ -1607,7 +1611,7 @@ async def run_telegram_auto_job(
             else:
                 await _tg_send(chat_id, f"⚠️ Dịch thất bại: {jobs[tr_job_id].get('error', 'unknown')}")
 
-        # ── Step 5.5: Check subs (timeline review) via Mini App — chạy SAU khi dịch, ──
+        # ── Step 5: Check subs (timeline review) via Mini App — chạy SAU khi dịch, ──
         # ── kiểm tra file SRT đã dịch (nếu có), fallback bản gốc. ──
         if job.get("check_subs"):
             job["phase"] = "timeline_check"
@@ -1776,6 +1780,19 @@ async def run_telegram_auto_job(
                             raise RuntimeError(
                                 data.get("detail") or f"HTTP {resp.status_code}"
                             )
+                elif thumb_mode == "gemini":
+                    await _tg_send(chat_id, "🖼️ Đang tạo thumbnail bằng Gemini...")
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=600) as client:
+                        resp = await client.post(
+                            f"{settings.frontend_url.rstrip('/')}/api/gemini-thumbnail",
+                            json={"video_id": video_id},
+                        )
+                        data = resp.json()
+                        if resp.status_code != 200 or data.get("status") == "need_login":
+                            raise RuntimeError(
+                                data.get("detail") or f"HTTP {resp.status_code}"
+                            )
 
                 # Gửi ảnh thumbnail đã tạo cho user xem.
                 if thumb_png.exists():
@@ -1789,6 +1806,36 @@ async def run_telegram_auto_job(
                     await _tg_send(chat_id, "⚠️ Không tìm thấy file thumbnail.")
             except Exception as e:
                 await _tg_send(chat_id, f"⚠️ Tạo thumbnail thất bại: {str(e)[:150]}")
+
+        # ── Step 9: Upload YouTube ──
+        if job.get("auto_upload_youtube"):
+            job["phase"] = "youtube"
+            await _tg_send(chat_id, "⬆️ Đang tạo meta + đăng YouTube...")
+            try:
+                from app.services.meta_service import generate_video_meta
+                meta = await loop.run_in_executor(
+                    _context_executor, generate_video_meta, video_id,
+                )
+                await _tg_send(chat_id, f"📝 Meta: {(meta.get('title') or '')[:60]}")
+                from app.routers.youtube import upload_video_by_id, get_upload_status
+                up = await upload_video_by_id(
+                    video_id,
+                    job.get("youtube_channel") or "",
+                    job.get("youtube_playlist") or "",
+                )
+                up_id = up["job_id"]
+                for _ in range(1200):
+                    st = await get_upload_status(up_id)
+                    if st.get("status") == "done":
+                        break
+                    if st.get("status") == "error":
+                        raise RuntimeError(st.get("error") or "Upload thất bại")
+                    await asyncio.sleep(3)
+                else:
+                    raise RuntimeError("Upload quá thời gian chờ")
+                await _tg_send(chat_id, "✅ Đã đăng YouTube!")
+            except Exception as e:
+                await _tg_send(chat_id, f"⚠️ Đăng YouTube thất bại: {str(e)[:150]}")
 
         # ── Done ──
         job["status"] = "done"
@@ -1807,7 +1854,7 @@ async def run_telegram_auto_job(
             try:
                 from app.services.telegram_service import telegram_service
                 sent = await telegram_service.send_video(
-                    chat_id, str(mp4_files[0]), f"✅ {result['title'][:50]}"
+                    chat_id, str(mp4_files[0]), f"✅ {title[:50]}"
                 )
             except Exception:
                 sent = False

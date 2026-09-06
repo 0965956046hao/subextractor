@@ -42,6 +42,27 @@ interface ScanResult {
   videos: AwemeVideo[];
 }
 
+interface WorkerVideo {
+  aweme_id: string;
+  desc: string;
+  create_time: number;
+  share_url: string;
+  cover: string;
+  duration?: number;
+  play_count?: number;
+  digg_count?: number;
+  channel_name: string;
+}
+
+interface WorkerChannel {
+  id: string;
+  name: string;
+  url: string;
+  video_count: number;
+  scanned_at: number;
+  videos: WorkerVideo[];
+}
+
 function IconSpinner({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg
@@ -112,6 +133,9 @@ export default function ChannelsPage() {
   const [scanning, setScanning] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [workerHist, setWorkerHist] = useState<WorkerChannel[]>([]);
+  const [workerLoading, setWorkerLoading] = useState(false);
+  const [workerLastRun, setWorkerLastRun] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [playingVideo, setPlayingVideo] = useState<AwemeVideo | null>(null);
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
@@ -160,6 +184,24 @@ export default function ChannelsPage() {
   useEffect(() => {
     loadChannels();
   }, [loadChannels]);
+
+  const loadWorkerHist = useCallback(async () => {
+    setWorkerLoading(true);
+    try {
+      const res = await fetch("http://localhost:8000/api/channel-watch");
+      const data = await res.json();
+      setWorkerHist(Array.isArray(data.channels) ? data.channels : []);
+      setWorkerLastRun(data.last_run ?? null);
+    } catch {
+      // backend chưa chạy — bỏ qua
+    } finally {
+      setWorkerLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWorkerHist();
+  }, [loadWorkerHist]);
 
   const handleAdd = async () => {
     const url = newUrl.trim();
@@ -588,6 +630,106 @@ export default function ChannelsPage() {
           </div>
         </AnimatedBlock>
       )}
+
+      {/* Lịch sử quét của worker nền — card riêng bên dưới */}
+      <AnimatedBlock delay={50}>
+        <div className="double-bezel mb-6">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                  Lịch sử quét worker
+                </p>
+                {workerLastRun ? (
+                  <p className="text-[11px] text-ink-light mt-1 font-mono">
+                    Quét gần nhất: {new Date(workerLastRun * 1000).toLocaleString()}
+                  </p>
+                ) : null}
+              </div>
+              <button
+                onClick={loadWorkerHist}
+                disabled={workerLoading}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {workerLoading ? "Đang tải..." : "Tải lại"}
+              </button>
+            </div>
+            {workerHist.length === 0 ? (
+              <p className="text-[13px] text-ink-light py-4 text-center">
+                Worker chưa quét được kênh nào. Bật worker ở Settings → Theo dõi kênh Douyin.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {workerHist.map((ch) => (
+                  <div
+                    key={ch.id}
+                    className="rounded-xl ring-1 ring-white/[0.07] bg-white/[0.02] p-3"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap mb-2">
+                      <p className="text-[13px] font-medium text-ink">
+                        {ch.name || ch.url}
+                      </p>
+                      <span className="tag">{ch.video_count} video</span>
+                      {ch.scanned_at > 0 && (
+                        <span className="text-[11px] font-mono text-ink-light">
+                          quét {new Date(ch.scanned_at * 1000).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    {ch.videos.length === 0 ? (
+                      <p className="text-[11px] text-ink-light">
+                        {t("channel.noResults")}
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {ch.videos.map((v) => (
+                          <div key={v.aweme_id} className="flex items-center gap-2.5">
+                            {v.cover && (
+                              <img
+                                src={v.cover}
+                                alt=""
+                                className="w-10 h-14 object-cover rounded-md flex-shrink-0 bg-white/[0.06]"
+                              />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[12px] text-ink truncate">
+                                {truncateText(v.desc || t("channel.noTitle"), 60)}
+                              </p>
+                              <p className="text-[11px] text-ink-light font-mono">
+                                {fmtDate(v.create_time)}
+                                {v.digg_count != null && ` · ♥ ${fmtNumber(v.digg_count)}`}
+                              </p>
+                            </div>
+                            {v.share_url && (
+                              <Link
+                                href={`/auto?url=${encodeURIComponent(v.share_url)}`}
+                                className="icon-btn-ghost text-accent-light flex-shrink-0"
+                                title="Auto Pipeline"
+                              >
+                                <svg
+                                  className="w-4 h-4"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth={1.5}
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                                </svg>
+                              </Link>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </AnimatedBlock>
 
       {/* Video Player Modal */}
       {playingVideo && (

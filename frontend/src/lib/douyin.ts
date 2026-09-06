@@ -113,22 +113,36 @@ export async function openBrowser(options?: {
     }
   }
   // For a visible login, make sure no headless instance holds our profile lock.
-  if (!headless) killChromeOnProfile(PROFILE_DIR);
-  const browser = await puppeteer.launch({
-    executablePath: CHROME_PATH,
-    headless,
-    userDataDir: PROFILE_DIR,
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      `--remote-debugging-port=${CDP_PORT}`,
-      "--disable-background-networking",
-      "--disable-background-timer-throttling",
-      "--disable-renderer-backgrounding",
-      "--disable-features=Translate,MediaRouter",
-    ],
-    defaultViewport: null,
-  });
-  return { browser, persistent: false };
+  // Headless launch needs the same guard: a lingering Chrome on this profile
+  // aborts launch with SingletonLock (→ 500 on scan routes).
+  ensureProfileFree(PROFILE_DIR);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) ensureProfileFree(PROFILE_DIR, 8000);
+    try {
+      const browser = await puppeteer.launch({
+        executablePath: CHROME_PATH,
+        headless,
+        userDataDir: PROFILE_DIR,
+        args: [
+          "--disable-blink-features=AutomationControlled",
+          `--remote-debugging-port=${CDP_PORT}`,
+          "--disable-background-networking",
+          "--disable-background-timer-throttling",
+          "--disable-renderer-backgrounding",
+          "--disable-features=Translate,MediaRouter",
+        ],
+        defaultViewport: null,
+      });
+      return { browser, persistent: false };
+    } catch (err) {
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error("Không khởi động được Chrome sau 3 lần thử");
 }
 
 /** Kill any Chrome running with the given user-data-dir (profile lock). */
