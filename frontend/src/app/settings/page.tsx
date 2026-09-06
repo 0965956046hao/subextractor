@@ -32,6 +32,8 @@ import {
   getTelegramQR,
   disconnectTelegramChat,
   sendTelegramTest,
+  getChannelWatchStatus,
+  triggerChannelWatchScan,
 } from "@/lib/api";
 import type { SubtitleStyle, WatermarkPreset, ProfilesCheck } from "@/lib/api";
 import type {
@@ -40,6 +42,7 @@ import type {
   YouTubeChannelInfo,
   TelegramConfig,
   TelegramQR,
+  ChannelWatchStatus,
 } from "@/lib/api";
 import { useI18n, type Dict } from "@/lib/i18n";
 
@@ -297,6 +300,12 @@ export default function SettingsPage() {
   const [fbDefaultPublish, setFbDefaultPublish] = useState(false);
   const [hasFacebook, setHasFacebook] = useState(false);
   const [fbBusy, setFbBusy] = useState(false);
+  const [channelWatchEnabled, setChannelWatchEnabled] = useState(false);
+  const [watchStatus, setWatchStatus] = useState<ChannelWatchStatus | null>(null);
+  const [watchScanning, setWatchScanning] = useState(false);
+  const [watchChannels, setWatchChannels] = useState<
+    { id: string; url: string; name: string; since_date?: string }[]
+  >([]);
 
   useEffect(() => {
     (async () => {
@@ -340,6 +349,16 @@ export default function SettingsPage() {
         setFbApiVersion(cfg.facebook_graph_api_version || "");
         setFbDefaultPublish(!!cfg.facebook_default_publish);
         setHasFacebook(!!cfg.has_facebook_config);
+        setChannelWatchEnabled(!!cfg.channel_watch_enabled);
+        getChannelWatchStatus()
+          .then(setWatchStatus)
+          .catch(() => {});
+        fetch("/api/channels")
+          .then((r) => r.json())
+          .then((d) => {
+            if (Array.isArray(d.channels)) setWatchChannels(d.channels);
+          })
+          .catch(() => {});
       } catch {
         setError(t("error.backend"));
       } finally {
@@ -442,6 +461,51 @@ export default function SettingsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : t("settings.fal.errSave"));
       setStatus("");
+    }
+  };
+
+  const handleToggleChannelWatch = async (v: boolean) => {
+    setChannelWatchEnabled(v);
+    try {
+      await saveAppConfig({ channel_watch_enabled: v });
+      const st = await getChannelWatchStatus().catch(() => null);
+      if (st) setWatchStatus(st);
+    } catch {
+      setChannelWatchEnabled(!v);
+    }
+  };
+
+  const handleChannelSinceDate = async (id: string, date: string) => {
+    setWatchChannels((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, since_date: date || undefined } : c)),
+    );
+    try {
+      await fetch("/api/channels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, since_date: date }),
+      });
+    } catch {
+      // ignore — giữ giá trị local
+    }
+  };
+
+  const handleScanChannelsNow = async () => {    setWatchScanning(true);
+    try {
+      await triggerChannelWatchScan();
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const st = await getChannelWatchStatus().catch(() => null);
+        if (st) {
+          setWatchStatus(st);
+          if (st.last_run) break;
+        }
+      }
+    } finally {
+      setWatchScanning(false);
+      getChannelWatchStatus()
+        .then(setWatchStatus)
+        .catch(() => {});
     }
   };
 
@@ -1721,6 +1785,104 @@ export default function SettingsPage() {
         </div>
       </AnimatedBlock>
 
+      </div>
+      </CollapsibleSection>
+
+      {/* -- Group: Channel Watch (Douyin watchlist scanner) -- */}
+      <CollapsibleSection title="Theo dõi kênh Douyin">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <AnimatedBlock delay={280}>
+        <div className="double-bezel">
+          <div className="double-bezel-inner p-5 sm:p-6">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-muted">
+                Quét kênh tự động
+              </p>
+              {watchStatus && (
+                <span className="tag">
+                  {watchStatus.enabled ? "Đang bật" : "Đang tắt"}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-ink-light mb-4">
+              Worker nền quét các kênh ở trang Channels mỗi {watchStatus?.interval_minutes ?? 30} phút,
+              lưu video mới nhất vào <span className="font-mono">temp/channel_watch/</span>.
+            </p>
+            <div className="space-y-5">
+              <ToggleField
+                label="Bật quét kênh tự động"
+                value={channelWatchEnabled}
+                onChange={(v) => handleToggleChannelWatch(v)}
+              />
+              {watchStatus && (
+                <div className="text-[11px] text-ink-light space-y-1">
+                  <p>
+                    Quét gần nhất:{" "}
+                    {watchStatus.last_run
+                      ? new Date(watchStatus.last_run * 1000).toLocaleString()
+                      : "—"}
+                  </p>
+                  {watchStatus.last_error && (
+                    <p className="text-danger">{watchStatus.last_error}</p>
+                  )}
+                  {watchStatus.channels.length > 0 && (
+                    <div className="pt-1 space-y-1.5">
+                      {watchStatus.channels.slice(0, 5).map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
+                        >
+                          <span className="text-[12px] text-ink truncate">
+                            {c.name || c.url}
+                          </span>
+                          <span className="text-[11px] text-ink-light shrink-0 ml-2">
+                            {c.video_count} video
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={handleScanChannelsNow}
+                disabled={watchScanning}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {watchScanning ? "Đang quét..." : "Quét ngay"}
+              </button>
+              {watchChannels.length > 0 && (
+                <div className="pt-2 space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
+                    Ngày quét riêng từng kênh
+                  </p>
+                  {watchChannels.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2"
+                    >
+                      <span className="text-[12px] text-ink truncate">
+                        {c.name || c.url}
+                      </span>
+                      <input
+                        type="date"
+                        value={c.since_date || ""}
+                        onChange={(e) => handleChannelSinceDate(c.id, e.target.value)}
+                        title="Chỉ lấy video sau ngày này (trống = dùng chung)"
+                        className="input-field font-mono !py-1 !text-[12px] cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                  <p className="text-[10px] text-ink-light">
+                    Để trống = dùng ngày chung ở trang Channels. Ngày riêng ưu tiên hơn.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </AnimatedBlock>
       </div>
       </CollapsibleSection>
 

@@ -518,6 +518,69 @@ class TelegramService:
             if chat_id:
                 await self.send_message(chat_id, text)
 
+    async def broadcast_photo(self, image_path: str, caption: str = "") -> bool:
+        """Send a photo with caption to all connected chats. True if any sent."""
+        if not self._token or not self._chat_ids:
+            return False
+        sent = False
+        for ch in self._chat_ids[:]:
+            chat_id = ch.get("chat_id")
+            if chat_id and await self.send_photo(chat_id, image_path, caption):
+                sent = True
+        return sent
+
+    async def send_photo_with_keyboard(
+        self, chat_id: int, image_path: str, caption: str,
+        keyboard: list[list[dict]],
+    ) -> bool:
+        """Send a photo with an InlineKeyboard. Returns True if sent."""
+        if not self._token:
+            return False
+        p = Path(image_path)
+        if not (p.exists() and p.is_file()):
+            return False
+        try:
+            client = httpx.AsyncClient(timeout=300)
+            try:
+                with open(p, "rb") as f:
+                    resp = await client.post(
+                        f"{TELEGRAM_API}/bot{self._token}/sendPhoto",
+                        data={
+                            "chat_id": str(chat_id),
+                            "caption": caption,
+                            "parse_mode": "HTML",
+                            "reply_markup": json.dumps({"inline_keyboard": keyboard}),
+                        },
+                        files={"photo": (p.name, f, "image/jpeg")},
+                    )
+            finally:
+                await client.aclose()
+            result = resp.json()
+            if result.get("ok"):
+                return True
+            logger.warning("Telegram sendPhotoWithKeyboard failed: %s", result.get("description"))
+            return False
+        except Exception as e:
+            logger.warning("Telegram sendPhotoWithKeyboard to %s failed: %s", chat_id, e)
+            return False
+
+    async def broadcast_photo_with_buttons(
+        self, image_path: str, caption: str, keyboard: list[list[dict]],
+    ) -> bool:
+        """Send a photo + InlineKeyboard to all connected chats."""
+        if not self._token or not self._chat_ids:
+            return False
+        sent = False
+        for ch in self._chat_ids[:]:
+            chat_id = ch.get("chat_id")
+            if chat_id and await self.send_photo_with_keyboard(chat_id, image_path, caption, keyboard):
+                sent = True
+        return sent
+
+    def connected_chat_ids(self) -> list[int]:
+        """IDs of all linked chats (for per-chat custom keyboards)."""
+        return [ch.get("chat_id") for ch in (self._chat_ids or []) if ch.get("chat_id")]
+
     async def send_web_app_button(
         self, chat_id: int, text: str, web_app_url: str, button_text: str = "Mở Mini App"
     ):

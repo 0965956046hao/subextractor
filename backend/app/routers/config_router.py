@@ -78,6 +78,7 @@ class SaveConfigRequest(BaseModel):
     google_tts_json: str = ""
     fal_key: str = ""
     auto_context_enabled: bool | None = None
+    channel_watch_enabled: bool | None = None
     subtitle_style: dict | None = None
     watermark_text: str | None = None
 
@@ -220,6 +221,7 @@ async def get_config():
         "has_fal_key": bool(cfg.get("fal_key")),
         "fal_key": cfg.get("fal_key", ""),
         "auto_context_enabled": cfg.get("auto_context_enabled", True),
+        "channel_watch_enabled": cfg.get("channel_watch_enabled", False),
         "subtitle_style": get_subtitle_style(),
         "watermark_text": get_watermark().get("text", ""),
         "has_watermark_logo": bool(_preset_logo_path(_active_preset_id(cfg))),
@@ -277,6 +279,9 @@ async def save_config(body: SaveConfigRequest):
 
     if body.auto_context_enabled is not None:
         cfg["auto_context_enabled"] = body.auto_context_enabled
+
+    if body.channel_watch_enabled is not None:
+        cfg["channel_watch_enabled"] = body.channel_watch_enabled
 
     if body.watermark_text is not None:
         cfg = _migrate_presets(cfg)

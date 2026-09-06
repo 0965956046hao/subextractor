@@ -56,7 +56,7 @@ def _original_name(video_id: str) -> str:
         return ""
 
 
-def generate_video_meta(video_id: str) -> dict:
+def generate_video_meta(video_id: str, playlist_id: str = "") -> dict:
     """Generate meta.json from video context + share text via Gemini."""
     context = load_video_context(video_id) or ""
     share_text = load_share_text(video_id) or ""
@@ -120,6 +120,13 @@ def generate_video_meta(video_id: str) -> dict:
     meta.setdefault("episode", 1)
     meta.setdefault("original_title", "")
     meta.setdefault("original_description", "")
+    if playlist_id:
+        ids = meta.get("playlistIds") or []
+        if not isinstance(ids, list):
+            ids = []
+        if playlist_id not in ids:
+            ids.append(playlist_id)
+        meta["playlistIds"] = ids
 
     # Chuẩn hoá title: strip + cắt ≤100 ký tự (giới hạn YouTube). Nếu Gemini trả
     # title rỗng thì fallback về tên gốc của video để tránh lỗi "invalidTitle".

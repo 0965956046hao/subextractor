@@ -25,7 +25,7 @@ def _meta_path(video_id: str) -> Path:
 
 
 @router.post("/api/meta/{video_id}")
-def generate_meta(video_id: str):
+def generate_meta(video_id: str, playlist_id: str = ""):
     """Kick off meta generation in the background; return immediately.
 
     Meta generation calls Gemini and can take 20-60s, so we run it in a daemon
@@ -42,7 +42,7 @@ def generate_meta(video_id: str):
 
     def _run() -> None:
         try:
-            generate_video_meta(video_id)
+            generate_video_meta(video_id, playlist_id=playlist_id)
             logger.info("Meta generated for %s", video_id)
         except Exception as e:
             logger.warning("Meta generation failed for %s: %s", video_id, e)

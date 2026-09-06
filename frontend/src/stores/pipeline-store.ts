@@ -171,6 +171,7 @@ export interface Pipeline {
   useGeminiThumbnail: boolean;
   autoUploadYoutube: boolean;
   youtubeChannel: string;
+  youtubePlaylist: string;
   watermarkPreset: string;
   removeWatermarkEnabled: boolean;
   removeWatermarkRegions: Region[];
@@ -263,6 +264,7 @@ interface PipelineState {
     checkVoice?: boolean,
     autoUploadYoutube?: boolean,
     youtubeChannel?: string,
+    youtubePlaylist?: string,
     useFalThumbnail?: boolean,
     useGptThumbnail?: boolean,
     srcLang?: string,
@@ -291,6 +293,7 @@ interface PipelineState {
     checkVoice?: boolean;
     autoUploadYoutube?: boolean;
     youtubeChannel?: string;
+    youtubePlaylist?: string;
     useFalThumbnail?: boolean;
     useGptThumbnail?: boolean;
     translateOn?: boolean;
@@ -353,6 +356,7 @@ function newPipeline(
   checkVoice = false,
   autoUploadYoutube = false,
   youtubeChannel = "",
+  youtubePlaylist = "",
   useFalThumbnail = false,
   useGptThumbnail = false,
   srcLang = "",
@@ -430,6 +434,7 @@ function newPipeline(
     useGeminiThumbnail,
     autoUploadYoutube,
     youtubeChannel,
+    youtubePlaylist,
   };
 }
 
@@ -466,6 +471,7 @@ export const usePipelineStore = create<PipelineState>()(
         checkVoice = false,
         autoUploadYoutube = false,
         youtubeChannel = "",
+        youtubePlaylist = "",
         useFalThumbnail = false,
         useGptThumbnail = false,
         srcLang = "",
@@ -497,6 +503,7 @@ export const usePipelineStore = create<PipelineState>()(
               checkVoice,
               autoUploadYoutube,
               youtubeChannel,
+              youtubePlaylist,
               useFalThumbnail,
               useGptThumbnail,
               srcLang,
@@ -532,6 +539,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.checkVoice ?? false,
           input.autoUploadYoutube ?? false,
           input.youtubeChannel ?? "",
+          input.youtubePlaylist ?? "",
           input.useFalThumbnail ?? false,
           input.useGptThumbnail ?? false,
           input.srcLang ?? "zh",
@@ -985,8 +993,15 @@ export const usePipelineStore = create<PipelineState>()(
           markStepStart(id, 12);
           appendLog(id, "Upload YouTube thủ công (kèm meta)...");
           const channelId = s.youtubeChannel || "";
+          const playlistId = s.youtubePlaylist || "";
+          const qs = [
+            channelId ? `channel_id=${encodeURIComponent(channelId)}` : "",
+            playlistId ? `playlist_id=${encodeURIComponent(playlistId)}` : "",
+          ]
+            .filter(Boolean)
+            .join("&");
           const ur = await fetch(
-            `/api/youtube/upload/${videoId}${channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ""}`,
+            `/api/youtube/upload/${videoId}${qs ? `?${qs}` : ""}`,
             { method: "POST" },
           );
           const ud = await ur.json();
@@ -3145,7 +3160,13 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         // ngay lập tức. Ta fire POST rồi poll GET /api/meta đến khi meta.json có,
         // tránh giữ kết nối HTTP lâu gây proxy reset socket (ECONNRESET).
         try {
-          await fetch(`/api/meta/${videoId}`, { method: "POST" });
+          const metaPl =
+            usePipelineStore.getState().pipelines.find((x) => x.id === id)
+              ?.youtubePlaylist || "";
+          await fetch(
+            `/api/meta/${videoId}${metaPl ? `?playlist_id=${encodeURIComponent(metaPl)}` : ""}`,
+            { method: "POST" },
+          );
         } catch {
           /* fire-and-forget; vòng poll bên dưới tự phát hiện */
         }
@@ -3531,8 +3552,17 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         appendLog(id, "Upload YouTube (kèm meta)...");
         try {
           const channelId = cur.youtubeChannel || "";
+          const freshPl =
+            usePipelineStore.getState().pipelines.find((x) => x.id === id)
+              ?.youtubePlaylist || "";
+          const qs = [
+            channelId ? `channel_id=${encodeURIComponent(channelId)}` : "",
+            freshPl ? `playlist_id=${encodeURIComponent(freshPl)}` : "",
+          ]
+            .filter(Boolean)
+            .join("&");
           const ur = await fetch(
-            `/api/youtube/upload/${videoId}${channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ""}`,
+            `/api/youtube/upload/${videoId}${qs ? `?${qs}` : ""}`,
             { method: "POST" },
           );
           const ud = await ur.json();

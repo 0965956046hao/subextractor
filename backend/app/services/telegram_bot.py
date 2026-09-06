@@ -71,6 +71,26 @@ class DouyinConfig:
 
 _configs: dict[int, DouyinConfig] = {}
 
+# Pending channel-watch videos awaiting subtitle preset pick:
+# key → {link, channel, preset_id}. Callback data stays tiny (64B limit).
+_cw_pending: dict[str, dict] = {}
+
+
+def register_cwsub(link: str, channel: str = "", desc: str = "") -> str:
+    """Register a channel-watch video; return the short key for the button."""
+    import uuid
+
+    if len(_cw_pending) > 200:
+        _cw_pending.clear()
+    key = uuid.uuid4().hex[:8]
+    _cw_pending[key] = {"link": link, "channel": channel, "desc": desc, "preset_id": ""}
+    return key
+
+
+def cwsub_keyboard(key: str) -> list[list[dict]]:
+    """Inline keyboard for a new-video notification: [📝 Subtitle]."""
+    return [[_btn("📝 Subtitle", f"cwsub:{key}")]]
+
 # Cached dynamic data (keyed by engine+lang for voices).
 _voice_cache: dict[tuple[str, str], list[dict]] = {}
 
@@ -442,8 +462,9 @@ class TelegramBot:
         from app.services.telegram_service import telegram_service
         telegram_service.register_callback_handler("tgcfg:", self._handle_config_callback)
         telegram_service.register_callback_handler("tgcp:", self._handle_checkpoint_callback)
+        telegram_service.register_callback_handler("cwsub:", self._handle_cwsub_callback)
         self._started = True
-        logger.info("TelegramBot started (handlers: tgcfg:, tgcp:)")
+        logger.info("TelegramBot started (handlers: tgcfg:, tgcp:, cwsub:)")
 
     # ── /douyin command ──
 
@@ -584,6 +605,77 @@ class TelegramBot:
 
         _, video_id, action = parts
         tg_resolve_checkpoint(video_id, {"action": action})
+        await telegram_service.answer_callback_query(cb_id)
+
+    # ── Channel-watch subtitle flow (cwsub:) ──
+    # Photo notification carries [📝 Subtitle] → preset picker → [Bắt đầu]
+    # sends "/douyin {link}" and starts the pipeline with the chosen preset.
+
+    async def _handle_cwsub_callback(self, callback_query: dict):
+        from app.services.telegram_service import telegram_service
+
+        cb_id = callback_query.get("id", "")
+        data = callback_query.get("data", "")
+        msg = callback_query.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        msg_id = msg.get("message_id")
+
+        parts = data.split(":")
+        key = parts[1] if len(parts) > 1 else ""
+        action = ":".join(parts[2:]) if len(parts) > 2 else ""
+        item = _cw_pending.get(key)
+
+        if chat_id is None:
+            await telegram_service.answer_callback_query(cb_id)
+            return
+        if item is None:
+            await telegram_service.answer_callback_query(cb_id, "⚠️ Video này đã hết hạn. Quét lại để lấy tin mới.")
+            return
+
+        if action == "":
+            # Show pipeline preset picker.
+            await telegram_service.answer_callback_query(cb_id)
+            presets = _get_pipeline_presets()
+            rows: list[list[dict]] = []
+            for p in presets:
+                mark = " ✅" if p.get("id") == item.get("preset_id") else ""
+                rows.append([_btn(f"🗂 {p.get('name', p.get('id', ''))}{mark}", f"cwsub:{key}:pp:{p.get('id', '')}")])
+            rows.append([_btn("🚀 Bắt đầu", f"cwsub:{key}:go")])
+            text = (
+                "📝 <b>Làm phụ đề video này?</b>\n\n"
+                f"🎬 {item.get('channel', '')}\n"
+                f"📌 {(item.get('desc', '') or '')[:120]}\n\n"
+                "Chọn preset pipeline (hoặc bấm Bắt đầu luôn):"
+            )
+            await telegram_service.send_message_with_keyboard(chat_id, text, rows)
+            return
+
+        if action.startswith("pp:"):
+            preset_id = action[3:]
+            item["preset_id"] = preset_id
+            presets = _get_pipeline_presets()
+            name = next((p.get("name", "") for p in presets if p.get("id") == preset_id), "")
+            await telegram_service.answer_callback_query(cb_id, f"Đã chọn: {name or 'mặc định'}")
+            rows = []
+            for p in presets:
+                mark = " ✅" if p.get("id") == preset_id else ""
+                rows.append([_btn(f"🗂 {p.get('name', p.get('id', ''))}{mark}", f"cwsub:{key}:pp:{p.get('id', '')}")])
+            rows.append([_btn("🚀 Bắt đầu", f"cwsub:{key}:go")])
+            if msg_id:
+                await telegram_service.edit_message(chat_id, msg_id, f"📝 Preset: <b>{name or 'mặc định'}</b> — bấm Bắt đầu để chạy.", rows)
+            return
+
+        if action == "go":
+            link = item.get("link", "")
+            preset_id = item.get("preset_id", "")
+            _cw_pending.pop(key, None)
+            await telegram_service.answer_callback_query(cb_id, "🚀 Đang bắt đầu...")
+            # Gửi tin nhắn lệnh như user gõ tay (để lưu vết), rồi chạy pipeline.
+            await telegram_service.send_message(chat_id, f"/douyin {link}")
+            config = DouyinConfig(url=link, pipeline_preset=preset_id or "")
+            await self._start_pipeline(chat_id, config)
+            return
+
         await telegram_service.answer_callback_query(cb_id)
 
     # ── Pipeline trigger ──

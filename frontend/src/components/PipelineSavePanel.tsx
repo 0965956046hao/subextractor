@@ -29,6 +29,7 @@ function collectCurrentConfig(p: Pipeline): Record<string, unknown> {
     useGeminiThumbnail: p.useGeminiThumbnail,
     autoUploadYoutube: p.autoUploadYoutube,
     youtubeChannel: p.youtubeChannel,
+    youtubePlaylist: p.youtubePlaylist,
     colorFilter: p.colorFilter,
     region: p.region,
     subtitleStyle: p.subtitleStyle,

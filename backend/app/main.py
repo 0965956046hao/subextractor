@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.services.ocr_engine import OCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
-from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation
+from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation, channel_watch
 from app.worker import worker_loop
 
 logging.basicConfig(
@@ -83,6 +83,12 @@ async def lifespan(app: FastAPI):
     from app.services.telegram_bot import telegram_bot
     await telegram_bot.start()
 
+    # Channel-watch worker (Douyin watchlist → temp/channel_watch). The loop
+    # itself checks user_config, so toggling in Settings needs no restart.
+    from app.services.channel_watch import watch_loop
+    watch_task = asyncio.create_task(watch_loop())
+    workers.append(watch_task)
+
     logger.info("")
     logger.info("Server ready  >>>  http://localhost:8000")
     logger.info("")
@@ -133,6 +139,7 @@ app.include_router(env_tools.router)
 app.include_router(image.router)
 app.include_router(telegram_auto.router)
 app.include_router(annotation.router)
+app.include_router(channel_watch.router)
 
 
 @app.get("/api/health")

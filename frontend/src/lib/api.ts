@@ -747,6 +747,7 @@ export interface AppConfig {
   has_fal_key: boolean;
   fal_key: string;
   auto_context_enabled: boolean;
+  channel_watch_enabled: boolean;
   subtitle_style: SubtitleStyle;
   watermark_text: string;
   has_watermark_logo: boolean;
@@ -777,6 +778,7 @@ export async function saveAppConfig(body: {
   google_tts_json?: string;
   fal_key?: string;
   auto_context_enabled?: boolean;
+  channel_watch_enabled?: boolean;
   subtitle_style?: Partial<SubtitleStyle>;
   watermark_text?: string;
   tiktok_client_key?: string;
@@ -900,6 +902,35 @@ export function presetLogoUrl(presetId: string): string {
   return `/api/config/watermark/presets/${presetId}/logo`;
 }
 
+// ── Channel watch (Douyin watchlist scanner) ──
+
+export interface ChannelWatchChannel {
+  id: string;
+  name: string;
+  url: string;
+  video_count: number;
+  newest_desc: string;
+  newest_time: number;
+}
+
+export interface ChannelWatchStatus {
+  enabled: boolean;
+  interval_minutes: number;
+  last_run: number | null;
+  last_error: string | null;
+  channels: ChannelWatchChannel[];
+}
+
+export async function getChannelWatchStatus(): Promise<ChannelWatchStatus> {
+  const res = await api.get<ChannelWatchStatus>("/channel-watch");
+  return res.data;
+}
+
+export async function triggerChannelWatchScan(): Promise<{ status: string }> {
+  const res = await api.post<{ status: string }>("/channel-watch/scan");
+  return res.data;
+}
+
 // ── YouTube uploader (client_secrets.json) ──
 
 export interface YoutubeConfig {
@@ -984,6 +1015,21 @@ export async function activateYoutubeChannel(
 ): Promise<{ status: string; active_youtube_channel: string }> {
   const res = await api.post(`/config/youtube-channels/${id}/activate`);
   return res.data;
+}
+
+export interface YouTubePlaylistInfo {
+  id: string;
+  title: string;
+  item_count: number;
+}
+
+export async function listYoutubePlaylists(
+  channelId = "",
+): Promise<YouTubePlaylistInfo[]> {
+  const res = await api.get<{ playlists: YouTubePlaylistInfo[] }>(
+    `/youtube/playlists${channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ""}`,
+  );
+  return res.data.playlists || [];
 }
 
 // ── Telegram notifications ──

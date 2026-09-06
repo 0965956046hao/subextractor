@@ -30,6 +30,7 @@ import {
   googleTtsPreview,
   listVideos,
   listYoutubeChannels,
+  listYoutubePlaylists,
   setActiveWatermarkPreset,
   uploadVideo,
   type CapCutVoice,
@@ -42,6 +43,7 @@ import {
   type VideoMeta,
   type WatermarkPreset,
   type YouTubeChannelInfo,
+  type YouTubePlaylistInfo,
 } from "@/lib/api";
 import { useI18n, type Dict } from "@/lib/i18n";
 import {
@@ -325,6 +327,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
   const [ytChannels, setYtChannels] = useState<YouTubeChannelInfo[]>([]);
   const [ytChannel, setYtChannel] = useState("");
+  const [ytPlaylist, setYtPlaylist] = useState("");
   const [watermarkPreset, setWatermarkPreset] = useState("");
   const [removeWmEnabled, setRemoveWmEnabled] = useState(false);
   const [removeWmRegions, setRemoveWmRegions] = useState<Region[]>([]);
@@ -685,6 +688,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     if (typeof cfg.autoUploadYoutube === "boolean")
       setAutoUploadYoutube(cfg.autoUploadYoutube);
     if (typeof cfg.youtubeChannel === "string") setYtChannel(cfg.youtubeChannel);
+    if (typeof cfg.youtubePlaylist === "string") setYtPlaylist(cfg.youtubePlaylist);
     setPresetSeed({
       region: (cfg.region as Region | null) ?? null,
       subtitleStyle: (cfg.subtitleStyle as SubtitleStyle | null) ?? null,
@@ -724,6 +728,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       if (typeof s.useGeminiThumbnail === "boolean") setUseGeminiThumbnail(s.useGeminiThumbnail);
       if (typeof s.autoUploadYoutube === "boolean") setAutoUploadYoutube(s.autoUploadYoutube);
       if (typeof s.youtubeChannel === "string") setYtChannel(s.youtubeChannel);
+      if (typeof s.youtubePlaylist === "string") setYtPlaylist(s.youtubePlaylist);
       presetSnapshotRef.current = null;
     }
     setPresetSeed(null);
@@ -745,7 +750,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         originalGainDb, multiVoice, autoFitSubs, watermarkOn, watermarkPreset,
         removeWatermarkEnabled: removeWmEnabled, checkSubs, checkVoice,
         useFalThumbnail, useGptThumbnail, useGeminiThumbnail, autoUploadYoutube,
-        youtubeChannel: ytChannel,
+        youtubeChannel: ytChannel, youtubePlaylist: ytPlaylist,
       };
     }
     setPresetId(id);
@@ -792,6 +797,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       checkVoice,
       autoUploadYoutube,
       ytChannel,
+      ytPlaylist,
       useFalThumbnail,
       useGptThumbnail,
       srcLang,
@@ -860,6 +866,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       checkVoice,
       autoUploadYoutube,
       youtubeChannel: ytChannel,
+      youtubePlaylist: ytPlaylist,
       translateOn,
       translateTarget,
       dubOn,
@@ -1984,7 +1991,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         </span>
                         <select
                           value={ytChannel}
-                          onChange={(e) => setYtChannel(e.target.value)}
+                          onChange={(e) => {
+                            setYtChannel(e.target.value);
+                            setYtPlaylist("");
+                          }}
                           className="rounded-xl border border-white/[0.09] bg-black/25 px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px]"
                         >
                           <option value="">{tr("pipeline.youtubeChannelDefault")}</option>
@@ -1995,6 +2005,15 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           ))}
                         </select>
                       </label>
+                      {ytChannel && (
+                        <label className="flex items-center justify-between gap-3 mt-2">
+                          <PlaylistSelect
+                            channelId={ytChannel}
+                            value={ytPlaylist}
+                            onChange={(id) => setYtPlaylist(id)}
+                          />
+                        </label>
+                      )}
                       {ytChannels.length === 0 && (
                         <p className="text-[10px] text-ink-light mt-1.5">
                           {tr("pipeline.youtubeChannelEmpty")}
@@ -2644,6 +2663,88 @@ function ThumbnailReviewActions({
   );
 }
 
+const playlistCache = new Map<string, YouTubePlaylistInfo[]>();
+
+/** Danh sách phát YouTube của 1 kênh (cache theo channelId). */
+function PlaylistSelect({
+  channelId,
+  value,
+  onChange,
+  dark,
+}: {
+  channelId: string;
+  value: string;
+  onChange: (id: string) => void;
+  dark?: boolean;
+}) {
+  const { t } = useI18n();
+  const [items, setItems] = useState<YouTubePlaylistInfo[]>(
+    () => playlistCache.get(channelId) || [],
+  );
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!channelId) {
+      setItems([]);
+      return;
+    }
+    if (playlistCache.has(channelId)) {
+      setItems(playlistCache.get(channelId)!);
+      return;
+    }
+    let alive = true;
+    setLoading(true);
+    listYoutubePlaylists(channelId)
+      .then((list) => {
+        playlistCache.set(channelId, list);
+        if (alive) setItems(list);
+      })
+      .catch(() => {
+        if (alive) setItems([]);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [channelId]);
+
+  if (!channelId) return null;
+  return (
+    <>
+      <span
+        className={
+          dark
+            ? "text-[11px] text-ink-light flex-shrink-0"
+            : "text-[11px] text-ink-muted"
+        }
+      >
+        {t("pipeline.youtubePlaylist")}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={loading}
+        className={
+          dark
+            ? "input-field max-w-[200px] !py-1 !text-[12px]"
+            : "rounded-xl border border-white/[0.09] bg-black/25 px-3 py-1.5 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 max-w-[200px] disabled:opacity-50"
+        }
+      >
+        <option value="">
+          {loading ? "..." : t("pipeline.youtubePlaylistNone")}
+        </option>
+        {items.map((pl) => (
+          <option key={pl.id} value={pl.id}>
+            {pl.title} ({pl.item_count})
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
 function DetailView({
   pipeline: p,
   now,
@@ -3157,6 +3258,7 @@ function DetailView({
                           onChange={(e) =>
                             updatePipeline(p.id, {
                               youtubeChannel: e.target.value,
+                              youtubePlaylist: "",
                             })
                           }
                           className="input-field max-w-[200px] !py-1 !text-[12px]"
@@ -3170,6 +3272,16 @@ function DetailView({
                             </option>
                           ))}
                         </select>
+                        {p.youtubeChannel && (
+                          <PlaylistSelect
+                            channelId={p.youtubeChannel}
+                            value={p.youtubePlaylist || ""}
+                            dark
+                            onChange={(pid) =>
+                              updatePipeline(p.id, { youtubePlaylist: pid })
+                            }
+                          />
+                        )}
                         {p.watermark && (
                           <>
                             <span className="text-[11px] text-ink-light flex-shrink-0">

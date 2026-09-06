@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     )
     gemini_timeout: int = 300  # seconds (5 phút) per API call
 
+    # Channel-watch worker: quét watchlist Douyin (trang /channels) định kỳ.
+    # Bật/tắt trong Settings (user_config channel_watch_enabled).
+    channel_watch_interval_minutes: int = 30
+
     # Google Cloud TTS
     google_tts_credentials: str = ""
     # fal.ai (image-to-image thumbnail)

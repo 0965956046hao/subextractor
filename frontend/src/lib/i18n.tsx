@@ -842,6 +842,8 @@ const dictionaries = {
     "pipeline.youtubeChannelDefault": "Default (no channel)",
     "pipeline.youtubeChannelEmpty":
       "No channels configured. Add one in Settings → YouTube.",
+    "pipeline.youtubePlaylist": "Playlist",
+    "pipeline.youtubePlaylistNone": "No playlist",
     "pipeline.uploadYoutubeNow": "Upload to YouTube",
     "pipeline.tabProgress": "Progress",
     "pipeline.tabActive": "Active",
@@ -1789,6 +1791,8 @@ const dictionaries = {
     "pipeline.youtubeChannelDefault": "Mặc định (không chọn kênh)",
     "pipeline.youtubeChannelEmpty":
       "Chưa có kênh nào. Thêm kênh trong Settings → YouTube.",
+    "pipeline.youtubePlaylist": "Danh sách phát",
+    "pipeline.youtubePlaylistNone": "Không chọn",
     "pipeline.uploadYoutubeNow": "Upload YouTube",
     "pipeline.tabProgress": "Tiến trình",
     "pipeline.tabActive": "Đang xử lý",

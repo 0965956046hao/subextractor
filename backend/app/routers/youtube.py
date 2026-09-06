@@ -67,6 +67,7 @@ class UploadRequest(BaseModel):
     thumbnail_path: str = ""
     privacy: str = "private"
     channel_id: str = ""
+    playlist_id: str = ""
 
 
 @router.post("/api/youtube/pick-folder")
@@ -476,11 +477,135 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
 @router.post("/api/youtube/upload")
 async def upload_to_youtube(body: UploadRequest):
     """Start YouTube upload in background, return job_id for polling."""
+    if body.playlist_id:
+        _merge_playlist_into_meta(Path(body.meta_path), body.playlist_id)
     return _start_upload(Path(body.video_path), Path(body.meta_path), body.thumbnail_path, body.privacy, body.channel_id)
 
 
+def _merge_playlist_into_meta(meta_path: Path, playlist_id: str) -> None:
+    """Merge a playlist ID into meta.json `playlistIds` (dedupe).
+
+    The Go uploader reads `playlistIds` from metaJSON and adds the uploaded
+    video to each playlist, so the FE selection survives in the meta file.
+    """
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    ids = data.get("playlistIds") or []
+    if not isinstance(ids, list):
+        ids = []
+    if playlist_id not in ids:
+        ids.append(playlist_id)
+        data["playlistIds"] = ids
+        try:
+            meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Merged playlist %s into %s", playlist_id, meta_path)
+        except Exception as e:
+            logger.warning("Could not write playlist into meta: %s", e)
+
+
+def _channel_oauth_paths(channel_id: str = "") -> tuple[Path, Path]:
+    """Return (client_secrets, token) paths for a channel (or the default)."""
+    if channel_id:
+        from app.routers.config_router import get_youtube_channel_secrets
+
+        return get_youtube_channel_secrets(channel_id)
+    return CLIENT_SECRETS_PATH, REQUEST_TOKEN_PATH
+
+
+def _yt_access_token(channel_id: str = "") -> str:
+    """Fresh YouTube OAuth access token (refreshes request.token when expired)."""
+    import datetime
+
+    import httpx
+
+    secrets_path, token_path = _channel_oauth_paths(channel_id)
+    if not secrets_path.exists():
+        raise HTTPException(400, "client_secrets.json not found. Please configure YouTube API credentials first.")
+    if not token_path.exists():
+        raise HTTPException(400, "YouTube token not found. Please authenticate first.")
+    try:
+        secrets = json.loads(secrets_path.read_text(encoding="utf-8"))
+        token = json.loads(token_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(400, "Could not read YouTube credentials.")
+    app_cfg = secrets.get("web") or secrets.get("installed") or {}
+    if token.get("access_token") and token.get("expiry"):
+        try:
+            exp = datetime.datetime.fromisoformat(str(token["expiry"]).replace("Z", "+00:00"))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if (exp - now).total_seconds() > 60:
+                return str(token["access_token"])
+        except Exception:
+            pass
+    # Refresh
+    try:
+        with httpx.Client(timeout=30) as client:
+            r = client.post("https://oauth2.googleapis.com/token", data={
+                "client_id": app_cfg.get("client_id", ""),
+                "client_secret": app_cfg.get("client_secret", ""),
+                "refresh_token": token.get("refresh_token", ""),
+                "grant_type": "refresh_token",
+            })
+            r.raise_for_status()
+            new = r.json()
+    except Exception as e:
+        raise HTTPException(400, f"YouTube token refresh failed: {e}")
+    token["access_token"] = new.get("access_token", token.get("access_token"))
+    if new.get("expires_in"):
+        exp = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(new["expires_in"]))
+        token["expiry"] = exp.isoformat().replace("+00:00", "Z")
+    try:
+        token_path.write_text(json.dumps(token, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return str(token.get("access_token", ""))
+
+
+@router.get("/api/youtube/playlists")
+async def list_playlists(channel_id: str = ""):
+    """List upload channel's playlists via YouTube Data API (for the FE selector)."""
+    import httpx
+
+    access_token = _yt_access_token(channel_id)
+    items: list[dict] = []
+    page_token = ""
+    try:
+        with httpx.Client(timeout=30) as client:
+            while True:
+                params = {"part": "snippet,contentDetails", "mine": "true", "maxResults": "50"}
+                if page_token:
+                    params["pageToken"] = page_token
+                r = client.get(
+                    "https://www.googleapis.com/youtube/v3/playlists",
+                    params=params,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if r.status_code == 401:
+                    raise HTTPException(400, "YouTube auth expired. Please re-authenticate.")
+                r.raise_for_status()
+                data = r.json()
+                for it in data.get("items") or []:
+                    sn = it.get("snippet") or {}
+                    cd = it.get("contentDetails") or {}
+                    items.append({
+                        "id": it.get("id", ""),
+                        "title": sn.get("title", ""),
+                        "item_count": cd.get("itemCount", 0),
+                    })
+                page_token = data.get("nextPageToken") or ""
+                if not page_token:
+                    break
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Could not list playlists: {e}")
+    return {"playlists": items}
+
+
 @router.post("/api/youtube/upload/{video_id}")
-async def upload_video_by_id(video_id: str, channel_id: str = ""):
+async def upload_video_by_id(video_id: str, channel_id: str = "", playlist_id: str = ""):
     """Upload the hardcoded video with the generated meta to YouTube."""
     # Resolve video path
     hd_dir = settings.temp_dir / "hardcoded" / video_id
@@ -495,6 +620,9 @@ async def upload_video_by_id(video_id: str, channel_id: str = ""):
     meta_path = settings.temp_dir / "meta" / video_id / "meta.json"
     if not meta_path.exists():
         raise HTTPException(404, "meta.json not found. Run meta step first.")
+
+    if playlist_id:
+        _merge_playlist_into_meta(meta_path, playlist_id)
 
     # Chỉ up thumbnail nếu có file thumbnail đã tạo
     thumbnail_path = ""

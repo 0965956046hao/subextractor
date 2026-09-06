@@ -12,6 +12,7 @@ interface Channel {
   name: string;
   avatar_url: string;
   added_at: string;
+  since_date?: string;
 }
 
 interface AwemeVideo {
@@ -199,8 +200,10 @@ export default function ChannelsPage() {
     setScanResult(null);
     setScanError(null);
     try {
-      const sinceTs = scanDate
-        ? Math.floor(new Date(scanDate + "T00:00:00").getTime() / 1000)
+      // Ngày riêng của kênh ưu tiên hơn ngày chung.
+      const dateStr = ch.since_date || scanDate;
+      const sinceTs = dateStr
+        ? Math.floor(new Date(dateStr + "T00:00:00").getTime() / 1000)
         : 0;
       const res = await fetch("/api/channels/scan", {
         method: "POST",

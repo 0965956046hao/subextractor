@@ -23,6 +23,12 @@ interface Channel {
   name: string;
   avatar_url: string;
   added_at: string;
+  /** Ngày quét riêng (YYYY-MM-DD): chỉ lấy video sau ngày này. Rỗng = dùng ngày chung. */
+  since_date?: string;
+}
+
+function isValidDate(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + "T00:00:00").getTime());
 }
 
 function loadChannels(): Channel[] {
@@ -153,6 +159,34 @@ export async function POST(req: NextRequest) {
     added_at: new Date().toISOString(),
   };
   channels.push(ch);
+  saveChannels(channels);
+  return NextResponse.json({ channel: ch });
+}
+
+export async function PUT(req: NextRequest) {
+  let body: { id?: string; name?: string; since_date?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ detail: "Invalid JSON" }, { status: 400 });
+  }
+  if (!body.id)
+    return NextResponse.json({ detail: "id is required" }, { status: 400 });
+
+  const channels = loadChannels();
+  const ch = channels.find((c) => c.id === body.id);
+  if (!ch) return NextResponse.json({ detail: "Not found" }, { status: 404 });
+
+  if (typeof body.name === "string" && body.name.trim()) {
+    ch.name = body.name.trim().slice(0, 80);
+  }
+  if (body.since_date !== undefined) {
+    const d = (body.since_date || "").trim();
+    if (d && !isValidDate(d))
+      return NextResponse.json({ detail: "since_date phải dạng YYYY-MM-DD" }, { status: 400 });
+    if (d) ch.since_date = d;
+    else delete ch.since_date;
+  }
   saveChannels(channels);
   return NextResponse.json({ channel: ch });
 }
