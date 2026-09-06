@@ -168,6 +168,7 @@ export interface Pipeline {
   watermark: boolean;
   useFalThumbnail: boolean;
   useGptThumbnail: boolean;
+  useGeminiThumbnail: boolean;
   autoUploadYoutube: boolean;
   youtubeChannel: string;
   watermarkPreset: string;
@@ -181,6 +182,7 @@ export interface Pipeline {
   voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
   needChatgptLogin: boolean;
+  needGeminiLogin: boolean;
   thumbnailReview: {
     waiting: boolean;
     imageUrl: string | null;
@@ -188,8 +190,13 @@ export interface Pipeline {
   } | null;
   thumbnailFallback: {
     waiting: boolean;
+    /** Engine vừa fail — để hiện thông báo + ẩn nút đổi sang chính nó. */
+    from: "fal" | "gpt" | "gemini";
   } | null;
 }
+
+/** Lựa chọn ở bảng fallback thumbnail: đổi engine | thử lại | bỏ qua. */
+export type ThumbnailFallbackChoice = "fal" | "gpt" | "gemini" | "retry" | "skip";
 
 export interface TimelineCheck {
   waiting: boolean;
@@ -265,6 +272,7 @@ interface PipelineState {
     voiceLang?: string,
     colorFilter?: ColorFilter | null,
     playbackSpeed?: number,
+    useGeminiThumbnail?: boolean,
   ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
@@ -291,6 +299,7 @@ interface PipelineState {
     voiceLang?: string;
     colorFilter?: ColorFilter | null;
     playbackSpeed?: number;
+    useGeminiThumbnail?: boolean;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -318,7 +327,7 @@ interface PipelineState {
     action: "accept" | "skip",
     extraInstructions?: string,
   ) => void;
-  resolveThumbnailFallback: (id: string, choice: "fal" | "skip") => void;
+  resolveThumbnailFallback: (id: string, choice: ThumbnailFallbackChoice) => void;
   restorePaused: () => void;
   /** Upload YouTube thủ công cho pipeline đã xong mà quên tick auto-upload. */
   uploadYoutubeNow: (id: string) => void;
@@ -353,6 +362,7 @@ function newPipeline(
   voiceLang = "",
   colorFilter: ColorFilter | null = null,
   playbackSpeed = 1.0,
+  useGeminiThumbnail = false,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -412,10 +422,12 @@ function newPipeline(
     voiceCheck: null,
     resumeStep: null,
     needChatgptLogin: false,
+    needGeminiLogin: false,
     thumbnailReview: null,
     thumbnailFallback: null,
     useFalThumbnail,
     useGptThumbnail,
+    useGeminiThumbnail,
     autoUploadYoutube,
     youtubeChannel,
   };
@@ -463,6 +475,7 @@ export const usePipelineStore = create<PipelineState>()(
         voiceLang = "",
         colorFilter = null,
         playbackSpeed = 1.0,
+        useGeminiThumbnail = false,
       ) => {
         const id = Math.random().toString(36).slice(2, 10);
         set((s) => ({
@@ -493,6 +506,7 @@ export const usePipelineStore = create<PipelineState>()(
               voiceLang,
               colorFilter,
               playbackSpeed,
+              useGeminiThumbnail,
             ),
           ],
         }));
@@ -527,6 +541,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.voiceLang ?? "",
           input.colorFilter ?? null,
           input.playbackSpeed ?? 1.0,
+          input.useGeminiThumbnail ?? false,
         );
         // Uploaded file is already registered on the backend: skip resolve + merge
         // and start directly at region selection (step 2).
@@ -1356,7 +1371,7 @@ const thumbnailReviewWaiters = new Map<
 >();
 const thumbnailFallbackWaiters = new Map<
   string,
-  { resolve: (choice: "fal" | "skip") => void; reject: () => void }
+  { resolve: (choice: ThumbnailFallbackChoice) => void; reject: () => void }
 >();
 
 function waitForRegion(id: string): Promise<Region> {
@@ -1508,8 +1523,8 @@ function rejectThumbnailReview(id: string) {
   }
 }
 
-function waitForThumbnailFallback(id: string): Promise<"fal" | "skip"> {
-  return new Promise<"fal" | "skip">((resolve, reject) => {
+function waitForThumbnailFallback(id: string): Promise<ThumbnailFallbackChoice> {
+  return new Promise<ThumbnailFallbackChoice>((resolve, reject) => {
     thumbnailFallbackWaiters.set(id, { resolve, reject });
   });
 }
@@ -3162,9 +3177,11 @@ async function runPipeline(id: string, startStep = 4, force = false) {
     };
 
     const doThumbnail = async () => {
-      if (startStep > 10) return;
+      if (startStep > 11) return;
       // Skip if thumbnail already exists (from previous run or already generated)
-      if (cur.updatedThumbnailUrl) {
+      // — trừ khi user vừa yêu cầu "Tạo lại" kèm hướng dẫn (extraInstructions):
+      // lúc đó phải chạy lại engine để sinh ảnh mới thay vì skip.
+      if (cur.updatedThumbnailUrl && !cur.thumbnailReview?.extraInstructions) {
         appendLog(id, `Thumbnail đã có sẵn: ${cur.updatedThumbnailUrl}`);
         markStepSkipped(id, 11);
         return;
@@ -3235,8 +3252,10 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             appendLog(id, `Thumbnail mới: ${thumbUrl}`);
           } else if (errorMsg) {
             appendLog(id, `Không cập nhật được thumbnail: ${errorMsg}`);
+            if (await handleThumbFallback("fal")) return;
           } else {
             appendLog(id, "Hết thời gian chờ thumbnail (180s).");
+            if (await handleThumbFallback("fal")) return;
           }
         } catch (e) {
           appendLog(
@@ -3245,6 +3264,43 @@ async function runPipeline(id: string, startStep = 4, force = false) {
           );
         }
         markStepEnd(id, 11);
+      };
+
+      // Bảng chọn khi engine thumbnail fail: đổi engine / thử lại / bỏ qua.
+      // Luôn return true (caller return luôn); chuyển engine/thử lại chạy tiếp
+      // từ step 10 qua queue (giống luồng tạo lại thumbnail).
+      const handleThumbFallback = async (
+        from: "fal" | "gpt" | "gemini",
+      ): Promise<boolean> => {
+        const label =
+          from === "fal" ? "fal.ai" : from === "gpt" ? "ChatGPT" : "Gemini";
+        patch(id, { thumbnailFallback: { waiting: true, from }, resumeStep: 11 });
+        appendLog(
+          id,
+          `${label} không tạo được ảnh — chọn engine khác, thử lại hoặc bỏ qua.`,
+        );
+        const choice = await waitForThumbnailFallback(id);
+        if (choice === "skip") {
+          appendLog(id, "Bỏ qua cập nhật thumbnail.");
+          markStepSkipped(id, 11);
+          return true;
+        }
+        if (choice === "retry") {
+          appendLog(id, `Thử lại thumbnail bằng ${label}...`);
+        } else {
+          const name =
+            choice === "fal" ? "fal.ai" : choice === "gpt" ? "ChatGPT" : "Gemini";
+          appendLog(id, `Đổi sang ${name} để tạo thumbnail...`);
+          patch(id, {
+            useFalThumbnail: choice === "fal",
+            useGptThumbnail: choice === "gpt",
+            useGeminiThumbnail: choice === "gemini",
+          });
+        }
+        markStepEnd(id, 11);
+        enqueue(id, 10);
+        abortAfterThumbnail = true;
+        return true;
       };
 
       if (cur.useGptThumbnail) {
@@ -3295,27 +3351,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         }
 
         if (gptNoImage) {
-          // ChatGPT không trả ảnh → cho user chọn: đổi qua fal.ai hoặc bỏ qua.
-          patch(id, { thumbnailFallback: { waiting: true }, resumeStep: 11 });
-          appendLog(
-            id,
-            "ChatGPT không tạo được ảnh — chọn đổi qua fal.ai hoặc bỏ qua.",
-          );
-          const choice = await waitForThumbnailFallback(id);
-          if (choice === "skip") {
-            appendLog(id, "Bỏ qua cập nhật thumbnail.");
-            markStepSkipped(id, 11);
-            return;
-          }
-          // "fal" → chạy FAL (nếu có key, ngược lại bỏ qua). Force regenerate so
-          // we don't reuse a stale thumbnail and upload YouTube too early.
-          if (hasFalKey) {
-            await runFalThumbnail(true);
-          } else {
-            appendLog(id, "Không có FAL key — bỏ qua cập nhật thumbnail.");
-            markStepSkipped(id, 11);
-          }
-          return;
+          // ChatGPT không trả ảnh → bảng chọn: đổi engine / thử lại / bỏ qua.
+          if (await handleThumbFallback("gpt")) return;
         }
 
         if (thumbUrl) {
@@ -3338,6 +3375,105 @@ async function runPipeline(id: string, startStep = 4, force = false) {
           if (reviewResult.action === "skip") {
             patch(id, { updatedThumbnailUrl: null });
             appendLog(id, "Bỏ qua thumbnail ChatGPT.");
+          } else if (reviewResult.extra) {
+            // Regenerate with extra instructions — loop back
+            patch(id, {
+              stage: "thumbnail",
+              thumbnailReview: {
+                waiting: false,
+                imageUrl: null,
+                extraInstructions: reviewResult.extra,
+              },
+            });
+            appendLog(
+              id,
+              `Tạo lại thumbnail với hướng dẫn: ${reviewResult.extra}`,
+            );
+            // Re-run step 10 from the top (will use the extra_instructions in the body)
+            markStepEnd(id, 11);
+            // Use setTimeout to avoid deep recursion; enqueue will pick up from step 10
+            enqueue(id, 10);
+            abortAfterThumbnail = true;
+            return;
+          }
+          // "accept" → keep updatedThumbnailUrl, continue
+        }
+        markStepEnd(id, 11);
+      } else if (cur.useGeminiThumbnail) {
+        appendLog(id, "Cập nhật thumbnail (Gemini web)...");
+        let thumbUrl: string | null = null;
+        let loginNeeded = false;
+        let geminiNoImage = false;
+        try {
+          const body: Record<string, unknown> = { video_id: videoId };
+          const fresh = usePipelineStore
+            .getState()
+            .pipelines.find((x) => x.id === id);
+          if (fresh?.thumbnailReview?.extraInstructions) {
+            body.extra_instructions = fresh.thumbnailReview.extraInstructions;
+          }
+          const r = await fetch("/api/gemini-thumbnail", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (d.status === "done" && d.thumbnail_url) {
+            thumbUrl = d.thumbnail_url;
+          } else if (d.status === "need_login") {
+            loginNeeded = true;
+          } else {
+            geminiNoImage = true;
+            appendLog(id, `Gemini không trả về ảnh: ${d.detail || "lỗi"}`);
+          }
+        } catch (e) {
+          geminiNoImage = true;
+          appendLog(
+            id,
+            `Bỏ qua cập nhật thumbnail Gemini (lỗi): ${(e as Error)?.message || e}`,
+          );
+        }
+
+        if (loginNeeded) {
+          patch(id, {
+            needGeminiLogin: true,
+            status: "error",
+            stage: "thumbnail",
+          });
+          appendLog(
+            id,
+            `Cần đăng nhập Gemini: Đăng nhập Google trong cửa sổ Chrome vừa mở (gemini.google.com), rồi nhấn Thử lại.`,
+          );
+          markStepEnd(id, 11);
+          abortAfterThumbnail = true;
+          return;
+        }
+
+        if (geminiNoImage) {
+          // Gemini không trả ảnh → bảng chọn: đổi engine / thử lại / bỏ qua.
+          if (await handleThumbFallback("gemini")) return;
+        }
+
+        if (thumbUrl) {
+          patch(id, { updatedThumbnailUrl: thumbUrl, needChatgptLogin: false });
+          appendLog(id, `Thumbnail mới (Gemini): ${thumbUrl}`);
+
+          // Pause for user review (giống luồng ChatGPT)
+          patch(id, {
+            stage: "thumbnail_review",
+            thumbnailReview: {
+              waiting: true,
+              imageUrl: thumbUrl,
+              extraInstructions: "",
+            },
+            resumeStep: 11,
+          });
+          appendLog(id, "Duyệt thumbnail: Chấp nhận hoặc Tạo lại...");
+          const reviewResult = await waitForThumbnailReview(id);
+
+          if (reviewResult.action === "skip") {
+            patch(id, { updatedThumbnailUrl: null });
+            appendLog(id, "Bỏ qua thumbnail Gemini.");
           } else if (reviewResult.extra) {
             // Regenerate with extra instructions — loop back
             patch(id, {

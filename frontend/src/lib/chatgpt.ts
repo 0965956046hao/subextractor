@@ -1,7 +1,6 @@
 import puppeteer, { type Browser, type ElementHandle, type Page } from "puppeteer-core";
-import { CHROME_PATH, killChromeOnProfile, type BrowserHandle } from "./douyin";
+import { CHROME_PATH, ensureProfileFree, type BrowserHandle } from "./douyin";
 import { resolveProfileDir } from "./subtitle-profile";
-import { execSync } from "child_process";
 
 /**
  * Drive chatgpt.com from the user's browser to generate/edit an image.
@@ -30,20 +29,6 @@ export const CHATGPT_HEADLESS =
     ? false
     : process.env.CHATGPT_HEADLESS !== "false";
 
-/** Wait until no Chrome process holds the given profile dir. */
-function waitForProfileRelease(profileDir: string, maxWaitMs = 5000): void {
-  const deadline = Date.now() + maxWaitMs;
-  while (Date.now() < deadline) {
-    try {
-      const out = execSync(`pgrep -f "user-data-dir=${profileDir}"`, { encoding: "utf8" }).trim();
-      if (!out) return; // no Chrome on this profile
-    } catch {
-      return; // pgrep exited non-zero = no matches
-    }
-    execSync("sleep 0.5");
-  }
-}
-
 const LOGIN_TIMEOUT_MS = 120_000;
 const GENERATE_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATE_TIMEOUT || "240000");
 
@@ -66,8 +51,7 @@ export async function openChatGptBrowser(): Promise<BrowserHandle> {
       if (/headlesschrome/i.test(version)) {
         // Found headless — kill it, then continue to try the other endpoint.
         await browser.disconnect().catch(() => {});
-        killChromeOnProfile(CHATGPT_PROFILE_DIR);
-        waitForProfileRelease(CHATGPT_PROFILE_DIR, 5000);
+        ensureProfileFree(CHATGPT_PROFILE_DIR);
         continue;
       }
       return { browser, persistent: true };
@@ -77,11 +61,12 @@ export async function openChatGptBrowser(): Promise<BrowserHandle> {
     }
   }
 
-  // 2. No visible Chrome found. Kill any lingering headless, then launch fresh.
-  killChromeOnProfile(CHATGPT_PROFILE_DIR);
-  waitForProfileRelease(CHATGPT_PROFILE_DIR, 5000);
+  // 2. No visible Chrome found. Free the profile (TERM → KILL → stale
+  // SingletonLock cleanup), then launch fresh.
+  ensureProfileFree(CHATGPT_PROFILE_DIR);
 
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) ensureProfileFree(CHATGPT_PROFILE_DIR, 8000);
     try {
       const browser = await puppeteer.launch({
         executablePath: CHROME_PATH,
@@ -96,7 +81,6 @@ export async function openChatGptBrowser(): Promise<BrowserHandle> {
       return { browser, persistent: false };
     } catch (err) {
       if (attempt < 2) {
-        killChromeOnProfile(CHATGPT_PROFILE_DIR);
         await new Promise((r) => setTimeout(r, 2000));
       } else {
         throw err;

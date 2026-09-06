@@ -495,6 +495,16 @@ export async function chatgptLogin(): Promise<{
   return res.data;
 }
 
+export async function geminiLogin(): Promise<{
+  status: string;
+  mode: string;
+}> {
+  const res = await api.post<{ status: string; mode: string }>(
+    "/gemini/login",
+  );
+  return res.data;
+}
+
 export interface CapCutVoice {
   voice_type: string;
   display_name: string;

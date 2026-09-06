@@ -832,6 +832,9 @@ const dictionaries = {
     "pipeline.gptThumbnail": "GPT thumbnail",
     "pipeline.gptThumbnailHint":
       "Use ChatGPT Vision to fix the thumbnail with a proper title.",
+    "pipeline.geminiThumbnail": "Gemini thumbnail",
+    "pipeline.geminiThumbnailHint":
+      "Use Gemini web to fix the thumbnail with a proper title.",
     "pipeline.autoYoutube": "Auto-upload YouTube",
     "pipeline.autoYoutubeHint":
       "Upload the finished video to YouTube with the generated meta.",
@@ -860,6 +863,9 @@ const dictionaries = {
     "pipeline.chatgptNeedLogin": "ChatGPT not logged in",
     "pipeline.chatgptNeedLoginHint": "Open the ChatGPT profile, log in, then click Retry.",
     "pipeline.chatgptOpenProfile": "Open Profile",
+    "pipeline.geminiNeedLogin": "Gemini not logged in",
+    "pipeline.geminiNeedLoginHint": "Open the Gemini profile, log in with Google, then click Retry.",
+    "pipeline.geminiOpenProfile": "Open Profile",
     "pipeline.skipStep": "Skip",
     "pipeline.retryStep": "Retry",
     "pipeline.delete": "Delete",
@@ -1773,6 +1779,9 @@ const dictionaries = {
     "pipeline.gptThumbnail": "Thumbnail bằng ChatGPT",
     "pipeline.gptThumbnailHint":
       "Dùng ChatGPT Vision chỉnh lại thumbnail kèm tiêu đề.",
+    "pipeline.geminiThumbnail": "Thumbnail bằng Gemini",
+    "pipeline.geminiThumbnailHint":
+      "Dùng Gemini web chỉnh lại thumbnail kèm tiêu đề.",
     "pipeline.autoYoutube": "Tự động đăng YouTube",
     "pipeline.autoYoutubeHint":
       "Đăng video hoàn thành lên YouTube kèm meta đã tạo.",
@@ -1801,6 +1810,9 @@ const dictionaries = {
     "pipeline.chatgptNeedLogin": "Chưa đăng nhập ChatGPT",
     "pipeline.chatgptNeedLoginHint": "Mở profile ChatGPT, đăng nhập, rồi nhấn Thử lại.",
     "pipeline.chatgptOpenProfile": "Mở Profile",
+    "pipeline.geminiNeedLogin": "Chưa đăng nhập Gemini",
+    "pipeline.geminiNeedLoginHint": "Mở profile Gemini, đăng nhập Google, rồi nhấn Thử lại.",
+    "pipeline.geminiOpenProfile": "Mở Profile",
     "pipeline.skipStep": "Bỏ qua",
     "pipeline.retryStep": "Thử lại",
     "pipeline.delete": "Xoá",

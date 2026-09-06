@@ -1,0 +1,47 @@
+import { NextResponse } from "next/server";
+import { resolveProfileDir } from "@/lib/subtitle-profile";
+import {
+  openGeminiBrowser,
+  closeGeminiBrowser,
+  GEMINI_URL,
+} from "@/lib/gemini";
+import type { BrowserHandle } from "@/lib/douyin";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function POST() {
+  // Use the same profile dir as Douyin so both share one Chrome profile.
+  const profileDir = resolveProfileDir("douyin");
+
+  let handle: BrowserHandle;
+  try {
+    handle = await openGeminiBrowser();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      {
+        detail:
+          `Không mở được Chrome: ${msg}. ` +
+          "Đảm bảo Google Chrome đã cài.",
+      },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const page = await handle.browser.newPage();
+    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    await closeGeminiBrowser(handle).catch(() => {});
+  } catch (err) {
+    await closeGeminiBrowser(handle).catch(() => {});
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ detail: `Không mở được Gemini: ${msg}` }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    status: "ok",
+    mode: "visible",
+    profileDir,
+  });
+}

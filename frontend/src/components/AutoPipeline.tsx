@@ -21,6 +21,7 @@ import {
   getContextImages,
   getDownloadUrl,
   getDubbedDownloadUrl,
+  geminiLogin,
   getFrameUrl,
   getGoogleTtsVoices,
   getPipelineHealth,
@@ -320,6 +321,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [watermarkOn, setWatermarkOn] = useState(true);
   const [useFalThumbnail, setUseFalThumbnail] = useState(false);
   const [useGptThumbnail, setUseGptThumbnail] = useState(false);
+  const [useGeminiThumbnail, setUseGeminiThumbnail] = useState(false);
   const [autoUploadYoutube, setAutoUploadYoutube] = useState(false);
   const [ytChannels, setYtChannels] = useState<YouTubeChannelInfo[]>([]);
   const [ytChannel, setYtChannel] = useState("");
@@ -678,6 +680,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       setUseFalThumbnail(cfg.useFalThumbnail);
     if (typeof cfg.useGptThumbnail === "boolean")
       setUseGptThumbnail(cfg.useGptThumbnail);
+    if (typeof cfg.useGeminiThumbnail === "boolean")
+      setUseGeminiThumbnail(cfg.useGeminiThumbnail);
     if (typeof cfg.autoUploadYoutube === "boolean")
       setAutoUploadYoutube(cfg.autoUploadYoutube);
     if (typeof cfg.youtubeChannel === "string") setYtChannel(cfg.youtubeChannel);
@@ -717,6 +721,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       if (typeof s.checkVoice === "boolean") setCheckVoice(s.checkVoice);
       if (typeof s.useFalThumbnail === "boolean") setUseFalThumbnail(s.useFalThumbnail);
       if (typeof s.useGptThumbnail === "boolean") setUseGptThumbnail(s.useGptThumbnail);
+      if (typeof s.useGeminiThumbnail === "boolean") setUseGeminiThumbnail(s.useGeminiThumbnail);
       if (typeof s.autoUploadYoutube === "boolean") setAutoUploadYoutube(s.autoUploadYoutube);
       if (typeof s.youtubeChannel === "string") setYtChannel(s.youtubeChannel);
       presetSnapshotRef.current = null;
@@ -739,7 +744,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         dubEngine, voiceLang, dubVoice, muteOriginal, keepOriginalEnabled,
         originalGainDb, multiVoice, autoFitSubs, watermarkOn, watermarkPreset,
         removeWatermarkEnabled: removeWmEnabled, checkSubs, checkVoice,
-        useFalThumbnail, useGptThumbnail, autoUploadYoutube,
+        useFalThumbnail, useGptThumbnail, useGeminiThumbnail, autoUploadYoutube,
         youtubeChannel: ytChannel,
       };
     }
@@ -796,6 +801,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       voiceLang,
       presetSeed?.colorFilter ?? null,
       playbackSpeed,
+      useGeminiThumbnail,
     );
     setUrl("");
     setSelectedId(id);
@@ -859,6 +865,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       dubOn,
       colorFilter: presetSeed?.colorFilter ?? null,
       playbackSpeed,
+      useGeminiThumbnail,
     });
     setUploaded(null);
     setSelectedId(id);
@@ -1873,7 +1880,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         type="button"
                         onClick={() => {
                           setUseFalThumbnail(!useFalThumbnail);
-                          if (!useFalThumbnail) setUseGptThumbnail(false);
+                          if (!useFalThumbnail) {
+                            setUseGptThumbnail(false);
+                            setUseGeminiThumbnail(false);
+                          }
                         }}
                         className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${useFalThumbnail ? "bg-accent" : "bg-black/10"
                           }`}
@@ -1898,13 +1908,44 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         type="button"
                         onClick={() => {
                           setUseGptThumbnail(!useGptThumbnail);
-                          if (!useGptThumbnail) setUseFalThumbnail(false);
+                          if (!useGptThumbnail) {
+                            setUseFalThumbnail(false);
+                            setUseGeminiThumbnail(false);
+                          }
                         }}
                         className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${useGptThumbnail ? "bg-accent" : "bg-black/10"
                           }`}
                       >
                         <span
                           className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${useGptThumbnail ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          {tr("pipeline.geminiThumbnail")}
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          {tr("pipeline.geminiThumbnailHint")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseGeminiThumbnail(!useGeminiThumbnail);
+                          if (!useGeminiThumbnail) {
+                            setUseFalThumbnail(false);
+                            setUseGptThumbnail(false);
+                          }
+                        }}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${useGeminiThumbnail ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${useGeminiThumbnail ? "left-[22px]" : "left-0.5"
                             }`}
                         />
                       </button>
@@ -2568,50 +2609,37 @@ function ThumbnailReviewActions({
   onSkip: () => void;
   onRegenerate: (extra: string) => void;
 }) {
-  const [showRegen, setShowRegen] = useState(false);
   const [extra, setExtra] = useState("");
+
+  const submitRegen = () => {
+    if (!extra.trim()) return;
+    onRegenerate(extra.trim());
+    setExtra("");
+  };
 
   return (
     <>
       <button onClick={onAccept} className="btn-island-primary btn-sm">
         Chấp nhận
       </button>
-      <button onClick={() => setShowRegen(!showRegen)} className="btn-warn">
-        Tạo lại
-      </button>
       <button onClick={onSkip} className="btn-island-secondary btn-sm">
         Bỏ qua
       </button>
-      {showRegen && (
-        <div className="flex gap-2 mt-1">
-          <input
-            type="text"
-            value={extra}
-            onChange={(e) => setExtra(e.target.value)}
-            placeholder="Thêm yêu cầu (ví dụ: thêm chữ, đổi màu...)"
-            className="flex-1 px-3 py-1.5 text-[11px] border border-stone-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-accent"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && extra.trim()) {
-                onRegenerate(extra.trim());
-                setExtra("");
-                setShowRegen(false);
-              }
-            }}
-          />
-          <button
-            onClick={() => {
-              if (extra.trim()) {
-                onRegenerate(extra.trim());
-                setExtra("");
-                setShowRegen(false);
-              }
-            }}
-            className="px-3 py-1.5 text-[11px] font-medium bg-amber-500 text-white rounded-lg hover:opacity-90 transition-colors cursor-pointer"
-          >
-            Gửi
-          </button>
-        </div>
-      )}
+      <div className="flex gap-2 mt-1">
+        <input
+          type="text"
+          value={extra}
+          onChange={(e) => setExtra(e.target.value)}
+          placeholder="Nhập yêu cầu mới rồi bấm Tạo lại (ví dụ: thêm chữ, đổi màu...)"
+          className="flex-1 px-3 py-1.5 text-[11px] rounded-xl border border-white/[0.09] bg-black/25 text-ink focus:outline-none focus:ring-2 focus:ring-accent/20"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submitRegen();
+          }}
+        />
+        <button onClick={submitRegen} className="btn-warn">
+          Tạo lại
+        </button>
+      </div>
     </>
   );
 }
@@ -2832,15 +2860,19 @@ function DetailView({
         )}
 
         {p.thumbnailReview?.waiting && p.thumbnailReview.imageUrl && (
-          <div className="mb-5 p-4 bg-white rounded-xl border border-stone-200 shadow-sm">
-            <p className="text-[12px] font-semibold text-ink mb-3">
-              Duyệt thumbnail ChatGPT
+          <div className="mb-5 p-4 bg-black rounded-xl border border-stone-700 shadow-sm">
+            <p className="text-[12px] font-semibold text-white mb-3">
+              {p.useGeminiThumbnail
+                ? "Duyệt thumbnail Gemini"
+                : p.useGptThumbnail
+                  ? "Duyệt thumbnail ChatGPT"
+                  : "Duyệt thumbnail fal.ai"}
             </p>
             <div className="flex gap-4 items-start flex-wrap">
               <img
                 src={p.thumbnailReview.imageUrl}
                 alt="Thumbnail preview"
-                className="w-48 h-auto rounded-lg border border-stone-200 object-cover"
+                className="w-48 h-auto rounded-lg border border-stone-700 object-cover"
               />
               <div className="flex flex-col gap-2 min-w-[180px]">
                 <ThumbnailReviewActions
@@ -2859,18 +2891,46 @@ function DetailView({
           <div className="mb-5 p-4 bg-black rounded-xl border border-stone-700 shadow-sm flex items-center justify-between gap-3 flex-wrap">
             <div className="min-w-0">
               <p className="text-[12px] font-semibold text-white">
-                ChatGPT không tạo được ảnh thumbnail
+                {p.thumbnailFallback.from === "fal"
+                  ? "fal.ai không tạo được ảnh thumbnail"
+                  : p.thumbnailFallback.from === "gpt"
+                    ? "ChatGPT không tạo được ảnh thumbnail"
+                    : "Gemini không tạo được ảnh thumbnail"}
               </p>
               <p className="text-[11px] text-stone-300 mt-0.5">
-                Đổi sang fal.ai để tạo thumbnail, hoặc bỏ qua bước này.
+                Đổi sang engine khác, thử lại, hoặc bỏ qua bước này.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {p.thumbnailFallback.from !== "fal" && (
+                <button
+                  onClick={() => resolveThumbnailFallback(p.id, "fal")}
+                  className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer"
+                >
+                  Đổi qua FAL
+                </button>
+              )}
+              {p.thumbnailFallback.from !== "gpt" && (
+                <button
+                  onClick={() => resolveThumbnailFallback(p.id, "gpt")}
+                  className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer"
+                >
+                  Đổi qua GPT
+                </button>
+              )}
+              {p.thumbnailFallback.from !== "gemini" && (
+                <button
+                  onClick={() => resolveThumbnailFallback(p.id, "gemini")}
+                  className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer"
+                >
+                  Đổi qua Gemini
+                </button>
+              )}
               <button
-                onClick={() => resolveThumbnailFallback(p.id, "fal")}
-                className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer"
+                onClick={() => resolveThumbnailFallback(p.id, "retry")}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
               >
-                Đổi qua FAL
+                Thử lại
               </button>
               <button
                 onClick={() => resolveThumbnailFallback(p.id, "skip")}
@@ -2905,6 +2965,48 @@ function DetailView({
                 onClick={() => {
                   updatePipeline(p.id, {
                     needChatgptLogin: false,
+                    status: "running",
+                    stage: "done",
+                  });
+                  rerunPipeline(p.id, 12);
+                }}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                {tr("pipeline.skipStep")}
+              </button>
+              <button
+                onClick={() => rerunPipeline(p.id, 11)}
+                className="px-3 py-1.5 text-[11px] font-medium bg-warn text-white rounded-full hover:bg-warn transition-colors cursor-pointer"
+              >
+                {tr("pipeline.retryStep")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {p.needGeminiLogin && (
+          <div className="mb-5 p-4 bg-amber-50 rounded-lg border border-amber-200 flex items-center justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-warn">
+                {tr("pipeline.geminiNeedLogin")}
+              </p>
+              <p className="text-[11px] text-warn mt-0.5">
+                {tr("pipeline.geminiNeedLoginHint")}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => geminiLogin()}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                <span className="tracking-tight">
+                  {tr("pipeline.geminiOpenProfile")}
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  updatePipeline(p.id, {
+                    needGeminiLogin: false,
                     status: "running",
                     stage: "done",
                   });

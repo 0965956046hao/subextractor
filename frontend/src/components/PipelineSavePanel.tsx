@@ -26,6 +26,7 @@ function collectCurrentConfig(p: Pipeline): Record<string, unknown> {
     checkVoice: p.checkVoice,
     useFalThumbnail: p.useFalThumbnail,
     useGptThumbnail: p.useGptThumbnail,
+    useGeminiThumbnail: p.useGeminiThumbnail,
     autoUploadYoutube: p.autoUploadYoutube,
     youtubeChannel: p.youtubeChannel,
     colorFilter: p.colorFilter,

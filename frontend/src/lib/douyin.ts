@@ -152,6 +152,57 @@ export function killChromeOnProfile(profileDir: string): void {
   }
 }
 
+function profilePids(profileDir: string): string[] {
+  try {
+    const out = execSync(`pgrep -f "user-data-dir=${profileDir}"`, {
+      encoding: "utf8",
+    });
+    return out.split("\n").map((s) => s.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Ensure no Chrome holds the profile dir, then clear stale Singleton lock
+ * files. Fixes "Failed to create SingletonLock: File exists" when a previous
+ * Chrome was SIGTERMed but hasn't released the lock yet (or crashed leaving
+ * a stale lock). Lock files are ONLY removed when no process holds the
+ * profile, so a running browser is never corrupted.
+ */
+export function ensureProfileFree(profileDir: string, maxWaitMs = 15000): void {
+  const deadline = Date.now() + maxWaitMs;
+  killChromeOnProfile(profileDir); // SIGTERM first
+  let sigkillAt = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (profilePids(profileDir).length === 0) break;
+    if (Date.now() >= sigkillAt) {
+      for (const pid of profilePids(profileDir)) {
+        try {
+          process.kill(Number(pid), "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      sigkillAt = Date.now() + 2000;
+    }
+    try {
+      execSync("sleep 0.5");
+    } catch {
+      break;
+    }
+  }
+  if (profilePids(profileDir).length === 0) {
+    for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+      try {
+        execSync(`rm -f "${profileDir}/${f}"`);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 function toCookieParams(cookies: Cookie[]): CookieParam[] {
   return cookies.map((c) => {
     const p: CookieParam = { name: c.name, value: c.value };
