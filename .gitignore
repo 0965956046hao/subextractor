@@ -1,5 +1,6 @@
 backend/temp/
 backend/.venv/
+demucs-env/
 .venv/
 frontend/node_modules/
 frontend/build/

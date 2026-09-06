@@ -16,6 +16,33 @@ $UVICORN = Join-Path $BACKEND ".venv\Scripts\uvicorn.exe"
 $LOG = Join-Path $env:TEMP "subextractor-dev"
 New-Item -ItemType Directory -Force -Path $LOG | Out-Null
 
+# Ensure ffmpeg is on PATH for backend subprocesses (dub/hardcode shell out
+# to `ffmpeg`). Winget installs Gyan FFmpeg per-user; a terminal opened before
+# the install keeps a stale PATH, so prepend known locations here.
+foreach ($ffDir in @(
+  (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-*-full_build\bin"),
+  "C:\ffmpeg\bin",
+  "C:\Program Files\FFmpeg\bin"
+)) {
+  $hit = Get-Item $ffDir -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($hit -and (Test-Path (Join-Path $hit.FullName "ffmpeg.exe"))) {
+    if ($env:Path -notlike "*$($hit.FullName)*") { $env:Path = "$($hit.FullName);" + $env:Path }
+    Write-Host "==> ffmpeg found: $($hit.FullName)"
+    break
+  }
+}
+if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+  Write-Warning "ffmpeg not found on PATH - dub/hardcode will fail. Install it: winget install -e --id Gyan.FFmpeg"
+}
+
+# Isolated demucs env (torch lives here, NOT in backend/.venv where it breaks
+# PaddleOCR via DLL conflict). Prepend so backend `shutil.which("demucs")` finds it.
+$DEMUCS_SCRIPTS = Join-Path $ROOT "demucs-env\Scripts"
+if ((Test-Path (Join-Path $DEMUCS_SCRIPTS "demucs.exe")) -and ($env:Path -notlike "*$DEMUCS_SCRIPTS*")) {
+  $env:Path = "$DEMUCS_SCRIPTS;" + $env:Path
+  Write-Host "==> demucs found: $DEMUCS_SCRIPTS"
+}
+
 $procs = @()
 
 # ── Kill ALL leftover project processes before starting ─────────────────────

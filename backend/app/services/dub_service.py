@@ -225,6 +225,44 @@ def combine_tts_mp3(
         chunk_last_end[c] = max(chunk_last_end.get(c, 0.0), end)
 
     min_chunk, max_chunk = min(chunk_map), max(chunk_map)
+    # Windows CreateProcess giới hạn dòng lệnh ~32767 ký tự (WinError 206).
+    # Mỗi input -i + filter adelay tốn ~150-200 ký tự → 1 chunk 300s với
+    # phụ đề dày (vd 211 dòng) sẽ vượt giới hạn. Chia mỗi chunk thành các
+    # batch nhỏ, render từng batch ra wav trung gian (pad đúng dur), rồi
+    # amix các batch lại — kết quả toán học tương đương 1 lệnh amix lớn.
+    MAX_FFMPEG_INPUTS = 25
+    part_files: List[Path] = []
+
+    def _render_mix(items_subset: list, chunk_start: float, dur: float, dest: Path) -> None:
+        if not items_subset:
+            _run_ffmpeg([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                "-t", f"{dur:.3f}",
+                str(dest),
+            ])
+            return
+        cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+        parts = []
+        for k, (af, start, end, tempo) in enumerate(items_subset):
+            cmd.extend(["-i", str(af)])
+            delay_ms = int((start - chunk_start) * 1000)
+            if delay_ms < 0:
+                delay_ms = 0
+            parts.append(f"[{k}:a]{tempo}adelay={delay_ms}|{delay_ms}[t{k}]")
+        mix_in = "".join(f"[t{k}]" for k in range(len(items_subset)))
+        parts.append(
+            f"{mix_in}amix=inputs={len(items_subset)}:duration=longest:"
+            f"dropout_transition=0:normalize=0,apad=whole_dur={dur:.3f}[out]"
+        )
+        cmd += [
+            "-filter_complex", ";".join(parts),
+            "-map", "[out]",
+            "-t", f"{dur:.3f}",
+            str(dest),
+        ]
+        _run_ffmpeg(cmd)
+
     for c in range(min_chunk, max_chunk + 1):
         chunk_start = c * chunk_size
         chunk_path = chunk_dir / f".chunk_{c:04d}.wav"
@@ -237,31 +275,25 @@ def combine_tts_mp3(
             dur = CHUNK_SECONDS
 
         if not chunk_items:
-            _run_ffmpeg([
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
-                "-t", f"{dur:.3f}",
-                str(chunk_path),
-            ])
+            _render_mix([], chunk_start, dur, chunk_path)
+        elif len(chunk_items) <= MAX_FFMPEG_INPUTS:
+            _render_mix(chunk_items, chunk_start, dur, chunk_path)
         else:
+            # Chunk quá nhiều input → render từng batch rồi amix các batch.
+            batch_paths: List[Path] = []
+            for b in range(0, len(chunk_items), MAX_FFMPEG_INPUTS):
+                part = chunk_dir / f".chunk_{c:04d}_p{b // MAX_FFMPEG_INPUTS:02d}.wav"
+                _render_mix(chunk_items[b:b + MAX_FFMPEG_INPUTS], chunk_start, dur, part)
+                batch_paths.append(part)
+                part_files.append(part)
             cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-            parts = []
-            for k, (af, start, end, tempo) in enumerate(chunk_items):
-                cmd.extend(["-i", str(af)])
-                delay_ms = int((start - chunk_start) * 1000)
-                if delay_ms < 0:
-                    delay_ms = 0
-                parts.append(f"[{k}:a]{tempo}adelay={delay_ms}|{delay_ms}[t{k}]")
-            mix_in = "".join(f"[t{k}]" for k in range(len(chunk_items)))
-            # amix=duration=longest chỉ xuất tới sample audible cuối cùng,
-            # phần im lặng cuối chunk bị bỏ → concat lệch sớm dồn lên.
-            # apad=whole_dur pad silence ĐÚNG dur giây (có giới hạn, khác apad∞ cũ).
-            parts.append(
-                f"{mix_in}amix=inputs={len(chunk_items)}:duration=longest:"
-                f"dropout_transition=0:normalize=0,apad=whole_dur={dur:.3f}[out]"
-            )
+            for part in batch_paths:
+                cmd.extend(["-i", str(part)])
+            mix_in = "".join(f"[{k}:a]" for k in range(len(batch_paths)))
             cmd += [
-                "-filter_complex", ";".join(parts),
+                "-filter_complex",
+                f"{mix_in}amix=inputs={len(batch_paths)}:duration=longest:"
+                f"dropout_transition=0:normalize=0,apad=whole_dur={dur:.3f}[out]",
                 "-map", "[out]",
                 "-t", f"{dur:.3f}",
                 str(chunk_path),
@@ -296,6 +328,8 @@ def combine_tts_mp3(
 
     # Cleanup
     for p in chunk_files:
+        p.unlink(missing_ok=True)
+    for p in part_files:
         p.unlink(missing_ok=True)
     list_file.unlink(missing_ok=True)
 
@@ -795,3 +829,4 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             "type": "error",
             "message": f"Lỗi lồng tiếng: {e}",
         })
+        raise
