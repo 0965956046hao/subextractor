@@ -126,6 +126,27 @@ def cwsub_keyboard(key: str) -> list[list[dict]]:
     """Inline keyboard for a new-video notification: [📝 Subtitle]."""
     return [[_btn("📝 Subtitle", f"cwsub:{key}")]]
 
+
+# ── On-demand channel scan (/channel) ──
+# /channel → channel list → date presets → scan → videos (like worker notify).
+# Channel URL cache (id → {url, name}) so callback data stays tiny.
+_cw_scan_channels: dict[str, dict] = {}
+
+_CWSCAN_DAYS = [
+    ("Hôm nay", 1),
+    ("3 ngày", 3),
+    ("7 ngày", 7),
+    ("30 ngày", 30),
+    ("Tất cả", -1),
+]
+_CWSCAN_MAX_VIDEOS = 10
+
+
+def _frontend_base() -> str:
+    from app.config import settings
+
+    return (settings.frontend_url or "http://localhost:3000").rstrip("/")
+
 # Cached dynamic data (keyed by engine+lang for voices).
 _voice_cache: dict[tuple[str, str], list[dict]] = {}
 
@@ -538,8 +559,9 @@ class TelegramBot:
         telegram_service.register_callback_handler("tgcfg:", self._handle_config_callback)
         telegram_service.register_callback_handler("tgcp:", self._handle_checkpoint_callback)
         telegram_service.register_callback_handler("cwsub:", self._handle_cwsub_callback)
+        telegram_service.register_callback_handler("cwscan:", self._handle_cwscan_callback)
         self._started = True
-        logger.info("TelegramBot started (handlers: tgcfg:, tgcp:, cwsub:)")
+        logger.info("TelegramBot started (handlers: tgcfg:, tgcp:, cwsub:, cwscan:)")
 
     # ── /douyin command ──
 
@@ -762,6 +784,162 @@ class TelegramBot:
             return
 
         await telegram_service.answer_callback_query(cb_id)
+
+    # ── On-demand channel scan (/channel) ──
+
+    async def _handle_channel(self, chat_id: int, text: str):
+        import httpx
+
+        from app.services.telegram_service import telegram_service
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{_frontend_base()}/api/channels")
+                r.raise_for_status()
+                data = r.json()
+        except Exception as e:
+            await telegram_service.send_message(chat_id, f"❌ Không lấy được danh sách kênh: {e}")
+            return
+        channels = data.get("channels") if isinstance(data, dict) else []
+        if not channels:
+            await telegram_service.send_message(
+                chat_id,
+                "📭 Chưa có kênh nào. Thêm kênh ở trang Channels (web) trước.",
+            )
+            return
+        _cw_scan_channels.clear()
+        rows: list[list[dict]] = []
+        for ch in channels:
+            cid = str(ch.get("id") or ch.get("url"))
+            _cw_scan_channels[cid] = {"url": ch.get("url", ""), "name": ch.get("name", "")}
+            rows.append([_btn(f"📺 {ch.get('name') or ch.get('url')}", f"cwscan:{cid}")])
+        await telegram_service.send_message_with_keyboard(
+            chat_id, "📺 <b>Chọn kênh để quét:</b>", rows
+        )
+
+    async def _handle_cwscan_callback(self, callback_query: dict):
+        import time
+
+        import httpx
+
+        from app.services.telegram_service import telegram_service
+
+        cb_id = callback_query.get("id", "")
+        data = callback_query.get("data", "")
+        msg = callback_query.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        msg_id = msg.get("message_id")
+        if chat_id is None:
+            await telegram_service.answer_callback_query(cb_id)
+            return
+
+        parts = data.split(":")
+        cid = parts[1] if len(parts) > 1 else ""
+        rest = parts[2:]
+        ch = _cw_scan_channels.get(cid)
+        if ch is None:
+            await telegram_service.answer_callback_query(cb_id, "⚠️ Kênh đã hết hạn. Gõ /channel lại.")
+            return
+
+        # Step 1: pick date range.
+        if not rest:
+            await telegram_service.answer_callback_query(cb_id)
+            rows = [
+                [_btn(label, f"cwscan:{cid}:d:{days}") for label, days in _CWSCAN_DAYS[:2]],
+                [_btn(label, f"cwscan:{cid}:d:{days}") for label, days in _CWSCAN_DAYS[2:4]],
+                [_btn(_CWSCAN_DAYS[4][0], f"cwscan:{cid}:d:-1")],
+            ]
+            text = f"📺 <b>{ch.get('name') or ch.get('url')}</b>\n\nChọn mốc ngày — chỉ lấy video sau mốc này:"
+            if msg_id:
+                await telegram_service.edit_message(chat_id, msg_id, text, rows)
+            else:
+                await telegram_service.send_message_with_keyboard(chat_id, text, rows)
+            return
+
+        # Step 2: scan & return videos.
+        if len(rest) == 2 and rest[0] == "d":
+            try:
+                days = int(rest[1])
+            except ValueError:
+                days = 7
+            since = 0 if days < 0 else int(time.time()) - days * 86400
+            await telegram_service.answer_callback_query(cb_id, "🔍 Đang quét...")
+            try:
+                async with httpx.AsyncClient(timeout=300) as client:
+                    r = await client.post(
+                        f"{_frontend_base()}/api/channels/scan",
+                        json={"url": ch.get("url"), "since": since},
+                    )
+                    r.raise_for_status()
+                    result = r.json()
+            except Exception as e:
+                await telegram_service.send_message(chat_id, f"❌ Quét thất bại: {e}")
+                return
+            videos = result.get("videos") or []
+            if not videos:
+                await telegram_service.send_message(
+                    chat_id, f"📭 Không có video mới ở <b>{ch.get('name') or ''}</b>."
+                )
+                return
+            from app.services.channel_watch import _slim_video, _video_caption
+
+            slim = [_slim_video(v, {"id": cid, "name": ch.get("name", ""), "url": ch.get("url", "")})
+                    for v in videos if v.get("aweme_id")]
+            slim.sort(key=lambda x: x.get("create_time", 0), reverse=True)
+            omitted = max(0, len(slim) - _CWSCAN_MAX_VIDEOS)
+            sent = 0
+            async with httpx.AsyncClient(timeout=60) as client:
+                for v in slim[:_CWSCAN_MAX_VIDEOS]:
+                    caption = _video_caption(v)
+                    key = register_cwsub(v.get("share_url") or "", v.get("channel_name") or "", v.get("desc") or "")
+                    keyboard = cwsub_keyboard(key)
+                    cover_path = await self._cwscan_cover(client, v)
+                    try:
+                        if cover_path:
+                            ok = await telegram_service.send_photo_with_keyboard(
+                                chat_id, cover_path, caption, keyboard)
+                        else:
+                            mid = await telegram_service.send_message_with_keyboard(
+                                chat_id, caption, keyboard)
+                            ok = mid is not None
+                        if ok:
+                            sent += 1
+                    except Exception:
+                        logger.exception("cwscan notify failed")
+            if omitted:
+                await telegram_service.send_message(chat_id, f"…và {omitted} video khác.")
+            if not sent:
+                await telegram_service.send_message(chat_id, "⚠️ Quét xong nhưng không gửi được tin nào.")
+            return
+
+        await telegram_service.answer_callback_query(cb_id)
+
+    @staticmethod
+    async def _cwscan_cover(client, v: dict) -> str | None:
+        """Download cover to temp; return local path or None."""
+        from pathlib import Path
+
+        from app.config import settings
+
+        url = v.get("cover") or ""
+        if not url:
+            return None
+        try:
+            d = settings.temp_dir / "channel_watch" / "covers"
+            d.mkdir(parents=True, exist_ok=True)
+            dest = d / f"{v.get('aweme_id', 'x')}.jpg"
+            if dest.exists() and dest.stat().st_size > 0:
+                return str(dest)
+            r = await client.get(
+                url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.douyin.com/"},
+            )
+            r.raise_for_status()
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_bytes(r.content)
+            tmp.replace(dest)
+            return str(dest)
+        except Exception:
+            return None
 
     # ── Pipeline trigger ──
 

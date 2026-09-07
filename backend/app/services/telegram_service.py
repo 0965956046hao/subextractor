@@ -283,6 +283,8 @@ class TelegramService:
         elif text.startswith("/douyin"):
             # Delegate to telegram_bot handler if registered
             await self._handle_douyin_command(chat_id, text)
+        elif text.startswith("/channel"):
+            await self._handle_channel_command(chat_id, text)
         elif text.startswith("/"):
             # Unknown command
             await self.send_message(
@@ -353,6 +355,25 @@ class TelegramService:
             await self.send_message(
                 chat_id,
                 "❌ Có lỗi xảy ra khi xử lý lệnh Douyin.",
+            )
+
+    async def _handle_channel_command(self, chat_id: int, text: str):
+        """Handle /channel command (scan a watchlist channel on demand)."""
+        try:
+            from app.services.telegram_bot import telegram_bot
+
+            await telegram_bot._handle_channel(chat_id, text)
+        except ImportError:
+            logger.warning("/channel command received but telegram_bot module not available")
+            await self.send_message(
+                chat_id,
+                "⚠️ Tính năng quét kênh chưa sẵn sàng.",
+            )
+        except Exception as e:
+            logger.warning("/channel handler error: %s", e, exc_info=True)
+            await self.send_message(
+                chat_id,
+                "❌ Có lỗi xảy ra khi xử lý lệnh channel.",
             )
 
     # ── Messaging ──
