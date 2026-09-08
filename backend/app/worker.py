@@ -170,6 +170,7 @@ def _ocr_segment_entries(
             progress_callback=progress_cb,
             text_callback=text_cb,
             total_frames=None,
+            lang=lang,
         )
 
 

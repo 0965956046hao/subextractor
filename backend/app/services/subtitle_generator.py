@@ -71,9 +71,37 @@ GLUED_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,3}[\u4e00-\u9fff]")
 # Trailing ASCII glued after CJK: "你喝多了N" -> "你喝多了".
 TRAILING_GLUED_RE = re.compile(r"(?<=[\u4e00-\u9fff])[A-Za-z0-9]{1,3}$")
 # Pure short latin/digit/underscore tokens at line edges (V, X, C, IN, OK, _).
+# NOTE: Chinese-tuned — skipped for the Latin-script OCR langs (see _is_cjk_lang).
 NOISE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_]{1,4}$")
 # Entry left as pure short latin/digit after cleaning ("A", "IAN", "MNA").
+# NOTE: Chinese-tuned — skipped for the Latin-script OCR langs.
 PURE_NOISE_RE = re.compile(r"^[A-Za-z0-9_]{1,4}$")
+
+# Languages whose OCR output is Latin-script ("en", "latin") get a light,
+# Latin-safe pass so real short words (the, and, you, with, OK, ...) are
+# never stripped as "noise". Every other value — "ch", empty, or unknown —
+# keeps the historic Chinese-tuned behavior, mirroring how both OCR engines
+# fall back to the "ch" model for unknown langs.
+LATIN_LANGS = frozenset({"en", "latin"})
+
+# Single junk chars for non-CJK langs (stray OCR artifacts like "V").
+# "I" / "a" are real English words — never strip them. Digits are kept:
+# digit-sprinkle noise ("不过 1 一 1") is a CJK-model artifact, while in
+# English a standalone number ("Chapter 2", "Route 7") is usually real.
+EN_SINGLE_JUNK_RE = re.compile(r"^[A-Za-z_]$")
+EN_KEEP_SINGLE = frozenset({"I", "a", "A"})
+
+
+def _is_cjk_lang(lang: str | None) -> bool:
+    """True when Chinese-tuned noise filters should apply.
+
+    Only the Latin-script OCR langs ("en", "latin") opt out. Unknown/empty
+    lang defaults to True to preserve the historic behavior for any caller
+    that doesn't pass a lang (or passes an unmapped one).
+    """
+    if not lang:
+        return True
+    return lang not in LATIN_LANGS
 
 
 def _strip_noise_tokens(text: str) -> str:
@@ -81,12 +109,42 @@ def _strip_noise_tokens(text: str) -> str:
     return " ".join(tokens)
 
 
-def clean_entry_text(text: str, glued_noise: set[str] | None = None) -> str:
+def _strip_en_noise_tokens(text: str) -> str:
+    """Light noise pass for non-CJK langs: drop only single junk chars.
+
+    Keeps every multi-char token (including short function words like
+    "the", "and", "you", "with", "OK") and the real one-letter words
+    "I" / "a".
+    """
+    tokens = [
+        t for t in text.split()
+        if not (EN_SINGLE_JUNK_RE.match(t) and t not in EN_KEEP_SINGLE)
+    ]
+    return " ".join(tokens)
+
+
+def clean_entry_text(
+    text: str,
+    glued_noise: set[str] | None = None,
+    lang: str = "ch",
+) -> str:
+    """Post-OCR cleanup for one subtitle entry.
+
+    Chinese-tuned filters (digit sprinkle, glued CJK+Latin, 1–4 char Latin
+    stripping) only run when ``lang`` is a CJK lang. Other langs get a
+    Latin-safe pass that preserves real short words.
+    """
     if not text:
         return ""
     text = clean_text(text)
     if not text:
         return ""
+    if not _is_cjk_lang(lang):
+        text = _strip_en_noise_tokens(text)
+        text = clean_text(text)
+        if EN_SINGLE_JUNK_RE.match(text) and text not in EN_KEEP_SINGLE:
+            return ""
+        return text
     text = DIGIT_TOKEN_RE.sub(" ", text)
     if glued_noise:
         tokens = text.split()
@@ -119,22 +177,26 @@ def _mergeable(a: str, b: str) -> bool:
 
 def postprocess_entries(
     entries: list[tuple[float, float, str]],
+    lang: str = "ch",
 ) -> list[tuple[float, float, str]]:
     """Hậu kiểm: filter out OCR noise, drop empty lines, merge again."""
     from collections import Counter
 
     # Glued tokens like "K仔" that repeat are real names — keep them.
-    glued_counts: Counter = Counter()
-    for _start, _end, text in entries:
-        for tok in text.split():
-            m = GLUED_TOKEN_RE.match(tok)
-            if m:
-                glued_counts[tok[: m.end()]] += 1
-    glued_noise = {t for t, c in glued_counts.items() if c <= 2}
+    # CJK-only bookkeeping: skipped for Latin langs (regex needs CJK anyway).
+    glued_noise: set[str] = set()
+    if _is_cjk_lang(lang):
+        glued_counts: Counter = Counter()
+        for _start, _end, text in entries:
+            for tok in text.split():
+                m = GLUED_TOKEN_RE.match(tok)
+                if m:
+                    glued_counts[tok[: m.end()]] += 1
+        glued_noise = {t for t, c in glued_counts.items() if c <= 2}
 
     cleaned: list[tuple[float, float, str]] = []
     for start, end, text in entries:
-        t = clean_entry_text(text, glued_noise)
+        t = clean_entry_text(text, glued_noise, lang)
         if t:
             cleaned.append((start, end, t))
 
@@ -158,12 +220,16 @@ def generate_srt_entries(
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
+    lang: str = "ch",
 ) -> list[tuple[float, float, str]]:
     """Build subtitle entries from a stream of (crop, timestamp) frames.
 
     A subtitle boundary is placed at the midpoint between the last frame that
     still showed the old text and the first frame that shows the new text,
     so timestamps stay accurate even at high sampling rates.
+
+    ``lang`` is forwarded to :func:`postprocess_entries` so Chinese-tuned
+    noise filters only apply to CJK output.
 
     Returns the final, post-processed list of ``(start, end, text)`` entries
     (NOT formatted SRT). Callers that only need the text use
@@ -254,7 +320,7 @@ def generate_srt_entries(
         else:
             merged.append((start, end, text))
 
-    final = postprocess_entries(merged)
+    final = postprocess_entries(merged, lang)
     logger.info("  => %d subtitle entries generated", len(final))
     return final
 
@@ -306,6 +372,7 @@ def generate_srt(
     progress_callback=None,
     text_callback=None,
     total_frames: int | None = None,
+    lang: str = "ch",
 ) -> str:
     """Build SRT text from a stream of (crop, timestamp) frames.
 
@@ -316,5 +383,6 @@ def generate_srt(
         progress_callback=progress_callback,
         text_callback=text_callback,
         total_frames=total_frames,
+        lang=lang,
     )
     return format_srt(entries)
