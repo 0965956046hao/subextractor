@@ -14,6 +14,19 @@ CAPCUT="$ROOT/capcut-tts-api"
 DS2API="$ROOT/ds2api"
 DS2API_PORT="${DS2API_PORT:-5001}"
 
+# Fix httpx 0.28.x bug: IPv6 "::1" in NO_PROXY/no_proxy is parsed as invalid
+# port ":1". Strip IPv6 entries so httpx (google-genai, capcut client, etc.)
+# doesn't crash on startup health checks.
+export NO_PROXY="${NO_PROXY//::1/}"
+export no_proxy="${no_proxy//::1/}"
+# Clean up leftover commas/spaces from the removal
+export NO_PROXY="${NO_PROXY//,,/,}"
+export NO_PROXY="${NO_PROXY#,}"
+export NO_PROXY="${NO_PROXY%,}"
+export no_proxy="${no_proxy//,,/,}"
+export no_proxy="${no_proxy#,}"
+export no_proxy="${no_proxy%,}"
+
 # Giải phóng các port cũ TRƯỚC KHI START.
 # Nếu còn instance dev.sh cũ (uvicorn :8000 / next :3000 / capcut :8100 /
 # ds2api :5001) chưa tắt hẳn, instance mới sẽ bị "Address already in use" →
