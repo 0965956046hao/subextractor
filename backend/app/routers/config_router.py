@@ -48,6 +48,8 @@ DEFAULT_SUBTITLE_STYLE = {
     "box_radius": 12,
     "box_border_color": "#000000",
     "box_border_width": 0,
+    "box_pad_x": 12,
+    "box_pad_y": 6,
     "margin_v": 40,
     "margin_h": 0,
 }

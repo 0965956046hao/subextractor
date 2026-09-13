@@ -1,10 +1,13 @@
 import json
+import logging
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -37,6 +40,7 @@ async def upload_video(
                     raise HTTPException(413, "File too large")
                 f.write(chunk)
     except Exception as e:
+        logger.exception("Upload failed after %d bytes (filename=%s)", written, file.filename)
         if video_path.exists():
             video_path.unlink()
         raise HTTPException(500, f"Upload failed: {e}")

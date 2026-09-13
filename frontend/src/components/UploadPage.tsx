@@ -57,7 +57,7 @@ export default function UploadPage({ onUploaded }: Props) {
         onUploaded(id);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "CanceledError") return;
-        setError(t("upload.failed"));
+        setError(err instanceof Error ? err.message : t("upload.failed"));
       } finally {
         setLoading(false);
         abortRef.current = null;

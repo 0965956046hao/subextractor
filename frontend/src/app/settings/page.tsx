@@ -66,6 +66,8 @@ const STYLE_KEYS: Record<string, keyof Dict> = {
   box_radius: "style.boxRadius",
   box_border_color: "style.boxBorderColor",
   box_border_width: "style.boxBorderWidth",
+  box_pad_x: "style.boxPadX",
+  box_pad_y: "style.boxPadY",
   margin_v: "style.marginV",
 };
 
@@ -83,6 +85,8 @@ const DEFAULTS: SubtitleStyle = {
   box_radius: 12,
   box_border_color: "#000000",
   box_border_width: 0,
+  box_pad_x: 12,
+  box_pad_y: 6,
   margin_v: 40,
   margin_h: 0,
 };
@@ -189,6 +193,11 @@ function PreviewBadge({ style }: { style: SubtitleStyle }) {
   const borderW = style.box_border_width;
   const weight = style.bold ? "font-bold" : "font-normal";
   const italic = style.italic ? "italic" : "";
+  // Preview text renders at text-2xl (24px); scale the real padding
+  // (defined at 1080p reference like font_size) down proportionally.
+  const pvScale = 24 / Math.max(1, style.font_size || 48);
+  const pvPadX = Math.round((style.box_pad_x ?? 12) * pvScale);
+  const pvPadY = Math.round((style.box_pad_y ?? 6) * pvScale);
   return (
     <div className="relative h-40 rounded-xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 overflow-hidden">
       <div
@@ -200,9 +209,10 @@ function PreviewBadge({ style }: { style: SubtitleStyle }) {
       />
       <div className="absolute inset-0 flex items-end justify-center pb-8 px-6">
         <span
-          className={`px-4 py-2 text-2xl tracking-tight ${weight} ${italic}`}
+          className={`text-2xl tracking-tight ${weight} ${italic}`}
           style={{
             color: style.text_color,
+            padding: `${pvPadY}px ${pvPadX}px`,
             backgroundColor: style.box_enabled
               ? `rgba(${hexToRgb(style.box_color)}, ${opacity})`
               : "transparent",
@@ -1652,6 +1662,22 @@ export default function SettingsPage() {
                       max={8}
                       suffix="px"
                       onChange={(v) => set({ box_border_width: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxPadX")}
+                      value={style.box_pad_x}
+                      min={0}
+                      max={80}
+                      suffix="px"
+                      onChange={(v) => set({ box_pad_x: v })}
+                    />
+                    <SliderField
+                      label={t("style.boxPadY")}
+                      value={style.box_pad_y}
+                      min={0}
+                      max={80}
+                      suffix="px"
+                      onChange={(v) => set({ box_pad_y: v })}
                     />
                   </div>
                 )}
