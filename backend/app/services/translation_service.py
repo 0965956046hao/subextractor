@@ -165,7 +165,7 @@ RULES:
 5. Chỉ đổi giọng khi chắc chắn người nói khác nhân vật (nam ↔ nữ, già ↔ trẻ, khác vai trò).
 6. Giọng của nhân vật nam: ưu tiên giọng nam; nhân vật nữ: ưu tiên giọng nữ (xem tên/display_name của giọng).
 7. Narrator/background lines: pick a neutral voice.
-8. Output ONLY a JSON object mapping SRT index → voice_type, e.g. {{"1": "BV421_vivn_streaming", "2": "vi_female_huong"}}. No markdown, no explanation.
+8. Output ONLY a JSON object mapping SRT index → voice_type, e.g. {{"1": "BV074_streaming_dsp", "2": "vi_female_huong"}}. No markdown, no explanation.
 
 {previous_assignments}
 SRT LINES (with timestamps):

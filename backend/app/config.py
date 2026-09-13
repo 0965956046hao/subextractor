@@ -1,3 +1,9 @@
+import os
+# PaddlePaddle 3.x + RTX 5060 Ti (Blackwell) cần disable PIR/MKLDNN trên Windows, phải set trước khi import paddle
+os.environ.setdefault("FLAGS_use_pir", "0")
+os.environ.setdefault("PADDLE_DISABLE_PIR", "1")
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
@@ -28,6 +34,7 @@ class Settings(BaseSettings):
 
     # PaddleOCR settings
     ocr_device: str = "gpu"  # "gpu" or "cpu"
+    demucs_device: str = "cpu"  # "cuda" or "cpu"
     # Parallel OCR: chia timeline video thành N đoạn và OCR đồng thời N đoạn.
     # 1 = tắt (xử lý tuần tự như cũ). N > 1 = chạy N luồng OCR song song.
     # Mỗi đoạn dùng 1 engine riêng (RapidOCR load N model vào RAM).
@@ -48,7 +55,7 @@ class Settings(BaseSettings):
     fal_key: str = ""
     # CapCut TTS gen-voice service (capcut-tts-api, FastAPI :8100)
     capcut_tts_url: str = "http://127.0.0.1:8100"
-    capcut_tts_default_voice: str = "BV421_vivn_streaming"
+    capcut_tts_default_voice: str = "BV074_streaming_dsp"
     capcut_tts_default_rate: str = "1.0"
     capcut_tts_timeout: int = 600
 
@@ -70,7 +77,7 @@ class Settings(BaseSettings):
     # biệt hành động qua tham số `mode` (region | style).
     annotation_web_app_url: str = "https://subtitlewatermark.vercel.app"
 
-    model_config = {"env_prefix": "STE_", "env_file": ".env"}
+    model_config = {"env_prefix": "STE_", "env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

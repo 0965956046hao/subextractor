@@ -59,7 +59,7 @@ async def capcut_health():
 async def capcut_preview(body: dict):
     """Generate a short preview MP3 for a voice and return its audio bytes.
 
-    Body: {"voice": "BV421_vivn_streaming", "text": "optional override", "lang": "vi-VN"}
+    Body: {"voice": "BV074_streaming_dsp", "text": "optional override", "lang": "vi-VN"}
     """
     voice = body.get("voice") or settings.capcut_tts_default_voice
     lang = body.get("lang") or "vi-VN"

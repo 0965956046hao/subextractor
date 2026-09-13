@@ -1801,7 +1801,7 @@ async def generate_voice_map_now(request: Request, video_id: str):
 async def update_voice_map_line(request: Request, video_id: str):
     """Update a single line's voice in voice_map.json.
 
-    Body: ``{"index": 1, "voice_type": "BV421_vivn_streaming"}``.
+    Body: ``{"index": 1, "voice_type": "BV074_streaming_dsp"}``.
     """
     from app.services.translation_service import _voice_map_path
     import json as _json
@@ -2009,7 +2009,7 @@ async def set_tts_speed(request: Request, video_id: str):
 async def regenerate_tts_line(request: Request, video_id: str):
     """Regenerate TTS for a single SRT line with a new voice.
 
-    Body: ``{"index": 1, "voice_type": "BV421_vivn_streaming"}``.
+    Body: ``{"index": 1, "voice_type": "BV074_streaming_dsp"}``.
     Writes the MP3 to ``tts/{video_id}/{voice_key}/{index:04d}.mp3``.
     """
     from fastapi.concurrency import run_in_threadpool

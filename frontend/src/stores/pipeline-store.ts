@@ -217,9 +217,9 @@ export interface ImportedDone {
 
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
-  voice: "BV421_vivn_streaming",
+  voice: "BV074_streaming_dsp",
   muteOriginal: false,      // giữ âm thanh gốc làm nền
-  originalGainDb: 12,       // giảm -12dB
+  originalGainDb: 8,       // giảm -8dB
   multiVoice: false,
   keepOriginalEnabled: false,
 };
@@ -311,7 +311,7 @@ function newPipeline(
   autoFit = false,
   watermark = false,
   watermarkPreset = "",
-  removeWatermarkEnabled = false,
+  removeWatermarkEnabled = true,
   removeWatermarkRegions: Region[] = [],
   checkSubs = false,
   checkVoice = false,
@@ -415,7 +415,7 @@ export const usePipelineStore = create<PipelineState>()(
         autoFit = false,
         watermark = false,
         watermarkPreset = "",
-        removeWatermarkEnabled = false,
+        removeWatermarkEnabled = true,
         removeWatermarkRegions = [],
         checkSubs = false,
         checkVoice = false,
@@ -471,7 +471,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.autoFit ?? false,
           input.watermark ?? false,
           input.watermarkPreset ?? "",
-          input.removeWatermarkEnabled ?? false,
+          input.removeWatermarkEnabled ?? true,
           input.removeWatermarkRegions ?? [],
           input.checkSubs ?? false,
           input.checkVoice ?? false,
@@ -1722,7 +1722,13 @@ async function runPrep(id: string, startStep = 0) {
           headers: JSON_HEADERS,
           body: JSON.stringify({ url: cleaned }),
         });
-        const yd = await yr.json();
+        let yd: any = {};
+        try {
+          yd = await yr.json();
+        } catch {
+          const txt = await yr.text().catch(() => yr.statusText);
+          yd = { detail: txt.slice(0, 500) || `HTTP ${yr.status}` };
+        }
         if (!yr.ok) {
           appendLog(
             id,
@@ -1757,7 +1763,13 @@ async function runPrep(id: string, startStep = 0) {
           headers: JSON_HEADERS,
           body: JSON.stringify({ url: cleaned }),
         });
-        const rd = await r.json();
+        let rd: any = {};
+        try {
+          rd = await r.json();
+        } catch {
+          const txt = await r.text().catch(() => r.statusText);
+          rd = { detail: txt.slice(0, 500) || `HTTP ${r.status}` };
+        }
         if (!r.ok) {
           appendLog(id, `Resolve HTTP ${r.status}: ${rd.detail || "lỗi"}`);
           throw new Error(rd.detail || "Không thể phân tích link");
@@ -1825,7 +1837,13 @@ async function runPrep(id: string, startStep = 0) {
               big_thumbs: bigThumbsUrls,
             }),
           });
-          const md = await mr.json();
+          let md: any = {};
+          try {
+            md = await mr.json();
+          } catch {
+            const txt = await mr.text().catch(() => mr.statusText);
+            md = { detail: txt.slice(0, 500) || `HTTP ${mr.status}` };
+          }
           if (!mr.ok) {
             appendLog(id, `Merge HTTP ${mr.status}: ${md.detail || "lỗi"}`);
             throw new Error(md.detail || "Merge thất bại");
@@ -1862,7 +1880,13 @@ async function runPrep(id: string, startStep = 0) {
           headers: JSON_HEADERS,
           body: JSON.stringify(impBody),
         });
-        const idata = await ir.json();
+        let idata: any = {};
+        try {
+          idata = await ir.json();
+        } catch {
+          const txt = await ir.text().catch(() => ir.statusText);
+          idata = { detail: txt.slice(0, 500) || `HTTP ${ir.status}` };
+        }
         if (!ir.ok) {
           appendLog(id, `Import HTTP ${ir.status}: ${idata.detail || "lỗi"}`);
           throw new Error(idata.detail || "Import thất bại");
@@ -2691,7 +2715,7 @@ async function runPipeline(id: string, startStep = 4) {
           // engine is CapCut; Google always uses a Google voice.
           const voice =
             engine === "capcut"
-              ? cur.dubVoice || "BV421_vivn_streaming"
+              ? cur.dubVoice || "BV074_streaming_dsp"
               : cur.dubVoice &&
                   !cur.dubVoice.startsWith("BV") &&
                   !cur.dubVoice.startsWith("AV")

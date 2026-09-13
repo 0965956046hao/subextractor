@@ -141,8 +141,11 @@ def import_video(body: ImportRequest):
         shutil.rmtree(video_dir, ignore_errors=True)
         raise
     except Exception as e:
+        import traceback
+        logger.exception("import_video failed for %s: %s", body.url[:120] if body.url else body.merge_id, e)
         shutil.rmtree(video_dir, ignore_errors=True)
-        raise HTTPException(500, f"Import failed: {e}")
+        tb = traceback.format_exc(limit=3)
+        raise HTTPException(500, f"Import failed: {e} | {tb[-800:]}")
 
     # Copy thumbnail vào context dir của video. Không copy context_images nữa:
     # context_service._context_image_paths đọc trực tiếp từ merged/{merge_id}_context/context_images,
@@ -173,8 +176,8 @@ def import_video(body: ImportRequest):
 
 
 _READ_CHUNK = 4 * 1024 * 1024
-_CONNECT_TIMEOUT = 30
-_READ_TIMEOUT = 60
+_CONNECT_TIMEOUT = 60
+_READ_TIMEOUT = 120
 _MAX_RETRIES = 3
 
 

@@ -291,10 +291,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
-  const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
+  const [dubVoice, setDubVoice] = useState("BV074_streaming_dsp");
   const [muteOriginal, setMuteOriginal] = useState(false);
   const [keepOriginalEnabled, setKeepOriginalEnabled] = useState(false);
-  const [originalGainDb, setOriginalGainDb] = useState(12);
+  const [originalGainDb, setOriginalGainDb] = useState(8);
   const [multiVoice, setMultiVoice] = useState(false);
   const [autoFitSubs, setAutoFitSubs] = useState(false);
   const [watermarkOn, setWatermarkOn] = useState(true);
@@ -304,7 +304,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [ytChannels, setYtChannels] = useState<YouTubeChannelInfo[]>([]);
   const [ytChannel, setYtChannel] = useState("");
   const [watermarkPreset, setWatermarkPreset] = useState("");
-  const [removeWmEnabled, setRemoveWmEnabled] = useState(false);
+  const [removeWmEnabled, setRemoveWmEnabled] = useState(true);
   const [removeWmRegions, setRemoveWmRegions] = useState<Region[]>([]);
   const [checkSubs, setCheckSubs] = useState(false);
   const [checkVoice, setCheckVoice] = useState(false);
@@ -1232,7 +1232,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             setPreviewUrl(null);
                             setPreviewError(false);
                             setDubVoice(
-                              l === "vi-VN" ? "BV421_vivn_streaming" : "",
+                              l === "vi-VN" ? "BV074_streaming_dsp" : "",
                             );
                           }}
                           className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${voiceLang === l

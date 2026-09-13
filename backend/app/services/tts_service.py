@@ -328,7 +328,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
     return [p for p in audio_files if p is not None]
 
 
-def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "BV421_vivn_streaming", rate: str = "1.0", log_fn=None) -> List[Path]:
+def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt: bool = False, voice_name: str = "BV074_streaming_dsp", rate: str = "1.0", log_fn=None) -> List[Path]:
     """Convert all SRT entries to individual MP3 files via the CapCut service.
 
     Mirrors `synthesize_srt` (Google TTS) output contract so the rest of the
@@ -518,7 +518,7 @@ def synthesize_srt_capcut_multi(
     video_id: str,
     entries,
     voice_map: dict,
-    default_voice: str = "BV421_vivn_streaming",
+    default_voice: str = "BV074_streaming_dsp",
     rate: str = "1.0",
     log_fn=None,
 ) -> List[Path]:
