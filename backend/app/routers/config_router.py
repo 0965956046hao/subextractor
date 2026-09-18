@@ -98,6 +98,11 @@ class PipelinePresetCreate(BaseModel):
     config: dict = {}
 
 
+class PipelinePresetUpdate(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+
+
 # ── Watermark presets (mỗi bộ = 1 cặp text + logo) ──
 
 DEFAULT_PRESET_NAME = "Bộ mặc định"
@@ -326,6 +331,22 @@ async def create_pipeline_preset(body: PipelinePresetCreate):
     presets.append(preset)
     _write_config(cfg)
     return {"id": preset_id, "name": name}
+
+
+@router.put("/api/config/pipeline-presets/{preset_id}")
+async def update_pipeline_preset(preset_id: str, body: PipelinePresetUpdate):
+    """Overwrite a preset's config (and/or rename) — used for auto-save on run."""
+    cfg = _read_config()
+    presets = cfg.get("pipeline_presets") or []
+    for p in presets:
+        if p.get("id") == preset_id:
+            if body.name is not None and body.name.strip():
+                p["name"] = body.name.strip()
+            if body.config is not None and isinstance(body.config, dict):
+                p["config"] = body.config
+            _write_config(cfg)
+            return {"status": "ok", "id": preset_id}
+    raise HTTPException(status_code=404, detail="Preset not found")
 
 
 @router.delete("/api/config/pipeline-presets/{preset_id}")

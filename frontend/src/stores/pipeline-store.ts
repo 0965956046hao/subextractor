@@ -1352,6 +1352,10 @@ let queue: { id: string; startStep: number; force?: boolean }[] = [];
 // Upload YouTube thủ công đang chạy (ngoài queue pipeline chính).
 const youtubeUploading = new Set<string>();
 let processing = false;
+// Id của pipeline đang giữ slot heavy (OCR→burn). Slot được nhả ngay khi
+// pipeline đó burn xong phụ đề (bước 9), để pipeline tiếp theo chạy trong lúc
+// pipeline này làm meta/thumbnail/upload. Chỉ holder mới được nhả.
+let processingOwner: string | null = null;
 const abortedPipelines = new Set<string>();
 // Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).
 // After a page reload these are empty, so restored interactive waits must
@@ -1657,8 +1661,28 @@ async function processQueue() {
   if (queue.length === 0) return;
   processing = true;
   const { id, startStep, force } = queue.shift()!;
+  processingOwner = id;
   await runPipeline(id, startStep, force);
+  // Chỉ nhả slot khi mình vẫn giữ (chưa nhả sớm ở bước burn).
+  if (processingOwner === id) {
+    processing = false;
+    processingOwner = null;
+  }
+  processQueue();
+}
+
+// Nhả slot heavy ngay sau khi burn xong phụ đề vào video (bước 9): pipeline
+// tiếp theo trong hàng đợi được khởi động, pipeline hiện tại tiếp tục
+// meta/thumbnail/upload song song. An toàn vì backend tự serialize các job
+// nặng qua executor 1 worker; ở đây chỉ bớt chờ các bước mạng + duyệt tay.
+function releaseHeavySlot(id: string) {
+  if (processingOwner !== id) return;
   processing = false;
+  processingOwner = null;
+  appendLog(
+    id,
+    "Đã burn xong phụ đề vào video — nhường lượt cho pipeline tiếp theo…",
+  );
   processQueue();
 }
 
@@ -1869,6 +1893,20 @@ async function runPrep(id: string, startStep = 0) {
   try {
     if (abortedPipelines.has(id)) return;
     appendLog(id, `Bắt đầu pipeline (từ bước ${startStep})…`);
+    // Diagnostic tạm: hiện ngay trên panel log để biết preset có vào pipeline không.
+    // eslint-disable-next-line no-console
+    console.log("[PRESET-DEBUG] runPrep start", id, {
+      startStep,
+      hasRegion: !!cur.region,
+      hasSubtitleStyle: !!cur.subtitleStyle,
+      wmRegions: cur.removeWatermarkRegions?.length ?? 0,
+      autoFit: cur.autoFit,
+      regionMode: cur.regionMode,
+    });
+    appendLog(
+      id,
+      `[preset] region=${cur.region ? "có" : "KHÔNG"} · style phụ đề=${cur.subtitleStyle ? "có" : "KHÔNG"} · watermark=${cur.removeWatermarkRegions?.length ?? 0} vùng · autoFit=${cur.autoFit ? "bật" : "tắt"}`,
+    );
     // 0. Resolve link
     if (startStep <= 0) {
       const cleaned = extractUrl(rawUrl);
@@ -2138,6 +2176,12 @@ async function runPrep(id: string, startStep = 0) {
           "Chỉnh kích thước & vị trí phụ đề trên frame đầu tiên, nhấn Xác nhận để tiếp tục...",
         );
         let style = cur.subtitleStyle;
+        // eslint-disable-next-line no-console
+        console.log("[PRESET-DEBUG] runPrep step3", id, {
+          hasStyle: !!style,
+          autoFit: cur.autoFit,
+          hasRegion: !!cur.region,
+        });
         if (!style) {
           style = await waitForSubtitleStyle(id);
         }
@@ -2199,6 +2243,17 @@ async function runPrep(id: string, startStep = 0) {
     }
 
     // Prep done → enqueue the heavy processing into the sequential queue.
+    // Đổi stage khỏi các stage setup (region/subtitle_preview/...) để UI không
+    // render form thao tác tay trong lúc pipeline chỉ đang xếp hàng chờ lượt
+    // (heavy chạy tuần tự từng video). Không có preset mà thiếu dữ liệu thì
+    // runner đã dừng chờ ở các bước trên, không tới được đây.
+    patch(id, { stage: "processing" });
+    if (processing || queue.length > 0) {
+      appendLog(
+        id,
+        "Chuẩn bị xong (preset đã áp dụng) — đang xếp hàng, sẽ bắt đầu khi luồng trước burn xong phụ đề…",
+      );
+    }
     enqueue(id, 4);
   } catch (e) {
     const stage = usePipelineStore
@@ -3147,6 +3202,9 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         markStepEnd(id, 9);
       }
     }
+
+    // Burn xong (hoặc skip vì đã có video burn) → nhả slot cho pipeline tiếp theo.
+    releaseHeavySlot(id);
 
     // 9 + 10. Meta (Gemini) và Thumbnail (fal.ai/ChatGPT) KHÔNG phụ thuộc nhau:
     // chạy song song để tiết kiệm thời gian chờ (trước đây chạy tuần tự).

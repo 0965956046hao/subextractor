@@ -829,6 +829,13 @@ export async function deletePipelinePreset(id: string): Promise<void> {
   await api.delete(`/config/pipeline-presets/${id}`);
 }
 
+export async function updatePipelinePreset(
+  id: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  await api.put(`/config/pipeline-presets/${id}`, { config });
+}
+
 export async function uploadWatermarkLogo(
   file: File,
 ): Promise<{ status: string; watermark_logo_name?: string }> {

@@ -15,6 +15,7 @@ import {
   chatgptLogin,
   clearTempData,
   deletePipelinePreset,
+  updatePipelinePreset,
   deleteVideo,
   getAppConfig,
   getCapCutVoices,
@@ -299,6 +300,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [pipelinePresets, setPipelinePresets] = useState<PipelinePreset[]>([]);
   const [presetOpen, setPresetOpen] = useState(false);
   const presetSnapshotRef = useRef<Record<string, unknown> | null>(null);
+  // Đánh dấu giọng đã được chọn rõ ràng (preset / tay). Effect nạp danh sách
+  // voices không được ghi đè giọng đã chọn nếu list fetch về thiếu nó — nếu
+  // không, luồng 2 tạo sau sẽ mất giọng của preset (luồng 1 bấm nhanh trước
+  // khi fetch xong thì vẫn giữ được).
+  const voiceTouchedRef = useRef(false);
   const [presetSeed, setPresetSeed] = useState<{
     region: Region | null;
     subtitleStyle: SubtitleStyle | null;
@@ -554,7 +560,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           if (mounted) {
             setCapcutVoices(vs);
             setDubVoice((v) =>
-              vs.some((x) => x.voice_type === v) ? v : (vs[0]?.voice_type ?? v),
+              vs.some((x) => x.voice_type === v)
+                ? v
+                : voiceTouchedRef.current
+                  ? v
+                  : (vs[0]?.voice_type ?? v),
             );
           }
         })
@@ -571,7 +581,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           if (mounted) {
             setGoogleVoices(vs);
             setDubVoice((v) =>
-              vs.some((x) => x.voice_type === v) ? v : (vs[0]?.voice_type ?? v),
+              vs.some((x) => x.voice_type === v)
+                ? v
+                : voiceTouchedRef.current
+                  ? v
+                  : (vs[0]?.voice_type ?? v),
             );
           }
         })
@@ -588,6 +602,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   }, [dubEngine, voiceLang]);
 
   const switchDubEngine = async (engine: "google" | "capcut") => {
+    voiceTouchedRef.current = true;
     setDubEngine(engine);
     setPreviewUrl(null);
     setPreviewError(false);
@@ -673,7 +688,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     if (typeof cfg.dubOn === "boolean") setDubOn(cfg.dubOn);
     if (typeof cfg.dubEngine === "string") setDubEngine(cfg.dubEngine as any);
     if (typeof cfg.voiceLang === "string") setVoiceLang(cfg.voiceLang as any);
-    if (typeof cfg.dubVoice === "string") setDubVoice(cfg.dubVoice);
+    if (typeof cfg.dubVoice === "string") {
+      setDubVoice(cfg.dubVoice);
+      voiceTouchedRef.current = true;
+    }
     if (typeof cfg.muteOriginal === "boolean")
       setMuteOriginal(cfg.muteOriginal);
     if (typeof cfg.keepOriginalEnabled === "boolean")
@@ -722,7 +740,10 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       if (typeof s.dubOn === "boolean") setDubOn(s.dubOn);
       if (typeof s.dubEngine === "string") setDubEngine(s.dubEngine as any);
       if (typeof s.voiceLang === "string") setVoiceLang(s.voiceLang as any);
-      if (typeof s.dubVoice === "string") setDubVoice(s.dubVoice);
+      if (typeof s.dubVoice === "string") {
+        setDubVoice(s.dubVoice);
+        voiceTouchedRef.current = true;
+      }
       if (typeof s.muteOriginal === "boolean") setMuteOriginal(s.muteOriginal);
       if (typeof s.keepOriginalEnabled === "boolean") setKeepOriginalEnabled(s.keepOriginalEnabled);
       if (typeof s.originalGainDb === "number") setOriginalGainDb(s.originalGainDb);
@@ -765,7 +786,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     }
     setPresetId(id);
     const p = pipelinePresets.find((x) => x.id === id);
-    if (p) applyPreset(p.config);
+    if (p) {
+      const cfg = p.config as Record<string, unknown>;
+      // eslint-disable-next-line no-console
+      console.log("[PRESET-DEBUG] selectPreset", id, {
+        hasRegion: !!(cfg.region as Record<string, unknown> | null),
+        hasSubtitleStyle: !!(cfg.subtitleStyle as Record<string, unknown> | null),
+        hasWmRegions: Array.isArray(cfg.removeWatermarkRegions) ? (cfg.removeWatermarkRegions as unknown[]).length : cfg.removeWatermarkRegions,
+        regionMode: cfg.regionMode,
+        autoFitSubs: cfg.autoFitSubs,
+      });
+      applyPreset(p.config);
+    }
     setPresetOpen(false);
   };
 
@@ -778,6 +810,52 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     }
   };
 
+  // Gom cấu hình hiện tại trên form (mirror applyPreset + PipelineSavePanel).
+  const collectFormConfig = (): Record<string, unknown> => ({
+    srcLang,
+    regionMode,
+    translateOn,
+    translateTarget,
+    dubOn,
+    dubEngine,
+    dubVoice,
+    voiceLang,
+    muteOriginal,
+    keepOriginalEnabled,
+    originalGainDb,
+    multiVoice,
+    autoFitSubs,
+    watermarkOn,
+    watermarkPreset: watermarkOn ? watermarkPreset : "",
+    removeWatermarkEnabled: presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
+    checkSubs,
+    checkVoice,
+    useFalThumbnail,
+    useGptThumbnail,
+    useGeminiThumbnail,
+    autoUploadYoutube,
+    youtubeChannel: ytChannel,
+    youtubePlaylist: ytPlaylist,
+    colorFilter: presetSeed?.colorFilter ?? null,
+    region: presetSeed?.region ?? null,
+    subtitleStyle: presetSeed?.subtitleStyle ?? null,
+    removeWatermarkRegions: presetSeed?.removeWatermarkRegions ?? removeWmRegions,
+  });
+
+  // Đang chọn preset mà bấm Bắt đầu → lưu đè cấu hình mới vào preset đó luôn.
+  const persistPresetIfSelected = async () => {
+    if (!presetId) return;
+    const config = collectFormConfig();
+    try {
+      await updatePipelinePreset(presetId, config);
+      setPipelinePresets((prev) =>
+        prev.map((x) => (x.id === presetId ? { ...x, config } : x)),
+      );
+    } catch {
+      // ignore — không chặn tạo luồng vì lỗi lưu preset
+    }
+  };
+
   const handleAdd = () => {
     const v = url.trim();
     if (!v) return;
@@ -785,6 +863,17 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       checkHealth();
       return;
     }
+    // eslint-disable-next-line no-console
+    console.log("[PRESET-DEBUG] handleAdd", {
+      presetId,
+      hasPresetSeed: !!presetSeed,
+      seedRegion: !!presetSeed?.region,
+      seedSubtitleStyle: !!presetSeed?.subtitleStyle,
+      seedWmRegions: presetSeed?.removeWatermarkRegions?.length ?? 0,
+      regionMode,
+      autoFitSubs,
+    });
+    void persistPresetIfSelected();
     const id = addPipeline(
       v,
       regionMode,
@@ -1473,6 +1562,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             setVoiceLang(l);
                             setPreviewUrl(null);
                             setPreviewError(false);
+                            voiceTouchedRef.current = true;
                             setDubVoice(
                               l === "vi-VN" ? "BV421_vivn_streaming" : "",
                             );
@@ -1517,6 +1607,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                           <select
                             value={dubVoice}
                             onChange={(e) => {
+                              voiceTouchedRef.current = true;
                               setDubVoice(e.target.value);
                               setPreviewUrl(null);
                               setPreviewError(false);
@@ -2675,7 +2766,9 @@ function ThumbnailReviewActions({
 
 const playlistCache = new Map<string, YouTubePlaylistInfo[]>();
 
-/** Danh sách phát YouTube của 1 kênh (cache theo channelId). */
+const MAX_PLAYLIST_ITEMS = 100;
+
+/** Danh sách phát YouTube của 1 kênh (cache theo channelId, hiển thị max 100 dòng). */
 function PlaylistSelect({
   channelId,
   value,
@@ -2721,6 +2814,8 @@ function PlaylistSelect({
   }, [channelId]);
 
   if (!channelId) return null;
+  const visibleItems = items.slice(0, MAX_PLAYLIST_ITEMS);
+  const hiddenCount = items.length - visibleItems.length;
   return (
     <>
       <span
@@ -2731,6 +2826,7 @@ function PlaylistSelect({
         }
       >
         {t("pipeline.youtubePlaylist")}
+        {hiddenCount > 0 ? ` (${visibleItems.length}/${items.length})` : ""}
       </span>
       <select
         value={value}
@@ -2745,11 +2841,16 @@ function PlaylistSelect({
         <option value="">
           {loading ? "..." : t("pipeline.youtubePlaylistNone")}
         </option>
-        {items.map((pl) => (
+        {visibleItems.map((pl) => (
           <option key={pl.id} value={pl.id}>
             {pl.title} ({pl.item_count})
           </option>
         ))}
+        {hiddenCount > 0 && (
+          <option value="" disabled>
+            +{hiddenCount} danh sách khác…
+          </option>
+        )}
       </select>
     </>
   );
