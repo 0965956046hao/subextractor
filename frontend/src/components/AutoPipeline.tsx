@@ -167,6 +167,11 @@ const STATUS_META: Record<
     cls: "bg-danger-muted text-danger ring-danger/20",
     dot: "bg-danger",
   },
+  paused: {
+    labelKey: "pipeline.status.paused",
+    cls: "bg-white/[0.06] text-ink-muted ring-white/15",
+    dot: "bg-ink-light",
+  },
 };
 
 function fmtBytes(bytes: number): string {
@@ -1957,7 +1962,7 @@ function PipelineRow({
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
-  const meta = STATUS_META[p.status] ?? STATUS_META.queued;
+  const meta = p.paused ? STATUS_META.paused : (STATUS_META[p.status] ?? STATUS_META.queued);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
     if (p.status === "error" && p.failedStep != null) {
@@ -2028,10 +2033,26 @@ function PipelineRow({
               {tr("pipeline.waiting")}
             </span>
           )}
-          {p.status === "running" && (
+          {p.status === "running" && !p.paused && (
             <span className="text-[10px] text-accent/80 flex items-center gap-1">
               <IconSpinner className="w-3 h-3" />
               {tr("pipeline.running")}
+            </span>
+          )}
+          {p.paused && (
+            <span className="text-[10px] text-ink-muted flex items-center gap-1">
+              <svg
+                className="w-3 h-3"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+              >
+                <rect x="6" y="4" width="4" height="16" rx="1" />
+                <rect x="14" y="4" width="4" height="16" rx="1" />
+              </svg>
+              {tr("pipeline.status.paused")}
             </span>
           )}
           <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
@@ -2080,6 +2101,50 @@ function PipelineRow({
       >
         {tr("pipeline.previewMediaBtn")}
       </button>
+      {(p.status === "running" || p.status === "queued") && !p.paused && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            usePipelineStore.getState().pausePipeline(p.id);
+          }}
+          title={tr("pipeline.pauseProcess")}
+          className="w-7 h-7 rounded-lg bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted flex items-center justify-center hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          >
+            <rect x="6" y="4" width="4" height="16" rx="1" />
+            <rect x="14" y="4" width="4" height="16" rx="1" />
+          </svg>
+        </button>
+      )}
+      {p.paused && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            usePipelineStore.getState().resumePipeline(p.id);
+          }}
+          title={tr("pipeline.resumeProcess")}
+          className="w-7 h-7 rounded-lg bg-accent-muted text-accent flex items-center justify-center hover:bg-accent/20 transition-colors cursor-pointer flex-shrink-0"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polygon points="6 3 20 12 6 21 6 3" />
+          </svg>
+        </button>
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -2433,6 +2498,8 @@ function DetailView({
   const confirmThumbnailReview = usePipelineStore((s) => s.confirmThumbnailReview);
   const resolveThumbnailFallback = usePipelineStore((s) => s.resolveThumbnailFallback);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
+  const pausePipeline = usePipelineStore((s) => s.pausePipeline);
+  const resumePipeline = usePipelineStore((s) => s.resumePipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
@@ -2517,6 +2584,22 @@ function DetailView({
             >
               {tr("pipeline.previewMediaBtn")}
             </button>
+            {(p.status === "running" || p.status === "queued") && !p.paused && (
+              <button
+                onClick={() => pausePipeline(p.id)}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+              >
+                {tr("pipeline.pauseProcess")}
+              </button>
+            )}
+            {p.paused && (
+              <button
+                onClick={() => resumePipeline(p.id)}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
+              >
+                {tr("pipeline.resumeProcess")}
+              </button>
+            )}
             {(p.status === "running" || p.status === "queued") && (
               <button
                 onClick={() => setConfirmingCancel(true)}

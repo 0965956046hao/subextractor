@@ -350,6 +350,24 @@ async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeli
     return {"deleted": video_id, "removed": removed}
 
 
+@router.post("/api/video/{video_id}/pause")
+async def pause_video(video_id: str, jobs: dict = Depends(get_jobs)):
+    """Tạm dừng: hủy job đang chạy của video để nhường worker, KHÔNG xóa file.
+
+    Khác với /abort (xóa srt/videos/frames): pipeline được giữ lại để chạy tiếp
+    từ đúng bước đã dừng. Frontend cũng reset bước hiện tại về chờ."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    cancelled = 0
+    for job_id, job in jobs.items():
+        if job.get("video_id") == video_id and job.get("status") not in ("done", "error", "cancelled"):
+            job["cancelled"] = True
+            job["status"] = "cancelled"
+            cancelled += 1
+            logger.info("job %s: paused via video %s", job_id, video_id)
+    return {"paused": video_id, "jobs_cancelled": cancelled}
+
+
 @router.post("/api/video/{video_id}/abort")
 async def abort_video(video_id: str, jobs: dict = Depends(get_jobs), pipeline_states: dict = Depends(get_pipeline_states)):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:

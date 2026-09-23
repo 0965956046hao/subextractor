@@ -12,7 +12,7 @@ from app.services.context_service import (
     append_translation_context,
     _load_capcut_voice_catalog,
 )
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
 from app.services.gemini_array import build_numbered_payload, gemini_map_texts
 from app.services.retry_utils import (
     configured_gemini_keys,
@@ -645,8 +645,12 @@ def retranslate_untranslated(
     return entries_to_srt(out)
 
 
-def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None, progress_callback=None) -> str:
-    """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt."""
+def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None, progress_callback=None, cancelled_cb=None) -> str:
+    """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt.
+
+    `cancelled_cb` (optional, () -> bool): được kiểm tra trước mỗi batch để
+    dừng vòng spam Gemini khi user tạm dừng/hủy pipeline (từng khiến thread
+    mồ côi gọi Gemini hàng trăm batch sau khi pause)."""
     if use_custom_srt:
         custom_path = settings.temp_dir / "translated" / video_id / "input.srt"
         if not custom_path.exists():
@@ -685,6 +689,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     total_batches = (len(entries) + batch_size - 1) // batch_size
 
     for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
         batch = entries[batch_start:batch_start + batch_size]
         texts = [e.text for e in batch]
 
@@ -812,6 +818,7 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             multi_voice=job.get("multi_voice", False),
             log_fn=_log,
             progress_callback=_progress,
+            cancelled_cb=lambda: bool(jobs.get(job_id, {}).get("cancelled")),
         )
 
         job["progress"] = 100
@@ -824,6 +831,12 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             "message": "Dịch hoàn tất",
         })
 
+    except JobCancelled:
+        logger.info("translate job %s: cancelled by user", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        job_log_sync(loop, jobs, ws_clients, job_id, "Đã hủy dịch.", level="warn")
+        notify_ws_sync(loop, ws_clients, job_id, {"type": "cancelled"})
     except Exception as e:
         logger.exception("Translation failed")
         job["status"] = "error"
