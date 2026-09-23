@@ -101,4 +101,5 @@ class PipelineState(BaseModel):
     progress: float = 0
     step_progress: list[float | None] = []
     error: str = ""
+    paused: bool = False
     timeline_check: TimelineCheckState | None = None

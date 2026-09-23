@@ -101,6 +101,24 @@ export const STEP_STAGE: Record<string, number> = {
   youtube: 12,
 };
 
+// Chiều ngược lại: retry/rerun từ bước i thì stage hiển thị ngay là gì.
+// (Nhiều stage map về cùng 1 bước nên không đảo từ STEP_STAGE được.)
+export const STAGE_FOR_STEP: Stage[] = [
+  "resolving",
+  "merging",
+  "region",
+  "subtitle_preview",
+  "processing",
+  "wm_delogo",
+  "context",
+  "translating",
+  "dub",
+  "muxing",
+  "meta",
+  "thumbnail",
+  "youtube",
+];
+
 export const DEFAULT_REGION: Region = {
   x1: 0.114,
   y1: 0.748,
@@ -303,6 +321,10 @@ interface PipelineState {
   ) => void;
   resolveThumbnailFallback: (id: string, choice: "fal" | "skip") => void;
   restorePaused: () => void;
+  /** Thứ tự xử lý thực tế: [đang chạy heavy, ...chờ trong hàng đợi]. Tab đang
+   *  xử lý sort theo mảng này; pipeline không có trong mảng (chờ user, prep)
+   *  xếp sau theo startedAt. Không persist (tái tạo khi runner đăng ký lại). */
+  queueOrder: string[];
 }
 
 function emptySteps<T>(v: T): T[] {
@@ -415,6 +437,7 @@ export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
       pipelines: [],
+      queueOrder: [],
       addPipeline: (
         url,
         regionMode = "manual",
@@ -618,6 +641,8 @@ export const usePipelineStore = create<PipelineState>()(
         schedulePersist();
       },
       removePipeline: (id) => {
+        queue = queue.filter((q) => q.id !== id);
+        syncQueueOrder();
         set((s) => ({ pipelines: s.pipelines.filter((p) => p.id !== id) }));
         schedulePersist();
       },
@@ -645,6 +670,10 @@ export const usePipelineStore = create<PipelineState>()(
               ? {
                   ...p,
                   status: "queued" as const,
+                  // Đặt stage đúng bước retry ngay lập tức — trước đây giữ
+                  // stage="error" khiến bar nhảy về bước 0 "Phân tích link"
+                  // trong lúc chờ worker rảnh.
+                  stage: STAGE_FOR_STEP[step] ?? p.stage,
                   error: "",
                   failedStep: null,
                   finishedAt: null,
@@ -798,6 +827,8 @@ export const usePipelineStore = create<PipelineState>()(
         bumpGen(id);
         // Gỡ khỏi hàng đợi để clip tiếp theo được xử lý ngay
         queue = queue.filter((q) => q.id !== id);
+        if (currentHeavyId === id) currentHeavyId = null;
+        syncQueueOrder();
         // Reset bước đang xử lý về trạng thái chờ, giữ nguyên stage để chạy tiếp
         const stepIdx = STEP_STAGE[s.stage];
         set((st) => ({
@@ -865,6 +896,9 @@ export const usePipelineStore = create<PipelineState>()(
         const videoId = s.videoId;
         bumpGen(id);
         abortedPipelines.add(id);
+        queue = queue.filter((q) => q.id !== id);
+        if (currentHeavyId === id) currentHeavyId = null;
+        syncQueueOrder();
         set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
         rejectRegion(id);
         rejectSubtitleStyle(id);
@@ -1313,6 +1347,16 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 
 let queue: { id: string; startStep: number }[] = [];
 let processing = false;
+let currentHeavyId: string | null = null;
+// Đồng bộ thứ tự hàng đợi lên state để UI sort theo (đang chạy trước, rồi
+// đến lượt chờ). Gọi sau mọi thay đổi queue/currentHeavyId.
+function syncQueueOrder() {
+  const ids: string[] = [];
+  if (currentHeavyId && !ids.includes(currentHeavyId))
+    ids.push(currentHeavyId);
+  for (const q of queue) if (!ids.includes(q.id)) ids.push(q.id);
+  usePipelineStore.setState({ queueOrder: ids });
+}
 const abortedPipelines = new Set<string>();
 // Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).
 // After a page reload these are empty, so restored interactive waits must
@@ -1632,6 +1676,7 @@ function pollBackendTimelineDecision(
 
 function enqueue(id: string, startStep = 0) {
   queue.push({ id, startStep });
+  syncQueueOrder();
   processQueue();
 }
 
@@ -1662,11 +1707,19 @@ function pollBackendVoiceDecision(
 
 async function processQueue() {
   if (processing) return;
-  if (queue.length === 0) return;
+  if (queue.length === 0) {
+    currentHeavyId = null;
+    syncQueueOrder();
+    return;
+  }
   processing = true;
   const { id, startStep } = queue.shift()!;
+  currentHeavyId = id;
+  syncQueueOrder();
   await runPipeline(id, startStep);
   processing = false;
+  currentHeavyId = null;
+  syncQueueOrder();
   processQueue();
 }
 
@@ -1778,6 +1831,7 @@ function reportPipeline(id: string, force = false) {
     progress: p.progress,
     step_progress: p.stepProgress,
     error: p.error || "",
+    paused: p.paused,
   }).catch(() => {
     /* best-effort */
   });

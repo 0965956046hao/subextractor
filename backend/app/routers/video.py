@@ -2,6 +2,7 @@ import json
 import logging
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -135,10 +136,41 @@ async def list_videos(
                 continue
             seen.add(video_id)
             ps = pipeline_states.get(video_id)
+            # Chỉ tin report còn tươi (<90s): tab đóng/runner chết để lại ghost
+            # "running" vĩnh viễn. Riêng paused là trạng thái bền vững → luôn tin.
+            ps_live = None
+            if ps:
+                if ps.get("paused"):
+                    ps_live = ps
+                elif ps.get("status") in ("queued", "running"):
+                    try:
+                        age = time.time() - float(ps.get("updated_at", 0) or 0)
+                    except (TypeError, ValueError):
+                        age = 10**9
+                    if age < 90:
+                        ps_live = ps
+            if ps_live and ps_live.get("paused"):
+                videos.append({
+                    "video_id": video_id,
+                    "filename": _meta_filename(video_id) or video_id,
+                    "has_video": True,
+                    "entries": 0,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "paused",
+                    "progress": ps_live.get("progress", 0),
+                    "phase": ps_live.get("stage", ""),
+                    "job_type": "pipeline",
+                    "origin": _meta_origin(video_id),
+                    "job_id": None,
+                    "error": None,
+                    "logs": [],
+                    "pipeline": ps_live,
+                })
+                continue
             # A video with SRT on disk but whose AutoPipeline is still running
             # (OCR finished, translate/dub/hardcode pending) must NOT be reported
             # as "done". Report it as processing so other tabs keep tracking it.
-            if ps and ps.get("status") in ("queued", "running"):
+            if ps_live and ps_live.get("status") in ("queued", "running"):
                 videos.append({
                     "video_id": video_id,
                     "filename": _meta_filename(video_id) or video_id,

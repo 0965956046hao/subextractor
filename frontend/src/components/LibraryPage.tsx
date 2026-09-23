@@ -532,6 +532,27 @@ function JobStatusBlock({
     );
   }
 
+  if (video.status === "paused") {
+    return (
+      <div className="flex items-center gap-1.5 mt-2 w-max max-w-full">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] ring-1 ring-white/15 text-[11px] font-medium text-ink-muted truncate">
+          <svg
+            className="w-3 h-3 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          >
+            <rect x="6" y="4" width="4" height="16" rx="1" />
+            <rect x="14" y="4" width="4" height="16" rx="1" />
+          </svg>
+          {t("library.statusPaused" as string)}
+        </span>
+      </div>
+    );
+  }
+
   const pct = Math.max(0, Math.min(100, video.progress ?? 0));
   return (
     <div className="mt-2.5 space-y-2">

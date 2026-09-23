@@ -220,10 +220,12 @@ function stepDetail(p: Pipeline, tr: TFunc): string {
         })
         : tr("pipeline.stepDetail.ocrPending");
     case 5:
+      return tr("pipeline.stepDetail.watermark");
+    case 6:
       return tr("pipeline.stepDetail.context", {
         state: p.contextOn ? tr("pipeline.enabled") : tr("pipeline.disabled"),
       });
-    case 6:
+    case 7:
       return p.translateOn !== false
         ? p.srcLang
           ? tr("pipeline.stepDetail.translateFromTo", {
@@ -234,15 +236,15 @@ function stepDetail(p: Pipeline, tr: TFunc): string {
             to: localizedLangLabel(p.translateTarget || "vi", tr),
           })
         : tr("pipeline.stepDetail.translateOff");
-    case 7:
-      return tr("pipeline.stepDetail.dub");
     case 8:
-      return tr("pipeline.stepDetail.mux");
+      return tr("pipeline.stepDetail.dub");
     case 9:
-      return tr("pipeline.stepDetail.meta");
+      return tr("pipeline.stepDetail.mux");
     case 10:
-      return tr("pipeline.stepDetail.thumbnail");
+      return tr("pipeline.stepDetail.meta");
     case 11:
+      return tr("pipeline.stepDetail.thumbnail");
+    case 12:
       return tr("pipeline.stepDetail.youtube");
     default:
       return "";
@@ -727,9 +729,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const activeCount = pipelines.filter(
     (p) => p.status === "queued" || p.status === "running",
   ).length;
+  const queueOrder = usePipelineStore((s) => s.queueOrder);
   const activePipelines = pipelines
     .filter((p) => p.status === "queued" || p.status === "running")
-    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+    .sort((a, b) => {
+      // Đúng thứ tự xử lý của hàng đợi: đang chạy trước, rồi đến lượt chờ.
+      // Pipeline ngoài hàng đợi (chờ user thao tác, prep...) xếp sau theo mới nhất.
+      const ai = queueOrder.indexOf(a.id);
+      const bi = queueOrder.indexOf(b.id);
+      if (ai !== -1 || bi !== -1)
+        return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai) - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
+      return (b.startedAt ?? 0) - (a.startedAt ?? 0);
+    });
   const donePipelines = pipelines
     .filter((p) => p.status === "done" || p.status === "error")
     .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));

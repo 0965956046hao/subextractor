@@ -18,7 +18,7 @@ from app.services.subtitle_generator import (
 )
 from app.services.hardcode_service import run_hardcode_sync
 from app.services.align_service import run_align_sync
-from app.services.job_utils import JobCancelled, notify_ws_sync
+from app.services.job_utils import JobCancelled, notify_ws_sync, _touch_job_activity
 
 from datetime import datetime
 
@@ -125,6 +125,7 @@ def job_log(
     message: str,
     level: str = "info",
 ):
+    _touch_job_activity()
     entry = {"message": message, "ts": time.time(), "level": level}
     job.setdefault("logs", []).append(entry)
     logger.info("job %s: [%s] %s", job["job_id"], level, message)
@@ -137,6 +138,7 @@ async def job_log_async(
     message: str,
     level: str = "info",
 ):
+    _touch_job_activity()
     entry = {"message": message, "ts": time.time(), "level": level}
     job.setdefault("logs", []).append(entry)
     logger.info("job %s: [%s] %s", job["job_id"], level, message)
@@ -1888,6 +1890,15 @@ async def worker_loop(
 # /api/worker-status để phát hiện worker chết lặng.
 _worker_heartbeats: dict[int, float] = {}
 
+# Lần cuối CÓ HOẠT ĐỘNG job xem app.services.job_utils._last_job_activity
+# (job_log/job_log_async ở worker + job_log_sync ở services đều chạm vào đó).
+
+# Worker idle (không job processing nào) mà quá lâu không loop + queue còn việc
+# → coi như kẹt, spawn thêm worker. KHÔNG BAO GIỜ động vào worker đang bận.
+IDLE_STUCK_S = 60
+# Trần worker dự phòng khi nghi kẹt (tránh spawn vô hạn mỗi 5s).
+MAX_SPARE_WORKERS = 2
+
 
 async def supervise_workers(
     jobs: dict,
@@ -1899,9 +1910,11 @@ async def supervise_workers(
 ):
     """Giữ đúng `count` worker loop sống.
 
-    Worker chết lặng (exception thoát khỏi try, task bị hủy ngoài ý muốn...)
-    sẽ được tạo lại + log rõ, thay vì hàng đợi kẹt job queued vĩnh viễn mà
-    không ai xử lý và không có traceback nào.
+    - Worker chết hẳn (task done) → tạo lại 1:1.
+    - Worker kẹt lúc idle (không job processing, heartbeat quá hạn, queue còn
+      việc) → spawn thêm worker dự phòng (bounded), KHÔNG cancel worker cũ để
+      không làm mất job đang dở. Không bao giờ động vào worker đang bận job
+      (job OCR/encode 2-4h không heartbeat giữa chừng là bình thường).
     """
     workers: list[asyncio.Task] = []
     try:
@@ -1917,6 +1930,28 @@ async def supervise_workers(
                 ))
                 logger.info(
                     "supervisor: worker (%d/%d) started", len(workers), count,
+                )
+            # Idle-stuck: hàng đợi có việc nhưng không worker nào loop (và cũng
+            # không ai đang bận job). Spawn dự phòng thay vì cancel (an toàn).
+            now = time.time()
+            processing = any(
+                j.get("status") == "processing" for j in jobs.values()
+            )
+            if (
+                not processing
+                and queue.qsize() > 0
+                and len(workers) < count + MAX_SPARE_WORKERS
+                and all(
+                    now - _worker_heartbeats.get(id(w), 0) > IDLE_STUCK_S
+                    for w in workers
+                )
+            ):
+                workers.append(asyncio.create_task(
+                    worker_loop(jobs, ws_clients, ocr_engines, queue, pipeline_states)
+                ))
+                logger.error(
+                    "supervisor: workers idle-stuck (queue=%d) — spawned spare worker",
+                    queue.qsize(),
                 )
             await asyncio.sleep(5)
     except asyncio.CancelledError:

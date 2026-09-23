@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import shlex
+import time
 import uuid
 from pathlib import Path
 
@@ -2572,6 +2573,9 @@ async def update_pipeline_state(
         new_state["watermark_confirm"] = prev["watermark_confirm"]
     if prev.get("keep_original_confirm"):
         new_state["keep_original_confirm"] = prev["keep_original_confirm"]
+    # Dấu thời gian server để list_videos loại report ghost (tab đóng nhưng
+    # report "running" còn mãi). Không dùng clock client.
+    new_state["updated_at"] = time.time()
     pipeline_states[video_id] = new_state
     return {"ok": True, "video_id": video_id}
 

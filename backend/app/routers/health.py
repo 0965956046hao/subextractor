@@ -32,15 +32,20 @@ async def tts_check():
 async def worker_status(request: Request):
     """Trạng thái hàng đợi + worker loop (chẩn đoán job kẹt queued).
 
-    workers: {task_id: số giây từ heartbeat cuối}. alive=false + queue_size>0
-    kéo dài = worker chết lặng (supervisor sẽ tạo lại trong vài giây).
+    workers: {task_id: số giây từ heartbeat cuối} — worker chỉ heartbeat mỗi
+    vòng lặp (nhận job), NÊN job dài 2-4h làm heartbeat cũ đi là BÌNH THƯỜNG.
+    Đọc kèm: `busy` (đang có job processing) và `last_activity_age_s` (log gần
+    nhất). Nghi kẹt thật khi queue_size>0 mà không busy, không activity mới.
+    Supervisor tự spawn dự phòng trong trường hợp đó (không kill worker bận).
     """
     from app.worker import _worker_heartbeats
+    from app.services.job_utils import _last_job_activity
 
     now = time.time()
     queue = request.app.state.job_queue
     jobs: dict = request.app.state.jobs
     beats = {str(k): round(now - v, 1) for k, v in _worker_heartbeats.items()}
+    busy = sum(1 for j in jobs.values() if j.get("status") == "processing")
     active = sum(
         1 for j in jobs.values()
         if j.get("status") in ("queued", "processing")
@@ -49,6 +54,8 @@ async def worker_status(request: Request):
         "queue_size": queue.qsize(),
         "workers": beats,
         "workers_alive": any(now - v < 15 for v in _worker_heartbeats.values()),
+        "workers_busy": busy,
+        "last_activity_age_s": round(now - _last_job_activity, 1) if _last_job_activity else None,
         "active_jobs": active,
         "now": now,
     }

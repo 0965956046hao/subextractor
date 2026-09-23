@@ -51,6 +51,7 @@ export type VideoStatus =
   | "uploaded"
   | "queued"
   | "processing"
+  | "paused"
   | "done"
   | "error"
   | "cancelled";
@@ -69,6 +70,7 @@ export interface PipelineProgress {
   progress: number;
   step_progress: (number | null)[];
   error?: string;
+  paused?: boolean;
   timeline_check?: PipelineTimelineCheck | null;
   voice_check?: { waiting?: boolean; decision?: string | null } | null;
 }
