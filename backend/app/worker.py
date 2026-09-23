@@ -1843,9 +1843,17 @@ async def worker_loop(
     queue: asyncio.Queue,
     pipeline_states: dict,
 ):
+    wid = id(asyncio.current_task())
     logger.info("Worker loop started")
     while True:
-        job_id = await queue.get()
+        # Heartbeat để /api/worker-status phát hiện worker chết lặng.
+        # (Từng xảy ra: queue kẹt job queued vĩnh viễn, không traceback.)
+        # queue.get() có timeout để heartbeat refresh cả khi idle (không job).
+        _worker_heartbeats[wid] = time.time()
+        try:
+            job_id = await asyncio.wait_for(queue.get(), timeout=10)
+        except asyncio.TimeoutError:
+            continue
         job = jobs.get(job_id)
         try:
             if job:
@@ -1874,3 +1882,44 @@ async def worker_loop(
             logger.exception("Unhandled worker error for job %s: %s", job_id, e)
         finally:
             queue.task_done()
+
+
+# Nhịp heartbeat của từng worker loop (task id -> timestamp). Đọc bởi
+# /api/worker-status để phát hiện worker chết lặng.
+_worker_heartbeats: dict[int, float] = {}
+
+
+async def supervise_workers(
+    jobs: dict,
+    ws_clients: dict,
+    ocr_engines: dict[str, list],
+    queue: asyncio.Queue,
+    pipeline_states: dict,
+    count: int,
+):
+    """Giữ đúng `count` worker loop sống.
+
+    Worker chết lặng (exception thoát khỏi try, task bị hủy ngoài ý muốn...)
+    sẽ được tạo lại + log rõ, thay vì hàng đợi kẹt job queued vĩnh viễn mà
+    không ai xử lý và không có traceback nào.
+    """
+    workers: list[asyncio.Task] = []
+    try:
+        while True:
+            alive = [w for w in workers if not w.done()]
+            dead = len(workers) - len(alive)
+            if dead:
+                logger.error("supervisor: %d worker died — restarting", dead)
+            workers = alive
+            while len(workers) < count:
+                workers.append(asyncio.create_task(
+                    worker_loop(jobs, ws_clients, ocr_engines, queue, pipeline_states)
+                ))
+                logger.info(
+                    "supervisor: worker (%d/%d) started", len(workers), count,
+                )
+            await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        for w in workers:
+            w.cancel()
+        raise

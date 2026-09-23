@@ -31,3 +31,6 @@ src-tauri/gen/
 .opencode
 .codegraph
 tools-dist/
+# Dev server logs (local runs)
+backend/backend-dev.log
+capcut-tts-api/capcut-dev.log
