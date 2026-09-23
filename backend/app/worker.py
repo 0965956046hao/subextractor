@@ -1078,6 +1078,14 @@ async def run_tts_job(
             timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 
+        # run_tts_sync tự bắt lỗi bên trong và set status=error (không raise
+        # lại) — tôn trọng kết quả đó, tránh success giả (xem run_dub_job).
+        if job.get("status") == "error":
+            err = job.get("error") or "TTS thất bại"
+            await job_log_async(job, ws_clients, f"TTS thất bại: {err}", "error")
+            await notify_ws(ws_clients, job_id, {"type": "error", "message": err})
+            return
+
         job["status"] = "done"
         job["progress"] = 100
         await job_log_async(job, ws_clients, "TTS hoàn tất! Video lồng tiếng đã sẵn sàng.", "success")
@@ -1135,6 +1143,15 @@ async def run_dub_job(
             loop.run_in_executor(_executor, fn),
             timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
+
+        # run_dub_sync tự bắt lỗi bên trong và set status=error (không raise
+        # lại). Tôn trọng kết quả đó — không ghi đè success giả lên job đã lỗi
+        # (từng khiến pipeline tưởng dub xong dù chưa có full_audio.m4a).
+        if job.get("status") == "error":
+            err = job.get("error") or "Lồng tiếng thất bại"
+            await job_log_async(job, ws_clients, f"Lồng tiếng thất bại: {err}", "error")
+            await notify_ws(ws_clients, job_id, {"type": "error", "message": err})
+            return
 
         job["status"] = "done"
         job["progress"] = 100
