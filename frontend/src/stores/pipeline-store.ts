@@ -2740,22 +2740,24 @@ async function runPipeline(id: string, startStep = 4) {
               }),
             });
             const dd = await dr.json();
-            if (dr.ok && dd.job_id) {
-              const ds = await pollJob(dd.job_id, tick(8));
-              if (ds.status === "done") {
-                patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
-                appendLog(id, "Audio lồng tiếng Việt xong.");
-              } else {
-                appendLog(id, `Bỏ qua lồng tiếng: ${ds.error || "thất bại"}`);
-              }
-            } else {
-              appendLog(
-                id,
-                `Bỏ qua lồng tiếng: ${dd.detail || "không thể bắt đầu"}`,
-              );
+            if (!(dr.ok && dd.job_id)) {
+              throw new Error(dd.detail || "Không thể bắt đầu lồng tiếng");
             }
-          } catch {
-            appendLog(id, "Bỏ qua lồng tiếng (lỗi).");
+            const ds = await pollJob(dd.job_id, tick(8));
+            if (ds.status !== "done") {
+              // Dub lỗi thì DỪNG pipeline tại bước này (failedStep=8) để user
+              // bấm chạy lại — không skip im lặng rồi encode thiếu tiếng
+              // (từng khiến hardcode warn "Không tìm thấy audio lồng tiếng").
+              throw new Error(ds.error || "Lồng tiếng thất bại");
+            }
+            patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
+            appendLog(id, "Audio lồng tiếng Việt xong.");
+          } catch (e) {
+            appendLog(
+              id,
+              `Lồng tiếng thất bại: ${e instanceof Error ? e.message : "lỗi"} — dừng tại bước này, bấm chạy lại để thử tiếp.`,
+            );
+            throw e instanceof Error ? e : new Error("Lồng tiếng thất bại");
           }
           markStepEnd(id, 8);
         }
@@ -2807,7 +2809,7 @@ async function runPipeline(id: string, startStep = 4) {
     }
 
     // 8. Hardcode
-    if (startStep <= 8) {
+    if (startStep <= 9) {
       patch(id, { stage: "muxing" });
       markStepStart(id, 9);
       // Resume: nếu video đã có phụ đề cứng thì bỏ qua — nhưng PHẢI encode lại
@@ -3295,6 +3297,20 @@ async function resumeHeavy(
     }
     enqueue(id, jobIdx + 1);
   } else {
-    enqueue(id, stepIdx);
+    // Resume ở bước hardcode (muxing) nhưng chưa có audio lồng tiếng trong khi
+    // pipeline vẫn bật dub → lùi về bước TTS/dub (8) để tạo lại giọng đọc trước
+    // khi encode. (VD video cedcdec2320c: dub báo xong nhưng full_audio.m4a không
+    // tồn tại, hardcode kẹt ở 20% rồi chết — chạy lại từ muxing sẽ encode thiếu
+    // tiếng lồng tiếng.)
+    let resumeFrom = stepIdx;
+    if (stepIdx === 9 && cur.dubOn !== false) {
+      try {
+        const dubbedCheck = await fetch(`/api/download/dubbed/${videoId}`);
+        if (!dubbedCheck.ok) resumeFrom = 8;
+      } catch {
+        // ignore — giữ nguyên bước cũ
+      }
+    }
+    enqueue(id, resumeFrom);
   }
 }

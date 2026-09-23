@@ -17,6 +17,7 @@ from app.services.media_utils import (
     _srt_original_path,
     _video_path,
     _get_audio_duration,
+    _get_duration,
     _merge_audio_path,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync
@@ -40,9 +41,45 @@ def _dur_timeout(dur: float, per_sec: float, floor: int) -> int:
     return floor
 
 
+def _has_audio_stream(path: Path) -> bool:
+    """True khi file có ít nhất 1 audio track (ffprobe select_streams=a)."""
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a",
+                "-show_entries", "stream=index",
+                "-of", "csv=p=0", str(path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        return bool(out.stdout.strip())
+    except Exception:
+        return False
+
+
 def extract_audio(video_path: Path, out_dir: Path) -> Path:
-    """Extract mono audio from the video to a wav file."""
+    """Extract mono audio from the video to a wav file.
+
+    Video không có audio track (vd Douyin import thiếu audio gốc — file chỉ có
+    hình) thì ffmpeg crash "Output file does not contain any stream". Trường
+    hợp này tạo nền im lặng dài bằng video để bước dub/TTS vẫn chạy được thay
+    vì fail cả job (từng khiến dub "xong" giả trong 0.2s mà không gen dòng nào).
+    """
     wav_path = out_dir / "audio.wav"
+    if not _has_audio_stream(video_path):
+        silence_dur = _get_duration(str(video_path)) or _get_audio_duration(video_path) or 0.0
+        logger.warning(
+            "extract_audio: %s has no audio stream — using %.1fs silence as background",
+            video_path, silence_dur,
+        )
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+                "-t", f"{max(silence_dur, 0.5):.3f}", str(wav_path),
+            ],
+            check=True, capture_output=True, timeout=120,
+        )
+        return wav_path
     dur = _get_audio_duration(str(video_path))
     subprocess.run(
         [
