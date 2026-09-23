@@ -664,6 +664,8 @@ export interface SubtitleStyle {
   box_radius: number;
   box_border_color: string;
   box_border_width: number;
+  box_pad_x: number;
+  box_pad_y: number;
   margin_v: number;
   margin_h: number;
 }

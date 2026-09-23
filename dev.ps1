@@ -138,7 +138,24 @@ try {
       }
     }
     # Run backend in NEW window (logs visible in its own terminal)
-    Start-NewWindow "backend" $UVICORN @("app.main:app", "--reload", "--port", "8002") $BACKEND
+    # NOTE: --reload is OFF by default. The reloader restarts the whole
+    # server on any *.py change (edits, OneDrive sync touching mtimes...),
+    # which kills running jobs (OCR/dub/hardcode) and drops in-flight
+    # requests (large uploads die with "socket hang up" -> 500).
+    # Set $env:DEV_RELOAD=1 before .\dev.ps1 only when actively editing
+    # backend code and no long job is running.
+    $backendArgs = @("app.main:app", "--port", "8002")
+    if ($env:DEV_RELOAD -eq "1") {
+      $backendArgs += "--reload"
+      Write-Host "    (WITH --reload: code edits will restart server + kill running jobs)"
+    } else {
+      Write-Host "    (no --reload: restart backend manually after editing backend code)"
+    }
+    # Launch via "python -m uvicorn" instead of .venv\Scripts\uvicorn.exe:
+    # the generated exe is unsigned and gets blocked by Windows Application
+    # Control / Smart App Control ("An Application Control policy has
+    # blocked this file"), while python.exe is trusted.
+    Start-NewWindow "backend" $PYTHON (@("-m", "uvicorn") + $backendArgs) $BACKEND
     # Wait a moment for backend to start
     Start-Sleep -Seconds 3
   }

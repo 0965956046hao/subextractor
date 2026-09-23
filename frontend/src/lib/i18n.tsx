@@ -293,6 +293,8 @@ const dictionaries = {
     "style.boxRadius": "Background border radius",
     "style.boxBorderColor": "Background border color",
     "style.boxBorderWidth": "Background border width",
+    "style.boxPadX": "Background side padding",
+    "style.boxPadY": "Background top/bottom padding",
     "style.marginV": "Distance from bottom",
 
     // LibraryPage
@@ -1182,6 +1184,8 @@ const dictionaries = {
     "style.boxRadius": "Bo góc nền (border radius)",
     "style.boxBorderColor": "Màu viền nền",
     "style.boxBorderWidth": "Độ dày viền nền",
+    "style.boxPadX": "Đệm nền hai bên",
+    "style.boxPadY": "Đệm nền trên/dưới",
     "style.marginV": "Vị trí từ đáy",
 
     // LibraryPage
