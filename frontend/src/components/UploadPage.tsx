@@ -30,23 +30,52 @@ function UploadIcon({ dragging }: { dragging: boolean }) {
   );
 }
 
+function isBackendDownError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : "";
+  return (
+    msg.includes("network error") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("fetch failed") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnreset") ||
+    msg.includes("cannot connect") ||
+    msg.includes("không kết nối") ||
+    msg.includes("backend") ||
+    msg.includes("502") ||
+    msg.includes("503") ||
+    msg.includes("504") ||
+    msg.includes("500") ||
+    msg.includes("timeout") ||
+    msg.includes("timed out")
+  );
+}
+
 export default function UploadPage({ onUploaded }: Props) {
   const { t } = useI18n();
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
+  const [errorDetail, setErrorDetail] = useState("");
+  const [backendDown, setBackendDown] = useState(false);
   const [fileName, setFileName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Giữ File gốc để retry khi backend rớt mà không cần chọn lại.
+  const fileRef = useRef<File | null>(null);
 
   const handleFile = useCallback(
     async (file: File) => {
       if (!file.type.startsWith("video/")) {
         setError(t("upload.selectVideo"));
+        setErrorDetail("");
+        setBackendDown(false);
         return;
       }
+      fileRef.current = file;
       setError("");
+      setErrorDetail("");
+      setBackendDown(false);
       setLoading(true);
       setProgress(0);
       setFileName(file.name);
@@ -54,10 +83,18 @@ export default function UploadPage({ onUploaded }: Props) {
       abortRef.current = ctrl;
       try {
         const id = await uploadVideo(file, setProgress, ctrl.signal);
+        fileRef.current = null;
         onUploaded(id);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "CanceledError") return;
-        setError(t("upload.failed"));
+        const down = isBackendDownError(err);
+        setBackendDown(down);
+        setError(
+          down ? t("upload.backendDown") : t("upload.failed"),
+        );
+        setErrorDetail(err instanceof Error ? err.message : "");
+        // Clear input để chọn lại cùng file vẫn kích hoạt onChange.
+        if (inputRef.current) inputRef.current.value = "";
       } finally {
         setLoading(false);
         abortRef.current = null;
@@ -65,6 +102,14 @@ export default function UploadPage({ onUploaded }: Props) {
     },
     [onUploaded, t],
   );
+
+  const handleRetry = useCallback(() => {
+    if (fileRef.current && !loading) handleFile(fileRef.current);
+  }, [handleFile, loading]);
+
+  const handleCancel = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -137,10 +182,19 @@ export default function UploadPage({ onUploaded }: Props) {
                     {progress}%
                   </p>
                 </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCancel();
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium text-ink-muted ring-1 ring-white/[0.10] hover:bg-white/[0.06] hover:text-ink transition-colors cursor-pointer"
+                >
+                  {t("upload.cancel")}
+                </button>
                 {error && (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-danger-muted ring-1 ring-danger/20 text-xs text-danger">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-danger-muted ring-1 ring-danger/20 text-xs text-danger max-w-full">
                     <svg
-                      className="w-3.5 h-3.5"
+                      className="w-3.5 h-3.5 flex-shrink-0"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -151,7 +205,7 @@ export default function UploadPage({ onUploaded }: Props) {
                       <line x1="12" y1="8" x2="12" y2="12" />
                       <line x1="12" y1="16" x2="12.01" y2="16" />
                     </svg>
-                    {error}
+                    <span className="break-words">{error}</span>
                   </div>
                 )}
               </div>
@@ -171,20 +225,53 @@ export default function UploadPage({ onUploaded }: Props) {
                   </p>
                 </div>
                 {error && (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-danger-muted ring-1 ring-danger/20 text-xs text-danger">
-                    <svg
-                      className="w-3.5 h-3.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    >
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                    {error}
+                  <div className="flex flex-col items-center gap-3 max-w-md">
+                    <div className="inline-flex items-start gap-2 px-4 py-2 rounded-lg bg-danger-muted ring-1 ring-danger/20 text-xs text-danger text-left">
+                      <svg
+                        className="w-3.5 h-3.5 flex-shrink-0 mt-px"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      <span>
+                        {error}
+                        {errorDetail && !backendDown && (
+                          <span className="block mt-1 font-mono opacity-70 break-words">
+                            {errorDetail}
+                          </span>
+                        )}
+                        {fileName && (
+                          <span className="block mt-1 font-medium truncate max-w-[280px]">
+                            {fileName}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    {fileRef.current && (
+                      <div
+                        className="flex items-center gap-2 flex-wrap justify-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={handleRetry}
+                          className="btn-island-primary text-xs !px-4 !py-2"
+                        >
+                          {t("upload.retry")}
+                        </button>
+                        <button
+                          onClick={() => inputRef.current?.click()}
+                          className="btn-island-secondary text-xs !px-4 !py-2"
+                        >
+                          {t("upload.pickDifferent")}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

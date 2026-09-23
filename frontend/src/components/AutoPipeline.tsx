@@ -293,6 +293,8 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     size: number;
   } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Giữ File gốc để retry khi backend rớt mạng mà không cần chọn lại file.
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
@@ -330,6 +332,13 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Backend được coi là "down" khi health-check trả về service=server unhealthy.
+  // Dùng để hiển thị cảnh báo mềm — KHÔNG khóa input (người dùng vẫn nhập liệu được).
+  const isBackendDown =
+    !!health &&
+    !health.healthy &&
+    health.checks.some((c) => c.service === "server" && !c.healthy);
 
   const focusNewVideo = useCallback(() => {
     urlInputRef.current?.scrollIntoView({
@@ -636,10 +645,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const handleAdd = () => {
     const v = url.trim();
     if (!v) return;
-    if (!health?.healthy) {
-      checkHealth();
-      return;
-    }
+    // Không khóa UI khi backend down / thiếu config: vẫn cho tạo pipeline,
+    // job sẽ báo lỗi và retry được. Chỉ refresh health ngầm để banner cập nhật.
+    if (!health?.healthy) checkHealth();
     const id = addPipeline(
       v,
       regionMode,
@@ -673,19 +681,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     setTab("detail");
   };
 
-  const handleFile = async (file: File | null) => {
-    if (!file) return;
-    if (!health?.healthy) {
-      checkHealth();
-      return;
-    }
+  const doUpload = async (file: File) => {
     setUploading(true);
     setUploadProgress(0);
     setUploadError(null);
     try {
       const videoId = await uploadVideo(file, setUploadProgress, undefined, "pipeline");
       setUploaded({ videoId, name: file.name, size: file.size });
+      setPendingFile(null);
     } catch (e) {
+      // Giữ lại file để retry — không bắt chọn lại. Refresh health ngầm
+      // để banner backend-down cập nhật nếu nguyên nhân là mất kết nối.
+      checkHealth();
       setUploadError(
         e instanceof Error ? e.message : tr("pipeline.error.uploadFailed"),
       );
@@ -695,6 +702,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleFile = async (file: File | null) => {
+    if (!file) return;
+    // Không khóa upload khi backend down: vẫn cho chọn file và thử upload,
+    // lỗi sẽ hiển thị kèm nút retry (file được giữ lại).
+    setPendingFile(file);
+    await doUpload(file);
+  };
+
+  const handleRetryUpload = async () => {
+    if (pendingFile && !uploading) await doUpload(pendingFile);
   };
 
   const handleStartUpload = () => {
@@ -862,6 +881,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </li>
                     ))}
                   </ul>
+                  {isBackendDown && (
+                    <p className="mt-2 text-[11px] text-warn/70 leading-relaxed">
+                      {tr("pipeline.health.backendDownHint")}
+                    </p>
+                  )}
                 </div>
               ) : health?.healthy ? (
                 <div className="flex items-center gap-2 mb-4 rounded-xl bg-success-muted ring-1 ring-success/15 px-4 py-2.5">
@@ -920,21 +944,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                    disabled={!health?.healthy}
                     placeholder={
                       healthLoading
                         ? tr("pipeline.placeholder.checking")
-                        : health?.healthy
-                          ? sourceType === "youtube"
-                            ? tr("pipeline.placeholder.youtube")
-                            : tr("pipeline.placeholder.douyin")
-                          : tr("pipeline.placeholder.notConfigured")
+                        : sourceType === "youtube"
+                          ? tr("pipeline.placeholder.youtube")
+                          : tr("pipeline.placeholder.douyin")
                     }
-                    className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20"
                   />
                   <button
                     onClick={handleAdd}
-                    disabled={!url.trim() || !health?.healthy}
+                    disabled={!url.trim()}
                     className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <span className="tracking-tight">
@@ -999,21 +1020,36 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <p className="text-[13px] font-medium text-danger">
                         {tr("pipeline.error.uploadFailed")}
                       </p>
-                      <p className="text-[11px] text-danger/80 mt-1">
+                      <p className="text-[11px] text-danger/80 mt-1 break-words">
                         {uploadError}
                       </p>
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="mt-3 btn-ghost-danger bg-danger-muted"
-                      >
-                        {tr("pipeline.retry")}
-                      </button>
+                      {pendingFile && (
+                        <p className="text-[11px] text-danger/60 mt-1 truncate">
+                          {pendingFile.name} — {fmtBytes(pendingFile.size)}
+                        </p>
+                      )}
+                      <div className="mt-3 flex items-center gap-2 flex-wrap">
+                        {pendingFile && (
+                          <button
+                            onClick={handleRetryUpload}
+                            disabled={uploading}
+                            className="btn-island-primary text-[12px] !px-4 !py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {tr("pipeline.retryUpload")}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="btn-ghost-danger bg-danger-muted"
+                        >
+                          {tr("pipeline.pickDifferent")}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <button
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={!health?.healthy}
-                      className="w-full rounded-xl border border-dashed border-white/[0.14] bg-white/[0.03] px-4 py-6 text-[13px] text-ink-light hover:bg-white/[0.05] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
+                      className="w-full rounded-xl border border-dashed border-white/[0.14] bg-white/[0.03] px-4 py-6 text-[13px] text-ink-light hover:bg-white/[0.05] hover:text-ink transition-all flex flex-col items-center gap-2 cursor-pointer"
                     >
                       <svg
                         className="w-5 h-5"

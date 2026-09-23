@@ -276,6 +276,8 @@ export default function ResultPage({
   const [error, setError] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [cancelling, setCancelling] = useState(false);
+  // Số lần thử submit — tăng khi user bấm "Thử lại" để effect chạy lại.
+  const [attempt, setAttempt] = useState(0);
   const seenRef = useRef(new Set<string>());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number>(0);
@@ -342,8 +344,9 @@ export default function ResultPage({
   );
 
   useEffect(() => {
-    if (submittedVideoRef.current === videoId) return;
-    submittedVideoRef.current = videoId;
+    const attemptKey = `${videoId}:${attempt}`;
+    if (submittedVideoRef.current === attemptKey) return;
+    submittedVideoRef.current = attemptKey;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     (async () => {
       try {
@@ -406,7 +409,18 @@ export default function ResultPage({
       wsRef.current?.close();
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [videoId, region, lang, ocrType, connectWs, appendLog, t]);
+  }, [videoId, region, lang, ocrType, startTime, attempt, connectWs, appendLog, t]);
+
+  const handleRetry = useCallback(() => {
+    wsRef.current?.close();
+    jobIdRef.current = null;
+    reconnectRef.current = 0;
+    setError("");
+    setProgress(0);
+    setPhase("submitting");
+    // Đổi key để effect submit lại (giữ nguyên videoId/region/lang).
+    setAttempt((a) => a + 1);
+  }, []);
 
   useEffect(() => {
     if (phase === "done" && !doneNotifiedRef.current) {
@@ -633,8 +647,26 @@ export default function ResultPage({
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
-                  <p className="text-sm text-danger/80">{error}</p>
+                  <p className="text-sm text-danger/80 break-words">{error}</p>
                 </div>
+                {phase === "error" && (
+                  <div className="mt-4 flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={handleRetry}
+                      className="btn-island-primary text-[13px] !px-4 !py-2"
+                    >
+                      {t("result.retry")}
+                    </button>
+                    {onViewLibrary && (
+                      <button
+                        onClick={onViewLibrary}
+                        className="btn-island-secondary text-[13px] !px-4 !py-2"
+                      >
+                        {t("result.backToLibrary")}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
