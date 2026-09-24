@@ -250,6 +250,7 @@ export default function TimelineCheckModal({
   const dragRef = useRef<DragState | null>(null);
   const [timelineIssues, setTimelineIssues] = useState<TimelineIssue[]>(initialIssues);
   const [risks, setRisks] = useState<SubtitleRisk[]>([]);
+  const [risksStale, setRisksStale] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -424,8 +425,9 @@ export default function TimelineCheckModal({
       if (i > 0 && e.start < sorted[i - 1].start) issues.push({ index: e.index, type: "out_of_order", message: `Out of order #${e.index}`, start: e.start, end: e.end, prev_index: sorted[i - 1].index });
     }
     setTimelineIssues(issues);
-    // Content/timing changed → risks stale
-    setRisks([]);
+    // Content/timing changed → mark risks as stale but keep them visible
+    // so the user doesn't lose trace while editing. Will be refreshed on next risk check.
+    setRisksStale(true);
   }, []);
 
   const patchEntry = useCallback((index: number, patch: Partial<SrtEntry>) => {
@@ -466,17 +468,27 @@ export default function TimelineCheckModal({
       setRetranslatingIndex(index);
       setCheckError("");
       try {
-        const newText = await reTranslateLine(videoId, index, sourceLang, targetLang);
-        patchEntry(index, { text: newText });
+        // Send the current displayed text so backend doesn't rely on stale file index
+        const cur = entries.find((e) => e.index === index);
+        const currentText = cur?.text ?? "";
+        const newText = await reTranslateLine(videoId, index, sourceLang, targetLang, currentText);
+        // Sanitize: backend may return SRT framing with pipes, strip it
+        const sanitized = newText.includes("|")
+          ? newText.split("|").pop()!.trim()
+          : newText;
+        // Also strip any leftover timestamp if Gemini echoed SRT
+        const finalText = sanitized.includes("-->") ? sanitized.split("-->").pop()!.trim() : sanitized;
+        patchEntry(index, { text: finalText || newText });
         // Clear any risk marker tied to this line — the text changed.
         setRisks((prev) => prev.filter((r) => r.index !== index));
+        setRisksStale(true);
       } catch (e) {
         setCheckError(e instanceof Error ? e.message : t("timeline.reTranslateFailed" as string));
       } finally {
         setRetranslatingIndex(-1);
       }
     },
-    [videoId, sourceLang, targetLang, patchEntry]
+    [videoId, sourceLang, targetLang, patchEntry, entries]
   );
 
   const deleteEntry = useCallback((index: number) => {
@@ -526,7 +538,7 @@ export default function TimelineCheckModal({
         return reindexed;
       });
       setShowAddModal(false);
-      setRisks([]);
+      setRisksStale(true);
     },
     [recomputeTimelineIssues],
   );
@@ -624,6 +636,7 @@ export default function TimelineCheckModal({
     const result = await getSrtRiskResult(videoId);
     if (signal?.aborted) return;
     setRisks(result.risks ?? []);
+    setRisksStale(false);
   }, [videoId, targetLang]);
 
   const runRiskCheck = useCallback(async () => {
@@ -719,6 +732,7 @@ export default function TimelineCheckModal({
     setOriginalTexts({});
     setOriginalOpen({});
     setLoadingOriginalIndex(-1);
+    setRisksStale(false);
     try {
       const es = await getSrtEntries(videoId);
       setEntries(es);
@@ -801,10 +815,17 @@ export default function TimelineCheckModal({
           )}
 
           {risks.length > 0 && (
-            <div className="rounded-xl bg-warn-muted ring-1 ring-warn/20 px-3.5 py-2.5">
-              <p className="text-[12px] font-semibold text-amber-800 mb-1.5">
-                {t("timeline.risksFound" as string, { count: risks.length })}
-              </p>
+            <div className={`rounded-xl ring-1 px-3.5 py-2.5 ${risksStale ? "bg-warn-muted/60 ring-warn/15" : "bg-warn-muted ring-warn/20"}`}>
+              <div className="flex items-center gap-2 mb-1.5">
+                <p className="text-[12px] font-semibold text-amber-800">
+                  {t("timeline.risksFound" as string, { count: risks.length })}
+                </p>
+                {risksStale && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-warn/15 text-warn ring-1 ring-warn/20">
+                    {t("timeline.staleRisks" as string) || "Đã chỉnh sửa — nhấn Kiểm tra lại"}
+                  </span>
+                )}
+              </div>
               <ul className="space-y-1 max-h-28 overflow-y-auto">
                 {risks.map((r) => (
                   <li key={r.index}>

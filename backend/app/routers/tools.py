@@ -296,23 +296,27 @@ async def re_translate_srt_line(video_id: str, request: Request):
     index = int(body.get("index", 0))
     source_lang = str(body.get("source_lang", "zh") or "zh")
     target_lang = str(body.get("target_lang", "vi") or "vi")
+    # Frontend may send current displayed text (dirty, unsaved) to avoid stale index lookup
+    override_text = body.get("text") or body.get("source_text") or body.get("current_text")
+    if override_text and str(override_text).strip():
+        source_text = str(override_text).strip()
+    else:
+        # Read the current SRT entry text so we can re-translate the same line.
+        srt_path = _srt_path(video_id)
+        current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+        entry = next((e for e in current_entries if e.index == index), None)
+        if entry is None:
+            raise HTTPException(404, f"Không tìm thấy dòng #{index}")
 
-    # Read the current SRT entry text so we can re-translate the same line.
-    srt_path = _srt_path(video_id)
-    current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
-    entry = next((e for e in current_entries if e.index == index), None)
-    if entry is None:
-        raise HTTPException(404, f"Không tìm thấy dòng #{index}")
-
-    # Prefer the original (source-language) text so the re-translation works on
-    # the source sentence, not on an already-translated text.
-    source_text = entry.text
-    orig_path = srt_path.with_name("subtitles_original.srt")
-    if orig_path.exists():
-        orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
-        src = next((e for e in orig_entries if e.index == index), None)
-        if src is not None:
-            source_text = src.text
+        # Prefer the original (source-language) text so the re-translation works on
+        # the source sentence, not on an already-translated text.
+        source_text = entry.text
+        orig_path = srt_path.with_name("subtitles_original.srt")
+        if orig_path.exists():
+            orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
+            src = next((e for e in orig_entries if e.index == index), None)
+            if src is not None:
+                source_text = src.text
 
     try:
         new_text = _rt_line(video_id, source_text, source_lang=source_lang, target_lang=target_lang)

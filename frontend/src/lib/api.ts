@@ -281,6 +281,7 @@ export async function reTranslateLine(
   index: number,
   sourceLang: string,
   targetLang: string,
+  currentText?: string,
 ): Promise<string> {
   const res = await api.post<{ text: string }>(
     `/srt/${videoId}/re-translate-line`,
@@ -288,6 +289,7 @@ export async function reTranslateLine(
       index,
       source_lang: sourceLang,
       target_lang: targetLang,
+      ...(currentText ? { text: currentText } : {}),
     },
   );
   return res.data.text;

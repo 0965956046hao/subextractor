@@ -509,6 +509,14 @@ def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", 
     if not lines:
         raise RuntimeError("Gemini trả về kết quả rỗng khi dịch lại dòng.")
     new_text = lines[-1]
+    # Handle pipe-joined SRT echo (e.g. "1|00:00:00,000 --> 00:00:00,000|text") or stray timestamp
+    if "|" in new_text:
+        new_text = new_text.split("|")[-1].strip()
+    if "-->" in new_text:
+        new_text = new_text.split("-->")[-1].strip()
+        # Remove leading timestamp if still present
+        import re as _re
+        new_text = _re.sub(r"^\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*", "", new_text).strip()
     if log_fn:
         log_fn(f"Đã dịch lại: {source_text}  →  {new_text}", level="success")
     return new_text
