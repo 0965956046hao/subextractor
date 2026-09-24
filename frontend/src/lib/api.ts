@@ -331,6 +331,28 @@ export async function fixSrtTimeline(
   return res.data;
 }
 
+export async function dedupSrt(
+  videoId: string,
+): Promise<{ entries: SrtEntry[]; changes: unknown[]; count: number }> {
+  const res = await api.post<{
+    entries: SrtEntry[];
+    changes: unknown[];
+    count: number;
+  }>(`/srt/${videoId}/dedup`);
+  return res.data;
+}
+
+export async function autoFixSrtOverlaps(
+  videoId: string,
+): Promise<{ entries: SrtEntry[]; fixes: unknown[]; count: number }> {
+  const res = await api.post<{
+    entries: SrtEntry[];
+    fixes: unknown[];
+    count: number;
+  }>(`/srt/${videoId}/auto-fix-overlaps`);
+  return res.data;
+}
+
 export interface SubtitleRisk {
   index: number;
   text: string;
@@ -355,10 +377,11 @@ export async function startSrtRiskCheck(
 
 export async function getSrtRiskResult(
   videoId: string,
-): Promise<{ risks: SubtitleRisk[]; checked_at?: number | null }> {
+): Promise<{ risks: SubtitleRisk[]; checked_at?: number | null; stale?: boolean }> {
   const res = await api.get<{
     risks: SubtitleRisk[];
     checked_at?: number | null;
+    stale?: boolean;
   }>(`/srt/${videoId}/risk-check`);
   return res.data;
 }

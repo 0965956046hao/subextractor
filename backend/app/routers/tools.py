@@ -470,9 +470,23 @@ async def start_risk_check(video_id: str, request: Request):
 async def get_risk_check_result(video_id: str):
     result_path = settings.temp_dir / "risk_check" / f"{video_id}.json"
     if not result_path.exists():
-        return {"video_id": video_id, "risks": [], "checked_at": None}
+        return {"video_id": video_id, "risks": [], "checked_at": None, "stale": False}
     data = json.loads(result_path.read_text(encoding="utf-8"))
-    return {"video_id": video_id, **data}
+    # Reload-safety: báo cho FE biết kết quả còn khớp nội dung hiện tại không.
+    # texts_hash lệch (sửa/xoá/thêm dòng sau khi check) → stale=True để modal
+    # hiện badge "kết quả cũ" thay vì im lặng dùng verdict sai index.
+    stale = False
+    stored_hash = data.get("texts_hash")
+    if (data.get("risks") or []) and not stored_hash:
+        stale = True  # file cũ, chưa có hash → không xác minh được
+    elif stored_hash:
+        try:
+            from app.services.risk_check_service import _entries_hash
+            cur = parse_srt(_srt_best_path(video_id).read_text(encoding="utf-8"))
+            stale = _entries_hash(cur) != stored_hash
+        except Exception:
+            stale = False
+    return {"video_id": video_id, **data, "stale": stale}
 
 
 # ── POST /api/mux/{video_id} ──

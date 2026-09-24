@@ -10,6 +10,9 @@ import {
   startSrtRiskCheck,
   getSrtRiskResult,
   validateSrtTimeline,
+  fixSrtTimeline,
+  dedupSrt,
+  autoFixSrtOverlaps,
   reTranslateLine,
   getOriginalLine,
 } from "@/lib/api";
@@ -92,6 +95,38 @@ const RISK_LABELS: Record<string, string> = {
   TIMELINE_OVERLAP: "timeline.risk.overlap",
   ADJACENT_SIMILAR: "timeline.risk.adjacentSimilar",
 };
+
+// Chữ Hán — cùng phạm vi backend `_CJK_RE` (cần `u` flag cho mặt phẳng phụ).
+const CJK_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u{20000}-\u{2A6DF}]/u;
+
+/**
+ * Đối chiếu risk (snapshot lúc check) với entries hiện tại: verdict nào đã
+ * hết hiệu lực thì bỏ ngay, không đợi kiểm tra lại.
+ * - NOT_TRANSLATED mà text hiện tại hết chữ Hán → đã dịch xong.
+ * - TIMELINE_OVERLAP mà timeline hiện tại hết overlap dòng đó → đã hết.
+ * - ADJACENT_SIMILAR giữ nguyên (cần fuzzy/Gemini để phán lại).
+ * Dòng đã xoá → bỏ marker. Text panel lấy theo entries hiện tại.
+ */
+function reconcileRisks(
+  risks: SubtitleRisk[],
+  entries: SrtEntry[],
+  overlapIndexes: Set<number>,
+): SubtitleRisk[] {
+  if (risks.length === 0 || entries.length === 0) return risks;
+  const byIndex = new Map(entries.map((e) => [e.index, e]));
+  const out: SubtitleRisk[] = [];
+  for (const r of risks) {
+    const e = byIndex.get(r.index);
+    if (!e) continue;
+    const problems = r.problems.filter((p) => {
+      if (p === "NOT_TRANSLATED") return CJK_RE.test(e.text);
+      if (p === "TIMELINE_OVERLAP") return overlapIndexes.has(r.index);
+      return true;
+    });
+    if (problems.length > 0) out.push({ ...r, text: e.text, problems });
+  }
+  return out;
+}
 
 interface TimelineCheckModalProps {
   videoId: string;
@@ -228,6 +263,70 @@ function AddEntryModal({
   );
 }
 
+// ── Draft persistence (chống mất edit chưa lưu khi reload) ──
+// Mỗi lần sửa (gõ tay, dịch lại, sửa tất cả, kéo timeline...) đều được ghi
+// nháp vào localStorage (debounce). Mở lại modal: nếu nội dung backend vẫn
+// đúng bản lúc ghi nháp thì đắp nháp lên; backend đã đổi (tab khác lưu, pipeline
+// chạy tiếp) thì bỏ nháp để khỏi vá nhầm index. Lưu/Khôi phục/Tiếp tục → xoá nháp.
+const DRAFT_PREFIX = "ste-timeline-draft:";
+const DRAFT_TTL_MS = 7 * 24 * 3600 * 1000;
+
+interface TimelineDraft {
+  base: SrtEntry[];
+  entries: SrtEntry[];
+  savedAt: number;
+}
+
+function sameEntries(a: SrtEntry[], b: SrtEntry[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (e, i) => e.text === b[i].text && e.start === b[i].start && e.end === b[i].end,
+  );
+}
+
+function readDraft(vid: string): TimelineDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + vid);
+    if (!raw) return null;
+    const d = JSON.parse(raw) as Partial<TimelineDraft>;
+    if (!Array.isArray(d.base) || !Array.isArray(d.entries)) return null;
+    if (!d.savedAt || Date.now() - d.savedAt > DRAFT_TTL_MS) {
+      localStorage.removeItem(DRAFT_PREFIX + vid);
+      return null;
+    }
+    return d as TimelineDraft;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraftStorage(vid: string) {
+  try {
+    localStorage.removeItem(DRAFT_PREFIX + vid);
+  } catch {
+    // ignore (private mode...)
+  }
+}
+
+function pruneOldDrafts() {
+  try {
+    const cutoff = Date.now() - DRAFT_TTL_MS;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(DRAFT_PREFIX)) {
+        try {
+          const d = JSON.parse(localStorage.getItem(k) || "");
+          if (!d?.savedAt || d.savedAt < cutoff) localStorage.removeItem(k);
+        } catch {
+          localStorage.removeItem(k);
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export default function TimelineCheckModal({
   videoId,
   initialIssues,
@@ -257,12 +356,17 @@ export default function TimelineCheckModal({
   const [zoom, setZoom] = useState(4);
   const [editingIndex, setEditingIndex] = useState(-1);
   const [retranslatingIndex, setRetranslatingIndex] = useState(-1);
+  const [fixingAll, setFixingAll] = useState(false);
+  const [fixProgress, setFixProgress] = useState("");
   const [originalTexts, setOriginalTexts] = useState<Record<number, string>>({});
   const [originalOpen, setOriginalOpen] = useState<Record<number, boolean>>({});
   const [loadingOriginalIndex, setLoadingOriginalIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const riskAbortRef = useRef<AbortController | null>(null);
+  // Nội dung backend đã biết (lần load/save gần nhất) — dùng để đối chiếu draft.
+  const baseRef = useRef<SrtEntry[] | null>(null);
+  const draftAppliedRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -271,14 +375,41 @@ export default function TimelineCheckModal({
 
   useEffect(() => {
     let cancelled = false;
+    draftAppliedRef.current = false;
+    pruneOldDrafts();
     getSrtEntries(videoId)
       .then((es) => {
         if (cancelled) return;
-        setEntries(es);
+        baseRef.current = es;
+        // Bản nháp còn dở (sửa chưa lưu, reload giữa chừng) → đắp lại.
+        const d = readDraft(videoId);
+        if (d && sameEntries(d.base, es) && !sameEntries(d.entries, es)) {
+          draftAppliedRef.current = true;
+          setEntries(d.entries);
+          setTimeout(() => recomputeTimelineIssues(d.entries), 0);
+          setRisksStale(true);
+        } else {
+          if (d) clearDraftStorage(videoId);
+          setEntries(es);
+        }
         setLoadError("");
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("timeline.loadError" as string));
+      });
+    // Reload-safety: nạp lại kết quả risk-check đã lưu để lỡ F5 sau khi check
+    // vẫn còn danh sách rủi ro (kèm cờ stale nếu SRT đã đổi từ lúc check).
+    getSrtRiskResult(videoId)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.risks?.length) {
+          setRisks(res.risks);
+          // Nháp đã đắp lên (đổi text so với bản đã check) → kết quả là cũ.
+          setRisksStale(!!res.stale || draftAppliedRef.current);
+        }
+      })
+      .catch(() => {
+        // chưa từng check hoặc backend chưa có file — bỏ qua
       });
     return () => {
       cancelled = true;
@@ -286,12 +417,21 @@ export default function TimelineCheckModal({
   }, [videoId]);
 
   const issueIndexes = useMemo(() => new Set(timelineIssues.map((i) => i.index)), [timelineIssues]);
-  const riskIndexes = useMemo(() => new Set(risks.map((r) => r.index)), [risks]);
+  const overlapIndexes = useMemo(
+    () => new Set(timelineIssues.filter((i) => i.type === "overlap").map((i) => i.index)),
+    [timelineIssues],
+  );
+  // Risk còn hiệu lực với entries HIỆN TẠI (verdict hết hạn tự rớt, khỏi đợi check lại).
+  const activeRisks = useMemo(
+    () => reconcileRisks(risks, entries, overlapIndexes),
+    [risks, entries, overlapIndexes],
+  );
+  const riskIndexes = useMemo(() => new Set(activeRisks.map((r) => r.index)), [activeRisks]);
   const riskByIndex = useMemo(() => {
     const m = new Map<number, SubtitleRisk>();
-    for (const r of risks) m.set(r.index, r);
+    for (const r of activeRisks) m.set(r.index, r);
     return m;
-  }, [risks]);
+  }, [activeRisks]);
 
   const effectiveDuration = useMemo(() => {
     if (duration > 0) return duration;
@@ -439,6 +579,27 @@ export default function TimelineCheckModal({
     });
   }, [recomputeTimelineIssues]);
 
+  // Ghi nháp mỗi khi entries lệch khỏi backend (debounce 500ms để không ghi
+  // từng phím gõ). Khớp lại backend → xoá nháp.
+  useEffect(() => {
+    if (entries.length === 0 || !baseRef.current) return;
+    if (sameEntries(entries, baseRef.current)) {
+      clearDraftStorage(videoId);
+      return;
+    }
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          DRAFT_PREFIX + videoId,
+          JSON.stringify({ base: baseRef.current, entries, savedAt: Date.now() }),
+        );
+      } catch {
+        // quota đầy / private mode — bỏ qua, reload sẽ mất nháp như cũ
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [entries, videoId]);
+
   const toggleOriginalText = useCallback(
     async (index: number) => {
       if (originalOpen[index]) {
@@ -490,6 +651,103 @@ export default function TimelineCheckModal({
     },
     [videoId, sourceLang, targetLang, patchEntry, entries]
   );
+
+  function cleanRetranslated(text: string): string {
+    const sanitized = text.includes("|") ? text.split("|").pop()!.trim() : text;
+    const finalText = sanitized.includes("-->") ? sanitized.split("-->").pop()!.trim() : sanitized;
+    return finalText || text;
+  }
+
+  // Fix tất cả rủi ro trong 1 lần bấm:
+  // - NOT_TRANSLATED → dịch lại từng dòng bằng Gemini (endpoint per-line, chạy
+  //   trên text đang hiển thị nên giữ được edit chưa lưu), gộp 1 lần setEntries.
+  // - TIMELINE_OVERLAP / ADJACENT_SIMILAR → lưu file rồi gọi backend fix
+  //   deterministic (dedup / fix-timeline / auto-fix-overlaps), reload lại.
+  const fixAllRisks = useCallback(async () => {
+    if (fixingAll || checking || saving || risks.length === 0) return;
+    setFixingAll(true);
+    setCheckError("");
+    try {
+      // Bỏ qua verdict đã hết hiệu lực với text hiện tại (vd dòng đã dịch
+      // xong) — khỏi tốn thêm call Gemini vô ích.
+      const overlapSet = new Set(
+        timelineIssues.filter((i) => i.type === "overlap").map((i) => i.index),
+      );
+      const snapshot = reconcileRisks(risks, entries, overlapSet);
+      if (snapshot.length === 0) return;
+      // ── 1) NOT_TRANSLATED (Gemini, giữ edit local) ──
+      const untranslated = snapshot.filter((r) => r.problems.includes("NOT_TRANSLATED"));
+      const fixed = new Map<number, string>();
+      const failed: number[] = [];
+      let firstError = "";
+      for (let i = 0; i < untranslated.length; i++) {
+        const r = untranslated[i];
+        setFixProgress(`${i + 1}/${untranslated.length}`);
+        const curText = entries.find((e) => e.index === r.index)?.text ?? r.text;
+        try {
+          const nt = await reTranslateLine(videoId, r.index, sourceLang, targetLang, curText);
+          const clean = cleanRetranslated(nt.trim());
+          if (clean) fixed.set(r.index, clean);
+          else failed.push(r.index);
+        } catch (e) {
+          failed.push(r.index);
+          if (!firstError) firstError = e instanceof Error ? e.message : String(e);
+        }
+        // Nghỉ giữa các dòng để không dội quota Gemini (14 call liên tiếp
+        // rất dễ ăn 429/503 dây chuyền như vụ risk-check tối nay).
+        if (i < untranslated.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+      if (fixed.size > 0) {
+        setEntries((prev) => {
+          const next = prev.map((e) => (fixed.has(e.index) ? { ...e, text: fixed.get(e.index)! } : e));
+          setTimeout(() => recomputeTimelineIssues(next), 0);
+          return next;
+        });
+      }
+      // ── 2) Cấu trúc (code, cần lưu file trước) ──
+      const needOverlap = snapshot.some((r) => r.problems.includes("TIMELINE_OVERLAP"));
+      const needSimilar = snapshot.some((r) => r.problems.includes("ADJACENT_SIMILAR"));
+      let structuralOk = true;
+      if (needOverlap || needSimilar) {
+        try {
+          const merged = entries.map((e) => (fixed.has(e.index) ? { ...e, text: fixed.get(e.index)! } : e));
+          await updateSrt(videoId, entriesToSrt(merged));
+          if (needSimilar) await dedupSrt(videoId);
+          if (needOverlap) await fixSrtTimeline(videoId);
+          await autoFixSrtOverlaps(videoId);
+          const fresh = await getSrtEntries(videoId);
+          baseRef.current = fresh;
+          setEntries(fresh);
+          recomputeTimelineIssues(fresh);
+        } catch (e) {
+          structuralOk = false;
+          setCheckError(e instanceof Error ? e.message : t("timeline.saveRecheckFailed" as string));
+        }
+      }
+      // ── 3) Dọn danh sách risk ──
+      if (structuralOk) {
+        setRisks((prev) =>
+          prev.filter((r) => r.problems.includes("NOT_TRANSLATED") && !fixed.has(r.index)),
+        );
+      } else {
+        setRisks((prev) => prev.filter((r) => !fixed.has(r.index)));
+      }
+      if (fixed.size > 0 || needOverlap || needSimilar) setRisksStale(true);
+      if (failed.length > 0) {
+        // Hiện luôn lỗi gốc (vd "503 high demand" vs "Backend không phản hồi")
+        // để biết là do Gemini hay do code — trước đây chỉ hiện đếm số dòng.
+        const reason = firstError ? ` · Lỗi: ${firstError.slice(0, 200)}` : "";
+        setCheckError(
+          t("timeline.fixAllPartial" as string, { done: String(fixed.size), failed: String(failed.length) }) + reason,
+        );
+      }
+    } finally {
+      setFixingAll(false);
+      setFixProgress("");
+    }
+  }, [fixingAll, checking, saving, risks, entries, timelineIssues, videoId, sourceLang, targetLang, recomputeTimelineIssues]);
 
   const deleteEntry = useCallback((index: number) => {
     setOriginalTexts((prev) => {
@@ -674,7 +932,11 @@ export default function TimelineCheckModal({
     setSaving(true);
     setCheckError("");
     try {
-      await updateSrt(videoId, entriesToSrt(entries));
+      const snapshot = entries;
+      await updateSrt(videoId, entriesToSrt(snapshot));
+      // Backend đã khớp snapshot → nháp hết tác dụng.
+      baseRef.current = snapshot;
+      clearDraftStorage(videoId);
       await performRiskCheck(ctrl.signal);
     } catch (e) {
       if ((e as DOMException)?.name === "AbortError") return;
@@ -689,6 +951,7 @@ export default function TimelineCheckModal({
     setSaving(true);
     try {
       await updateSrt(videoId, entriesToSrt(entries));
+      clearDraftStorage(videoId);
     } catch {
       // Continue anyway; the pipeline can re-check later.
     } finally {
@@ -735,6 +998,8 @@ export default function TimelineCheckModal({
     setRisksStale(false);
     try {
       const es = await getSrtEntries(videoId);
+      baseRef.current = es;
+      clearDraftStorage(videoId);
       setEntries(es);
       setRisks([]);
       const v = await validateSrtTimeline(videoId);
@@ -815,37 +1080,52 @@ export default function TimelineCheckModal({
           )}
 
           {risks.length > 0 && (
-            <div className={`rounded-xl ring-1 px-3.5 py-2.5 ${risksStale ? "bg-warn-muted/60 ring-warn/15" : "bg-warn-muted ring-warn/20"}`}>
+            <div className="rounded-xl ring-1 px-3.5 py-2.5 bg-warn-muted ring-warn/15">
               <div className="flex items-center gap-2 mb-1.5">
-                <p className="text-[12px] font-semibold text-amber-800">
-                  {t("timeline.risksFound" as string, { count: risks.length })}
+                <p className="text-[12px] font-semibold text-amber-300/90">
+                  {activeRisks.length > 0
+                    ? t("timeline.risksFound" as string, { count: activeRisks.length })
+                    : t("timeline.risksResolved" as string)}
                 </p>
                 {risksStale && (
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-warn/15 text-warn ring-1 ring-warn/20">
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-white/[0.06] text-ink-light ring-1 ring-white/[0.10]">
                     {t("timeline.staleRisks" as string) || "Đã chỉnh sửa — nhấn Kiểm tra lại"}
                   </span>
                 )}
+                {activeRisks.length > 0 && (
+                  <button
+                    onClick={fixAllRisks}
+                    disabled={fixingAll || checking || saving}
+                    className="ml-auto text-[10px] font-medium px-2.5 py-1 rounded-md bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait inline-flex items-center gap-1 flex-shrink-0"
+                    title={t("timeline.fixAll" as string)}
+                  >
+                    {fixingAll && <IconSpinner className="w-3 h-3" />}
+                    {fixingAll && fixProgress
+                      ? t("timeline.fixing" as string, { progress: fixProgress })
+                      : t("timeline.fixAll" as string)}
+                  </button>
+                )}
               </div>
               <ul className="space-y-1 max-h-28 overflow-y-auto">
-                {risks.map((r) => (
+                {activeRisks.map((r) => (
                   <li key={r.index}>
                     <button
                       onClick={() => {
                         const entry = entries.find((e) => e.index === r.index);
                         if (entry) selectEntry(entry.index, entry.start);
                       }}
-                      className="w-full text-left text-[12px] text-warn/90 leading-snug hover:bg-warn/15 rounded-md px-1.5 py-0.5 cursor-pointer transition-colors"
+                      className="w-full text-left text-[12px] leading-snug rounded-md px-1.5 py-0.5 cursor-pointer transition-colors text-amber-200/80 hover:bg-warn/10 hover:text-amber-100"
                       title={t("timeline.jumpToLine" as string)}
                     >
-                      <span className="font-mono text-warn">#{r.index}</span>{" "}
-                      <span className="text-amber-900/80">{r.text}</span>
+                      <span className="font-mono text-amber-300/90">#{r.index}</span>{" "}
+                      <span className="text-amber-100/85">{r.text}</span>
                       {r.problems.length > 0 && (
-                        <span className="text-warn/80">
+                        <span className="text-amber-200/60">
                           {" "}
                           · {r.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
                         </span>
                       )}
-                      {r.note && <span className="text-warn/60"> — {r.note}</span>}
+                      {r.note && <span className="text-amber-200/50"> — {r.note}</span>}
                     </button>
                   </li>
                 ))}

@@ -13,13 +13,15 @@ The result is saved to `temp/risk_check/{video_id}.json` and served back
 through `GET /api/srt/{video_id}/risk-check`.
 """
 
+import hashlib
 import json
 import logging
+import re
 import time
 
 from app.config import settings
 from app.services.media_utils import _srt_path, _srt_best_path
-from app.services.srt_utils import entries_to_srt, parse_srt
+from app.services.srt_utils import entries_to_srt, parse_srt, _texts_similar
 from app.services.gemini_array import build_numbered_payload
 from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
 from app.services.retry_utils import (
@@ -114,6 +116,73 @@ def _parse_json_array(text: str) -> list[dict]:
     return out
 
 
+def _entries_hash(entries) -> str:
+    """Hash of the subtitle TEXT sequence (timing ignored).
+
+    Text-level risks (NOT_TRANSLATED, ADJACENT_SIMILAR) depend only on this,
+    so an unchanged hash means the previous Gemini verdict is still valid and
+    the Gemini layer can be skipped — only timeline overlaps (timing) need a
+    fresh pass in code.
+    """
+    h = hashlib.sha1()
+    for e in entries:
+        h.update((e.text or "").strip().encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _load_cached_result(video_id: str) -> dict | None:
+    p = settings.temp_dir / "risk_check" / f"{video_id}.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+# Chữ Hán (Unified Ideographs + Ext A + Compat). Một dòng phụ đề đích (vi/en)
+# còn chứa ký tự này thì chắc chắn chưa dịch xong — định nghĩa khớp hệt
+# prompt Gemini ("it still contains Chinese characters") nên tính bằng code.
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002a6df]")
+
+
+def _check_untranslated_code(entries, lang: str = "vi") -> list[dict]:
+    """Deterministic NOT_TRANSLATED: line still contains Chinese characters."""
+    if (lang or "vi").lower() == "zh":
+        return []  # đích là tiếng Trung → chữ Hán là bình thường
+    risks: list[dict] = []
+    for e in entries:
+        if e.text and _CJK_RE.search(e.text):
+            risks.append({
+                "index": e.index,
+                "text": e.text,
+                "problems": ["NOT_TRANSLATED"],
+                "note": "Còn sót chữ Trung Quốc chưa dịch.",
+            })
+    return risks
+
+
+def _check_adjacent_similar_code(entries) -> list[dict]:
+    """Deterministic ADJACENT_SIMILAR: adjacent texts >=80% identical.
+
+    Cùng ngưỡng với dedup (`_texts_similar`) để gắn cờ và tự gộp luôn đồng
+    thuận với nhau.
+    """
+    risks: list[dict] = []
+    for k in range(1, len(entries)):
+        prev, cur = entries[k - 1], entries[k]
+        if _texts_similar(prev.text, cur.text):
+            risks.append({
+                "index": cur.index,
+                "text": cur.text,
+                "problems": ["ADJACENT_SIMILAR"],
+                "note": f"Nội dung rất giống dòng #{prev.index} liền trước, nên gộp lại.",
+            })
+    return risks
+
+
 def _check_timeline_overlaps(entries) -> list[dict]:
     """Deterministic TIMELINE_OVERLAP detection (prev.end vs cur.start)."""
     risks: list[dict] = []
@@ -132,8 +201,10 @@ def _check_timeline_overlaps(entries) -> list[dict]:
 def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[dict]:
     """Run the risk check over the current SRT of `video_id`.
 
-    `lang` is the language the subtitles are in (zh / en / vi); the Gemini part
-    checks text-level issues while timeline overlaps are computed in code.
+    `lang` is the language the subtitles are in (zh / en / vi). All three
+    risk types are first computed deterministically in code (overlap timing,
+    leftover CJK text, fuzzy-similar neighbours); Gemini then adds semantic
+    judgement on top (union, never subtracts).
 
     Returns a list of risky lines: {index, text, problems, note}.
     """
@@ -145,30 +216,78 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
     if not entries:
         raise ValueError("No subtitle entries found")
 
+    risks: list[dict] = []
+    by_risk_index: dict[int, dict] = {}
+
+    def _add(index: int, text: str, problems: list[str], note: str):
+        # Hợp nhất problems khi nhiều lớp cùng gắn cờ 1 dòng (vd vừa overlap
+        # timing vừa sót chữ Hán) thay vì rớt mất verdict của lớp sau.
+        r = by_risk_index.get(index)
+        if r is None:
+            r = {"index": index, "text": text, "problems": [], "note": ""}
+            by_risk_index[index] = r
+            risks.append(r)
+        for p in problems:
+            if p and p not in r["problems"]:
+                r["problems"].append(p)
+        if note and note not in r["note"]:
+            r["note"] = (r["note"] + " " + note).strip()
+
+    # ── Short-circuit: nội dung không đổi → tái dùng verdict Gemini cũ ──
+    # Hash bằng nhau nghĩa là dãy text y hệt (cùng số dòng, cùng thứ tự) nên
+    # index của risk cũ vẫn khớp. Chỉ tính lại overlap (timing) bằng code.
+    cur_hash = _entries_hash(entries)
+    cached = _load_cached_result(video_id)
+    if cached and cached.get("texts_hash") == cur_hash:
+        n_text = 0
+        by_index = {e.index: e for e in entries}
+        for r in cached.get("risks") or []:
+            problems = [p for p in (r.get("problems") or []) if p in ("NOT_TRANSLATED", "ADJACENT_SIMILAR")]
+            if not problems:
+                continue
+            entry = by_index.get(r.get("index"))
+            if entry is None:
+                continue
+            _add(entry.index, entry.text, problems, str(r.get("note") or ""))
+            n_text += 1
+        n_overlap = 0
+        for r in _check_timeline_overlaps(entries):
+            _add(r["index"], r["text"], r["problems"], r["note"])
+            n_overlap += 1
+        msg = (
+            f"Nội dung không đổi — bỏ qua Gemini, dùng lại {n_text} rủi ro text cũ "
+            f"+ kiểm tra lại {n_overlap} overlap timeline."
+        )
+        logger.info("Risk-check cache hit for %s: %s", video_id, msg)
+        if log_fn:
+            log_fn(msg)
+        return risks
+
     if not configured_gemini_keys():
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
-    risks: list[dict] = []
-    seen_indexes: set[int] = set()
-
-    def _add(index: int, text: str, problems: list[str], note: str):
-        if index in seen_indexes:
-            return
-        seen_indexes.add(index)
-        risks.append({
-            "index": index,
-            "text": text,
-            "problems": problems,
-            "note": note,
-        })
-
-    # ── Layer 1: timeline overlaps, computed exactly in code ──
+    # ── Layer 1: code định đoạt (không phụ thuộc Gemini) ──
+    # Overlap timing + sót chữ Hán + kề nhau giống nhau đều tính được chính
+    # xác bằng code; Gemini ở layer 2 chỉ bổ sung nhận định ngữ nghĩa.
+    # Nhờ vậy đuôi batch có bị model bỏ sót (vd #115-119) thì code vẫn bắt.
     n_overlap = 0
     for r in _check_timeline_overlaps(entries):
         _add(r["index"], r["text"], r["problems"], r["note"])
         n_overlap += 1
     if n_overlap:
         logger.info("Risk-check: %d TIMELINE_OVERLAP detected in code", n_overlap)
+    n_untranslated = 0
+    for r in _check_untranslated_code(entries, lang):
+        _add(r["index"], r["text"], r["problems"], r["note"])
+        n_untranslated += 1
+    if n_untranslated:
+        logger.info("Risk-check: %d NOT_TRANSLATED detected in code", n_untranslated)
+    n_similar = 0
+    for r in _check_adjacent_similar_code(entries):
+        _add(r["index"], r["text"], r["problems"], r["note"])
+        n_similar += 1
+    if n_similar:
+        logger.info("Risk-check: %d ADJACENT_SIMILAR detected in code", n_similar)
 
     # ── Layer 2: text-level risks via Gemini (numbered lines, no timeline) ──
     prompt, system_instruction = _build_risk_check_prompt(lang)
@@ -257,7 +376,12 @@ def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_i
 
         out_dir = settings.temp_dir / "risk_check"
         out_dir.mkdir(parents=True, exist_ok=True)
-        result = {"risks": risks, "checked_at": time.time()}
+        try:
+            saved_entries = parse_srt(_srt_best_path(video_id).read_text(encoding="utf-8"))
+            texts_hash = _entries_hash(saved_entries)
+        except Exception:
+            texts_hash = ""
+        result = {"risks": risks, "checked_at": time.time(), "texts_hash": texts_hash}
         (out_dir / f"{video_id}.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2),
             encoding="utf-8",
