@@ -64,6 +64,8 @@ def enqueue_job(
     start_time: float | None = None,
     end_time: float | None = None,
     color_filter: dict | None = None,
+    fill_gaps: bool = False,
+    stt_language: str | None = None,
 ) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -77,6 +79,8 @@ def enqueue_job(
         "start_time": start_time,
         "end_time": end_time,
         "color_filter": color_filter,
+        "fill_gaps": fill_gaps,
+        "stt_language": stt_language,
         "job_type": "ocr",
         "status": "queued",
         "phase": "",
@@ -377,9 +381,60 @@ def process_job_sync(
         "info",
     )
 
+    # ── STT gap-fill: lấp chỗ thiếu sub bằng audio ──────────────────────
+    fill_gaps_flag = bool(job.get("fill_gaps"))
+    if fill_gaps_flag and settings.stt_enabled:
+        try:
+            from app.services.stt_gap_filler import fill_gaps
+            from app.services.media_utils import _get_duration
+
+            def stt_log(msg: str, level: str = "info"):
+                job_log(job, ws_clients, loop, msg, level)
+
+            duration = _get_duration(video_path)
+            # Nếu có start_time/end_time thì clamp duration theo job window
+            eff_end = job.get("end_time") or duration
+            eff_start = job.get("start_time") or 0.0
+            # fill_gaps expects absolute timeline; if job is windowed, pass windowed duration
+            stt_lang = job.get("stt_language") or (settings.stt_language or None)
+            # Nếu không chỉ định STT language, suy ra từ ocr lang (ch→zh, en→en, latin→vi)
+            if not stt_lang:
+                ocr_l = (job.get("lang") or "").lower()
+                if ocr_l == "ch":
+                    stt_lang = "zh"
+                elif ocr_l == "en":
+                    stt_lang = "en"
+                elif ocr_l in ("latin", "vi"):
+                    stt_lang = "vi"
+            job["phase"] = "stt_fill"
+            _notify_sync(loop, ws_clients, job_id, {"type": "progress", "progress": 95, "phase": "stt_fill"})
+            stt_log("Đang kiểm tra chỗ thiếu sub bằng audio STT...")
+
+            # Clamp entries to window if needed (already windowed by stream_frames_generator)
+            vid = job.get("video_id")
+            combined = fill_gaps(
+                video_path, entries, eff_end,  # duration = window end
+                min_gap=settings.stt_min_gap,
+                language=stt_lang,
+                model_name=settings.stt_model,
+                no_speech_threshold=settings.stt_no_speech_threshold,
+                log_fn=stt_log,
+                start_offset=eff_start,
+                video_id=vid,
+            )
+            # If fill_gaps added entries, re-sort already done inside fill_gaps
+            if len(combined) != len(entries):
+                stt_log(f"Đã lấp thêm {len(combined)-len(entries)} dòng từ audio.", level="success")
+            entries = combined
+        except Exception as e:
+            logger.warning("STT gap-fill failed (non-fatal): %s", e, exc_info=True)
+            job_log(job, ws_clients, loop, f"STT gap-fill bỏ qua (lỗi): {e}", level="warning")
+    elif fill_gaps_flag and not settings.stt_enabled:
+        job_log(job, ws_clients, loop, "STT gap-fill bị tắt ở server (STE_stt_enabled=false) — bỏ qua.", level="warning")
+
     srt_content = format_srt(entries)
     t2 = time.time()
-    logger.info("job %s: OCR done in %.1fs", job_id, t2 - t0)
+    logger.info("job %s: OCR done in %.1fs (entries=%d)", job_id, t2 - t0, len(entries))
     return srt_content
 
 

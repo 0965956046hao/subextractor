@@ -24,6 +24,7 @@ function collectCurrentConfig(p: Pipeline): Record<string, unknown> {
     removeWatermarkEnabled: p.removeWatermarkEnabled,
     checkSubs: p.checkSubs,
     checkVoice: p.checkVoice,
+    fillGaps: p.fillGaps,
     useFalThumbnail: p.useFalThumbnail,
     useGptThumbnail: p.useGptThumbnail,
     useGeminiThumbnail: p.useGeminiThumbnail,

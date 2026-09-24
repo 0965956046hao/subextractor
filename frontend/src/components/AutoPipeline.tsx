@@ -339,6 +339,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [removeWmRegions, setRemoveWmRegions] = useState<Region[]>([]);
   const [checkSubs, setCheckSubs] = useState(false);
   const [checkVoice, setCheckVoice] = useState(false);
+  const [fillGaps, setFillGaps] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
   const [capcutVoices, setCapcutVoices] = useState<CapCutVoice[]>([]);
@@ -707,6 +708,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       setRemoveWmEnabled(cfg.removeWatermarkEnabled);
     if (typeof cfg.checkSubs === "boolean") setCheckSubs(cfg.checkSubs);
     if (typeof cfg.checkVoice === "boolean") setCheckVoice(cfg.checkVoice);
+    if (typeof cfg.fillGaps === "boolean") setFillGaps(cfg.fillGaps);
     if (typeof cfg.useFalThumbnail === "boolean")
       setUseFalThumbnail(cfg.useFalThumbnail);
     if (typeof cfg.useGptThumbnail === "boolean")
@@ -754,6 +756,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       if (typeof s.removeWatermarkEnabled === "boolean") setRemoveWmEnabled(s.removeWatermarkEnabled);
       if (typeof s.checkSubs === "boolean") setCheckSubs(s.checkSubs);
       if (typeof s.checkVoice === "boolean") setCheckVoice(s.checkVoice);
+      if (typeof s.fillGaps === "boolean") setFillGaps(s.fillGaps as boolean);
       if (typeof s.useFalThumbnail === "boolean") setUseFalThumbnail(s.useFalThumbnail);
       if (typeof s.useGptThumbnail === "boolean") setUseGptThumbnail(s.useGptThumbnail);
       if (typeof s.useGeminiThumbnail === "boolean") setUseGeminiThumbnail(s.useGeminiThumbnail);
@@ -779,7 +782,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         srcLang, regionMode, translateOn, translateTarget, dubOn,
         dubEngine, voiceLang, dubVoice, muteOriginal, keepOriginalEnabled,
         originalGainDb, multiVoice, autoFitSubs, watermarkOn, watermarkPreset,
-        removeWatermarkEnabled: removeWmEnabled, checkSubs, checkVoice,
+        removeWatermarkEnabled: removeWmEnabled, checkSubs, checkVoice, fillGaps,
         useFalThumbnail, useGptThumbnail, useGeminiThumbnail, autoUploadYoutube,
         youtubeChannel: ytChannel, youtubePlaylist: ytPlaylist,
       };
@@ -907,6 +910,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       presetSeed?.colorFilter ?? null,
       playbackSpeed,
       useGeminiThumbnail,
+      fillGaps,
     );
     setUrl("");
     setSelectedId(id);
@@ -972,6 +976,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       colorFilter: presetSeed?.colorFilter ?? null,
       playbackSpeed,
       useGeminiThumbnail,
+      fillGaps,
     });
     setUploaded(null);
     setSelectedId(id);
@@ -1968,6 +1973,27 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       >
                         <span
                           className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${checkVoice ? "left-[22px]" : "left-0.5"
+                            }`}
+                        />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 mt-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                          Lấp chỗ thiếu sub (STT)
+                        </p>
+                        <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                          Khi có thoại nhưng sub cứng bị thiếu, dùng audio STT để tự lấp gap rồi dịch luôn (local, tốn thêm ~10-20s)
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFillGaps(!fillGaps)}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${fillGaps ? "bg-accent" : "bg-black/10"
+                          }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-300 ${fillGaps ? "left-[22px]" : "left-0.5"
                             }`}
                         />
                       </button>

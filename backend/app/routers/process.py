@@ -43,6 +43,8 @@ async def start_processing(
         start_time=req.start_time,
         end_time=req.end_time,
         color_filter=color_filter,
+        fill_gaps=req.fill_gaps,
+        stt_language=req.stt_language,
     )
     await job_queue.put(job["job_id"])
     return JobStatus(

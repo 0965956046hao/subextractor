@@ -28,6 +28,8 @@ class ProcessRequest(BaseModel):
     start_time: float | None = None  # Skip frames before this timestamp (seconds)
     end_time: float | None = None    # Stop at this timestamp (seconds)
     color_filter: ColorFilter | None = None
+    fill_gaps: bool = False  # bật STT lấp gap thiếu sub
+    stt_language: str | None = None  # override STT language (None = auto)
 
 
 class LogEntry(BaseModel):

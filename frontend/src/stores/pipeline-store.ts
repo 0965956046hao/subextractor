@@ -178,6 +178,7 @@ export interface Pipeline {
   checkSubs: boolean;
   checkVoice: boolean;
   colorFilter: ColorFilter | null;
+  fillGaps: boolean;
   playbackSpeed: number;
   timelineCheck: TimelineCheck | null;
   voiceCheck: VoiceCheck | null;
@@ -275,6 +276,7 @@ interface PipelineState {
     colorFilter?: ColorFilter | null,
     playbackSpeed?: number,
     useGeminiThumbnail?: boolean,
+    fillGaps?: boolean,
   ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
@@ -303,6 +305,7 @@ interface PipelineState {
     colorFilter?: ColorFilter | null;
     playbackSpeed?: number;
     useGeminiThumbnail?: boolean;
+    fillGaps?: boolean;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -367,6 +370,7 @@ function newPipeline(
   colorFilter: ColorFilter | null = null,
   playbackSpeed = 1.0,
   useGeminiThumbnail = false,
+  fillGaps = false,
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -421,6 +425,7 @@ function newPipeline(
     checkSubs,
     checkVoice,
     colorFilter,
+    fillGaps,
     playbackSpeed,
     timelineCheck: null,
     voiceCheck: null,
@@ -482,6 +487,7 @@ export const usePipelineStore = create<PipelineState>()(
         colorFilter = null,
         playbackSpeed = 1.0,
         useGeminiThumbnail = false,
+        fillGaps = false,
       ) => {
         const id = Math.random().toString(36).slice(2, 10);
         set((s) => ({
@@ -514,6 +520,7 @@ export const usePipelineStore = create<PipelineState>()(
               colorFilter,
               playbackSpeed,
               useGeminiThumbnail,
+              fillGaps,
             ),
           ],
         }));
@@ -550,6 +557,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.colorFilter ?? null,
           input.playbackSpeed ?? 1.0,
           input.useGeminiThumbnail ?? false,
+          input.fillGaps ?? false,
         );
         // Uploaded file is already registered on the backend: skip resolve + merge
         // and start directly at region selection (step 2).
@@ -2456,6 +2464,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             ...(cur.colorFilter?.enabled
               ? { color_filter: cur.colorFilter }
               : {}),
+            ...(cur.fillGaps ? { fill_gaps: true } : {}),
           }),
         });
         let pd: Record<string, unknown> = {};

@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     capcut_tts_default_rate: str = "1.0"
     capcut_tts_timeout: int = 600
 
+    # STT gap-fill (local faster-whisper): lấp chỗ thiếu sub bằng audio
+    stt_enabled: bool = True  # global switch; per-job fill_gaps must also be true
+    stt_model: str = "small"  # tiny/small/medium
+    stt_min_gap: float = 0.5  # gap tối thiểu (giây) mới xét STT
+    stt_no_speech_threshold: float = 0.6
+    stt_language: str = ""  # "" = auto, hoặc "zh"/"en"/"vi"
+
     # Parallel Range download (video/audio merge)
     parallel_download_enabled: bool = True
     parallel_download_min_size: int = 0  # 0 = luôn tách 4 luồng khi CDN hỗ trợ Range
