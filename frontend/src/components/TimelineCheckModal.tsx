@@ -20,8 +20,13 @@ import type {
   SrtEntry,
   TimelineIssue,
   SubtitleRisk,
+  SubtitleStyle,
+  Region,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { usePipelineStore, DEFAULT_REGION } from "@/stores/pipeline-store";
+import WatermarkRegionSelector from "@/components/WatermarkRegionSelector";
+import SubtitlePreview from "@/components/SubtitlePreview";
 
 const ROW_H = 52;
 const MIN_DURATION = 0.5;
@@ -365,6 +370,17 @@ export default function TimelineCheckModal({
   const [loadingOriginalIndex, setLoadingOriginalIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  // Chọn lại vùng watermark: picker → encode delogo lại (không đụng SRT/runner).
+  const [wmSelectOpen, setWmSelectOpen] = useState(false);
+  const [wmEncoding, setWmEncoding] = useState(false);
+  const [wmProgress, setWmProgress] = useState(0);
+  const [wmDone, setWmDone] = useState(false);
+  const [wmError, setWmError] = useState("");
+  // Editor vị trí sub: cùng "workbench" với sửa nội dung sub + watermark.
+  const [styleEditOpen, setStyleEditOpen] = useState(false);
+
+  const findPipe = () =>
+    usePipelineStore.getState().pipelines.find((p) => p.videoId === videoId);
   const riskAbortRef = useRef<AbortController | null>(null);
   // Nội dung backend đã biết (lần load/save gần nhất) — dùng để đối chiếu draft.
   const baseRef = useRef<SrtEntry[] | null>(null);
@@ -567,8 +583,10 @@ export default function TimelineCheckModal({
       if (i > 0 && e.start < sorted[i - 1].start) issues.push({ index: e.index, type: "out_of_order", message: `Out of order #${e.index}`, start: e.start, end: e.end, prev_index: sorted[i - 1].index });
     }
     setTimelineIssues(issues);
-    // Vừa validate xong (local) → đánh dấu đã kiểm tra để header hiện trạng thái.
-    setTimelineChecked(true);
+    // KHÔNG set timelineChecked ở đây: đây chỉ là tính lại thầm lặng khi sửa
+    // dòng/restore nháp/fix — chữ "Không có lỗi" chỉ được hiện sau khi user
+    // bấm nút check (runRiskCheck/saveAndRecheck) hoặc Khôi phục (có validate
+    // backend). Tránh "chứng nhận sạch" khi chưa ai bấm kiểm tra.
     // Content/timing changed → mark risks as stale but keep them visible
     // so the user doesn't lose trace while editing. Will be refreshed on next risk check.
     setRisksStale(true);
@@ -1018,6 +1036,39 @@ export default function TimelineCheckModal({
 
   const activeRisk = riskByIndex.get(activeIndex);
 
+  // Chọn lại vùng watermark rồi encode delogo lại từ video gốc (không đụng
+  // SRT/runner — pipeline đang chờ duyệt cứ chờ, hardcode sau dùng bản mới).
+  const handleWmConfirm = async (regions: Region[]) => {
+    setWmSelectOpen(false);
+    if (regions.length === 0) return;
+    const st = usePipelineStore.getState();
+    const pipe = findPipe();
+    if (!pipe) {
+      setWmError(t("timeline.wmNoPipeline" as string));
+      return;
+    }
+    st.updatePipeline(pipe.id, {
+      removeWatermarkRegions: regions,
+      removeWatermarkEnabled: true,
+    });
+    setWmError("");
+    setWmDone(false);
+    setWmProgress(0);
+    setWmEncoding(true);
+    const ok = await st.redelogoWatermark(pipe.id, (pct) => setWmProgress(pct));
+    setWmEncoding(false);
+    if (ok) setWmDone(true);
+    else setWmError(t("timeline.wmDelogoFailed" as string));
+  };
+
+  // Sửa vị trí sub tại chỗ: lưu thẳng vào store, hardcode sau dùng style mới.
+  const handleStyleConfirm = (style: Partial<SubtitleStyle>) => {
+    const st = usePipelineStore.getState();
+    const pipe = findPipe();
+    if (pipe) st.updateSubtitleStyle(pipe.id, style);
+    setStyleEditOpen(false);
+  };
+
   if (!mounted) return null;
 
   return createPortal(
@@ -1069,6 +1120,42 @@ export default function TimelineCheckModal({
               >
                 {checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
                 {checking ? t("timeline.checking" as string) : t("timeline.checkRisk" as string)}
+              </button>
+              <button
+                onClick={() => {
+                  setWmError("");
+                  setWmDone(false);
+                  setWmSelectOpen(true);
+                }}
+                disabled={checking || saving || wmEncoding}
+                title={t("timeline.wmReselectTitle" as string)}
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-white/[0.06] ring-1 ring-white/[0.10] text-ink hover:bg-white/[0.12] transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                {wmEncoding ? (
+                  <IconSpinner className="w-3.5 h-3.5" />
+                ) : (
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M3 9h18" />
+                    <path d="M9 21V9" />
+                  </svg>
+                )}
+                {wmEncoding
+                  ? t("timeline.wmEncoding" as string, { progress: Math.round(wmProgress) })
+                  : t("timeline.wmReselect" as string)}
+              </button>
+              <button
+                onClick={() => setStyleEditOpen(true)}
+                disabled={checking || saving || wmEncoding}
+                title={t("pipeline.timelineCheckEditStyle" as string)}
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-white/[0.06] ring-1 ring-white/[0.10] text-ink hover:bg-white/[0.12] transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 7V5h16v2" />
+                  <path d="M12 5v14" />
+                  <path d="M9 19h6" />
+                </svg>
+                {t("pipeline.timelineCheckEditStyle" as string)}
               </button>
               <button
                 onClick={onClose}
@@ -1559,6 +1646,121 @@ export default function TimelineCheckModal({
           onAdd={addEntry}
           onClose={() => setShowAddModal(false)}
         />
+      )}
+
+      {styleEditOpen && (() => {
+        const pipe = findPipe();
+        if (!pipe) return null;
+        return (
+          <div className="fixed inset-0 z-[110] overflow-y-auto bg-black/50 backdrop-blur-sm p-4">
+            <div className="min-h-full flex items-center justify-center py-6">
+              <div
+                className="double-bezel w-full max-w-3xl"
+                onClick={(e) => e.stopPropagation()}
+                style={{ animation: "scale-in 0.25s cubic-bezier(0.32,0.72,0,1) forwards" }}
+              >
+                <div className="double-bezel-inner p-5 sm:p-6">
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <p className="text-sm font-semibold text-ink">
+                      {t("pipeline.timelineCheckEditStyle" as string)}
+                    </p>
+                    <button
+                      onClick={() => setStyleEditOpen(false)}
+                      className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-ink-light hover:text-ink hover:bg-white/[0.08] transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                  <SubtitlePreview
+                    videoId={videoId}
+                    region={pipe.region ?? DEFAULT_REGION}
+                    initial={pipe.subtitleStyle}
+                    onConfirmed={handleStyleConfirm}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {wmSelectOpen && (
+        <div className="fixed inset-0 z-[110] overflow-y-auto bg-black/50 backdrop-blur-sm p-4">
+          <div className="min-h-full flex items-center justify-center py-6">
+            <div
+              className="double-bezel w-full max-w-3xl"
+              onClick={(e) => e.stopPropagation()}
+              style={{ animation: "scale-in 0.25s cubic-bezier(0.32,0.72,0,1) forwards" }}
+            >
+              <div className="double-bezel-inner p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <p className="text-sm font-semibold text-ink">
+                    {t("timeline.wmSelectTitle" as string)}
+                  </p>
+                  <button
+                    onClick={() => setWmSelectOpen(false)}
+                    className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-ink-light hover:text-ink hover:bg-white/[0.08] transition-colors cursor-pointer"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+                <WatermarkRegionSelector videoId={videoId} onConfirm={handleWmConfirm} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(wmEncoding || wmDone || wmError) && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div
+            className="double-bezel w-full max-w-sm"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: "scale-in 0.25s cubic-bezier(0.32,0.72,0,1) forwards" }}
+          >
+            <div className="double-bezel-inner p-5 space-y-3">
+              <p className="text-sm font-semibold text-ink">
+                {wmError
+                  ? t("timeline.wmDelogoFailed" as string)
+                  : wmDone
+                    ? t("timeline.wmDoneTitle" as string)
+                    : t("timeline.wmEncodingTitle" as string)}
+              </p>
+              {wmEncoding && (
+                <div className="h-2 rounded-full bg-white/[0.08] overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-accent transition-all duration-500"
+                    style={{ width: `${Math.max(Math.round(wmProgress), 2)}%` }}
+                  />
+                </div>
+              )}
+              <p className="text-[12px] text-ink-muted leading-relaxed">
+                {wmError
+                  ? wmError
+                  : wmDone
+                    ? t("timeline.wmDoneDesc" as string)
+                    : t("timeline.wmEncodingDesc" as string, { progress: Math.round(wmProgress) })}
+              </p>
+              {!wmEncoding && (
+                <div className="flex items-center justify-end">
+                  <button
+                    onClick={() => {
+                      setWmDone(false);
+                      setWmError("");
+                    }}
+                    className="btn-island-secondary btn-sm"
+                  >
+                    {t("timeline.close" as string)}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>,
     document.body

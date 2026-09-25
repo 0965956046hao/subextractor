@@ -109,6 +109,21 @@ export const DEFAULT_REGION: Region = {
   y2: 0.972,
 };
 
+/** Các stage cho phép bấm "Tạm dừng" khi pipeline đang chạy: các phase chạy
+ *  backend job có thể cancel/redo được. Loại trừ: prep tương tác (chọn vùng/
+ *  style/watermark — đã là chờ tay), thumbnail_review/voiceCheck/timeline
+ *  (modal chờ duyệt), youtube (upload không cancel được, up lại từ đầu). */
+export const PAUSABLE_STAGES: Stage[] = [
+  "processing",
+  "context",
+  "translating",
+  "saving",
+  "dub",
+  "muxing",
+  "meta",
+  "thumbnail",
+];
+
 export interface LogEntry {
   message: string;
   ts: number;
@@ -128,7 +143,7 @@ export interface Pipeline {
   thumbnail: string | null;
   bigThumbs: string[];
   updatedThumbnailUrl: string | null;
-  status: "queued" | "running" | "done" | "error";
+  status: "queued" | "running" | "paused" | "done" | "error";
   stage: Stage;
   progress: number;
   stepProgress: (number | null)[];
@@ -183,6 +198,9 @@ export interface Pipeline {
   timelineCheck: TimelineCheck | null;
   voiceCheck: VoiceCheck | null;
   resumeStep: number | null;
+  /** User đã bấm "chờ xong bước hiện tại rồi tạm dừng" — runner sẽ dừng ở
+   *  ranh giới step kế tiếp. Reactive (hiện banner "sẽ tạm dừng..."). */
+  pauseRequested: boolean;
   needChatgptLogin: boolean;
   needGeminiLogin: boolean;
   thumbnailReview: {
@@ -203,6 +221,8 @@ export type ThumbnailFallbackChoice = "fal" | "gpt" | "gemini" | "retry" | "skip
 export interface TimelineCheck {
   waiting: boolean;
   open: boolean;
+  /** User tạm thu gọn popup chờ duyệt (pipeline vẫn pause, không resolve). */
+  dismissed: boolean;
   issues: TimelineIssue[];
   fixing: boolean;
 }
@@ -313,9 +333,20 @@ interface PipelineState {
   removePipeline: (id: string) => void;
   clearFinished: () => void;
   rerunPipeline: (id: string, step: number) => void;
+  /** Chạy lại delogo với vùng watermark mới (vd từ bước kiểm tra phụ đề).
+   *  Không đụng runner/queue/status — pipeline đang chờ duyệt cứ chờ.
+   *  Trả về true khi delogo.mp4 mới xong. */
+  redelogoWatermark: (id: string, onProgress?: (pct: number) => void) => Promise<boolean>;
   confirmRegion: (id: string, region: Region, colorFilter?: ColorFilter | null) => void;
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
+  /** Tạm dừng: "cancel" = hủy bước hiện tại (abort backend) và dừng ngay;
+   *  "wait" = chờ xong bước hiện tại rồi dừng ở ranh giới step. */
+  requestPause: (id: string, mode: "cancel" | "wait") => void;
+  /** Chạy tiếp pipeline đang paused từ resumeStep. */
+  resumePipeline: (id: string) => void;
+  /** Rút lại yêu cầu "chờ xong bước rồi dừng". */
+  cancelPauseRequest: (id: string) => void;
   hydrate: (pipelines: Pipeline[]) => void;
   /** Merge finished pipelines (done/error) from a backend snapshot without
    *  touching running/queued ones that are being tracked live in memory. */
@@ -323,6 +354,13 @@ interface PipelineState {
   resolveTimelineCheck: (id: string, action: "fix" | "continue") => void;
   openTimelineCheck: (id: string) => void;
   closeTimelineCheck: (id: string) => void;
+  /** Thu gọn popup chờ duyệt (pipeline vẫn pause) để thao tác việc khác. */
+  dismissTimelineCheck: (id: string) => void;
+  /** Mở lại popup chờ duyệt đã thu gọn. */
+  reopenTimelineCheck: (id: string) => void;
+  /** Cập nhật vị trí/kiểu sub giữa chừng (vd khi đang chờ duyệt timeline).
+   *  Chỉ patch store — không resolve waiter, hardcode sau này đọc style mới. */
+  updateSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   resolveVoiceCheck: (id: string, action: string) => void;
   openVoiceCheck: (id: string) => void;
   closeVoiceCheck: (id: string) => void;
@@ -430,6 +468,7 @@ function newPipeline(
     timelineCheck: null,
     voiceCheck: null,
     resumeStep: null,
+    pauseRequested: false,
     needChatgptLogin: false,
     needGeminiLogin: false,
     thumbnailReview: null,
@@ -637,6 +676,7 @@ export const usePipelineStore = create<PipelineState>()(
           p.timelineCheck = {
             waiting: true,
             open: !!tc.open,
+            dismissed: false,
             issues: tc.issues ?? [],
             fixing: !!tc.fixing,
           };
@@ -697,11 +737,112 @@ export const usePipelineStore = create<PipelineState>()(
         schedulePersist();
       },
       rerunPipeline: (id, step) => {
+        // Không chạy lại khi pipeline còn runner sống — runner chồng nhau sẽ
+        // fast-forward qua các bước cache và upload YouTube 2 lần cùng 1 file.
+        if (liveRunners.has(id) || queue.some((q) => q.id === id)) {
+          appendLog(id, "Pipeline đang chạy — không thể chạy lại khi chưa xong.");
+          return;
+        }
         if (step <= 3) {
           runPrep(id, step);
         } else {
           enqueue(id, step, true);
         }
+      },
+      redelogoWatermark: async (id, onProgress) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        const videoId = s?.videoId;
+        const regions = s?.removeWatermarkRegions ?? [];
+        if (!s || !videoId || regions.length === 0) return false;
+        markStepStart(id, 5);
+        appendLog(id, `[wm] Xoá lại watermark với ${regions.length} vùng mới...`);
+        let failed = false;
+        try {
+          const res = await fetch(`/api/delogo/${videoId}`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ regions }),
+          });
+          if (!res.ok) {
+            let errMsg = `HTTP ${res.status}`;
+            try {
+              const eb = await res.json();
+              errMsg = (eb as any).detail || errMsg;
+            } catch {
+              errMsg = (await res.text().catch(() => "")).slice(0, 500) || errMsg;
+            }
+            appendLog(id, `[wm] Lỗi HTTP ${res.status}: ${errMsg}`);
+            failed = true;
+          } else {
+            const reader = res.body?.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let done = false;
+            if (reader) {
+              while (!done) {
+                const { done: rDone, value } = await reader.read();
+                if (rDone) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+                for (const line of lines) {
+                  if (!line.startsWith("data: ")) continue;
+                  try {
+                    const evt = JSON.parse(line.slice(6));
+                    if (evt.type === "log") {
+                      appendLog(id, `[wm] ${evt.message}`);
+                    } else if (evt.type === "progress") {
+                      onProgress?.(evt.pct ?? 0);
+                      setStepProgress(id, 5, evt.pct ?? 0);
+                      recalcOverall(id);
+                    } else if (evt.type === "error") {
+                      appendLog(id, `[wm] LỖI: ${evt.message}`);
+                      failed = true;
+                      done = true;
+                    } else if (evt.type === "done") {
+                      appendLog(id, "[wm] Xoá lại watermark xong.");
+                      onProgress?.(100);
+                      setStepProgress(id, 5, 100);
+                      recalcOverall(id);
+                      done = true;
+                    }
+                  } catch {
+                    // skip malformed lines
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          appendLog(id, `[wm] Luồng SSE delogo bị ngắt — đang xác nhận kết quả...`);
+          failed = true;
+        }
+        // Phục hồi như bước delogo chính: stream ngắt nhưng ffmpeg có thể đã xong.
+        if (failed) {
+          try {
+            for (let attempt = 0; attempt < 45 && failed; attempt++) {
+              await new Promise((r) => setTimeout(r, 2000));
+              const st = await fetch(`/api/delogo/${videoId}/status`);
+              if (st.ok) {
+                const sd = await st.json();
+                if (sd.exists && sd.valid) {
+                  failed = false;
+                  appendLog(id, "[wm] delogo.mp4 đã hoàn tất (xác nhận qua status).");
+                  onProgress?.(100);
+                  break;
+                }
+              }
+            }
+          } catch {
+            // ignore — giữ failed
+          }
+        }
+        if (failed) {
+          appendLog(id, "[wm] Xoá lại watermark thất bại.", "error");
+          return false;
+        }
+        markStepEnd(id, 5);
+        return true;
       },
       confirmRegion: (id, region, colorFilter) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -834,6 +975,8 @@ export const usePipelineStore = create<PipelineState>()(
         if (!s) return;
         const videoId = s.videoId;
         abortedPipelines.add(id);
+        pauseAfterStep.delete(id);
+        pausePendingCancel.delete(id);
         set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
         rejectRegion(id);
         rejectSubtitleStyle(id);
@@ -849,6 +992,56 @@ export const usePipelineStore = create<PipelineState>()(
             // ignore
           }
         }
+      },
+      requestPause: async (id, mode) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        // Đang xếp hàng chưa chạy: gỡ khỏi queue và pause luôn, không cần popup.
+        if (s.status === "queued") {
+          const qi = queue.findIndex((q) => q.id === id);
+          const startStep = qi >= 0 ? queue[qi].startStep : (s.resumeStep ?? 4);
+          if (qi >= 0) queue.splice(qi, 1);
+          patch(id, { status: "paused", resumeStep: startStep, pauseRequested: false });
+          appendLog(id, "Đã tạm dừng khi đang xếp hàng. Bấm Tiếp tục để chạy.");
+          reportPipeline(id, true);
+          return;
+        }
+        if (s.status !== "running") return;
+        if (mode === "wait") {
+          pauseAfterStep.add(id);
+          patch(id, { pauseRequested: true });
+          appendLog(id, "Sẽ tạm dừng sau khi xong bước hiện tại.");
+          return;
+        }
+        // mode === "cancel": hủy job backend của video này, runner rẽ vào
+        // catch và chuyển sang paused (xem catch của runPipeline).
+        pausePendingCancel.add(id);
+        patch(id, { pauseRequested: false });
+        appendLog(id, "Đang hủy bước hiện tại để tạm dừng...");
+        if (s.videoId) {
+          try {
+            await fetch(`/api/video/${s.videoId}/abort`, { method: "POST" });
+          } catch {
+            // Backend không phản hồi — runner sẽ pause ở ranh giới step kế
+            // tiếp nhờ checkPausePoint (pausePendingCancel vẫn còn).
+          }
+        }
+      },
+      resumePipeline: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || s.status !== "paused") return;
+        pauseAfterStep.delete(id);
+        pausePendingCancel.delete(id);
+        patch(id, { status: "queued", pauseRequested: false });
+        appendLog(id, "Tiếp tục pipeline từ bước đã dừng.");
+        enqueue(id, s.resumeStep ?? 4);
+      },
+      cancelPauseRequest: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        pauseAfterStep.delete(id);
+        patch(id, { pauseRequested: false });
+        appendLog(id, "Đã hủy yêu cầu tạm dừng — pipeline chạy tiếp bình thường.");
       },
       hydrate: (pipelines) => set({ pipelines }),
       hydrateFinished: (list) =>
@@ -934,7 +1127,7 @@ export const usePipelineStore = create<PipelineState>()(
       openTimelineCheck: (id) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s || !s.timelineCheck?.waiting || s.timelineCheck.open) return;
-        patch(id, { timelineCheck: { ...s.timelineCheck, open: true } });
+        patch(id, { timelineCheck: { ...s.timelineCheck, open: true, dismissed: false } });
         if (s.videoId) reportTimelineAction(s.videoId, "open").catch(() => {});
       },
       // Collapse the big review modal back to the small waiting prompt. The
@@ -944,6 +1137,27 @@ export const usePipelineStore = create<PipelineState>()(
         if (!s || !s.timelineCheck?.waiting || !s.timelineCheck.open) return;
         patch(id, { timelineCheck: { ...s.timelineCheck, open: false } });
         if (s.videoId) reportTimelineAction(s.videoId, "close").catch(() => {});
+      },
+      dismissTimelineCheck: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.timelineCheck?.waiting) return;
+        patch(id, {
+          timelineCheck: { ...s.timelineCheck, open: false, dismissed: true },
+        });
+      },
+      reopenTimelineCheck: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || !s.timelineCheck?.waiting) return;
+        patch(id, { timelineCheck: { ...s.timelineCheck, dismissed: false } });
+      },
+      updateSubtitleStyle: (id, style) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s) return;
+        patch(id, { subtitleStyle: { ...s.subtitleStyle, ...style } });
+        appendLog(
+          id,
+          `Đã cập nhật vị trí sub: cỡ chữ ${style.font_size ?? s.subtitleStyle?.font_size ?? 48}px · cách đáy ${style.margin_v ?? s.subtitleStyle?.margin_v ?? 40}px.`,
+        );
       },
       resolveVoiceCheck: (id, action) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -1316,6 +1530,7 @@ async function pollRemoteVideo(id: string, videoId: string) {
           timelineCheck: {
             waiting: true,
             open: !!tc.open,
+            dismissed: false,
             issues: tc.issues ?? [],
             fixing: !!tc.fixing,
           },
@@ -1365,6 +1580,13 @@ let processing = false;
 // pipeline này làm meta/thumbnail/upload. Chỉ holder mới được nhả.
 let processingOwner: string | null = null;
 const abortedPipelines = new Set<string>();
+// Tạm dừng hợp tác (cooperative pause):
+// - pauseAfterStep: user chọn "chờ xong bước hiện tại" — runner tự dừng ở
+//   ranh giới step kế tiếp (không phí job backend, không cần cancel).
+// - pausePendingCancel: user chọn "hủy bước hiện tại" — đã gửi abort tới
+//   backend, runner sẽ rẽ vào catch và chuyển sang paused thay vì error.
+const pauseAfterStep = new Set<string>();
+const pausePendingCancel = new Set<string>();
 // Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).
 // After a page reload these are empty, so restored interactive waits must
 // resume the runner from resumeStep instead of relying on the (dead) coroutine.
@@ -1619,7 +1841,7 @@ function pollBackendTimelineDecision(
   });
 }
 
-function enqueue(id: string, startStep = 0, force = false) {
+function enqueue(id: string, startStep = 0, force = false, chain = false) {
   const s = usePipelineStore.getState().pipelines.find((p) => p.id === id);
   // Guard: never (re)start a pipeline that already finished/failed unless the
   // caller explicitly forces it (user clicked "re-run"). This prevents stray
@@ -1633,6 +1855,23 @@ function enqueue(id: string, startStep = 0, force = false) {
       startStep,
       new Error().stack,
     );
+    return;
+  }
+  // Guard: never run two overlapping runners for the same pipeline. After
+  // releaseHeavySlot() frees the queue slot, the current run still does
+  // meta/thumbnail/upload — a rerun click in that window used to start a
+  // second runner that fast-forwarded through cached steps and fired a second
+  // YouTube upload of the same file. Exception (chain=true): the runner
+  // holding the slot chaining its own continuation (thumbnail regenerate).
+  if (!chain && (liveRunners.has(id) || queue.some((q) => q.id === id))) {
+    console.error(
+      "[PIPELINE-DEBUG] enqueue BLOCKED (already running/queued):",
+      id,
+      "startStep",
+      startStep,
+      new Error().stack,
+    );
+    appendLog(id, "Pipeline đang chạy — bỏ qua yêu cầu chạy trùng (tránh upload YouTube 2 lần).");
     return;
   }
   queue.push({ id, startStep, force });
@@ -1706,6 +1945,21 @@ function appendLog(id: string, msg: string, level = "info") {
   const entry: LogEntry = { message: msg, ts: Date.now() / 1000, level };
   const next = [...cur.logs, entry];
   patch(id, { logs: next.length > 500 ? next.slice(next.length - 500) : next });
+}
+
+// Runner gọi ở đầu mỗi step nặng: nếu user đã yêu cầu tạm dừng (chờ-xong
+// hoặc hủy-nhưng-abort-trượt) thì chuyển sang paused và dừng tại đây.
+// Trả về true khi đã pause (caller phải return ngay).
+function checkPausePoint(id: string, step: number): boolean {
+  if (!pauseAfterStep.has(id) && !pausePendingCancel.has(id)) return false;
+  const s = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+  if (!s) return false;
+  pauseAfterStep.delete(id);
+  pausePendingCancel.delete(id);
+  patch(id, { status: "paused", resumeStep: step, pauseRequested: false });
+  appendLog(id, `Đã tạm dừng trước bước ${step + 1}. Bấm Tiếp tục để chạy tiếp.`);
+  reportPipeline(id, true);
+  return true;
 }
 
 // Đảm bảo voice_map.json tồn tại (multi-voice CapCut) và CHỜ tạo xong rồi mới tiếp tục.
@@ -1886,6 +2140,7 @@ async function runPrep(id: string, startStep = 0) {
     finishedAt: null,
     error: "",
     failedStep: null,
+    pauseRequested: false,
     logs: [],
     resultUrl: "",
     dubbedUrl: null,
@@ -1896,6 +2151,9 @@ async function runPrep(id: string, startStep = 0) {
     region: startStep === 2 ? null : cur.region,
     subtitleStyle: startStep <= 3 ? null : cur.subtitleStyle,
   });
+  // Run mới xóa yêu cầu pause cũ (kể cả resume sau pause).
+  pauseAfterStep.delete(id);
+  pausePendingCancel.delete(id);
 
   liveRunners.add(id);
   try {
@@ -2262,7 +2520,9 @@ async function runPrep(id: string, startStep = 0) {
         "Chuẩn bị xong (preset đã áp dụng) — đang xếp hàng, sẽ bắt đầu khi luồng trước burn xong phụ đề…",
       );
     }
-    enqueue(id, 4);
+    // Self-chain: prep runner bàn giao cho heavy runner (runner hiện tại sắp
+    // kết thúc, heavy chạy nối tiếp — không phải 2 runner chồng nhau).
+    enqueue(id, 4, false, true);
   } catch (e) {
     const stage = usePipelineStore
       .getState()
@@ -2411,11 +2671,15 @@ async function runPipeline(id: string, startStep = 4, force = false) {
     finishedAt: null,
     error: "",
     failedStep: null,
+    pauseRequested: false,
     stepProgress: cur.stepProgress.map((v, i) => (i >= startStep ? null : v)),
     stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
   });
+  // Run mới (kể cả resume sau pause) xóa yêu cầu pause cũ.
+  pauseAfterStep.delete(id);
+  pausePendingCancel.delete(id);
 
   liveRunners.add(id);
   try {
@@ -2423,6 +2687,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 4. OCR
     if (startStep <= 4) {
+      if (checkPausePoint(id, 4)) return;
       if (!region) {
         region = DEFAULT_REGION;
         patch(id, { region });
@@ -2721,6 +2986,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 5. Context
     if (startStep <= 6) {
+      if (checkPausePoint(id, 6)) return;
       const translateSkipped =
         cur.translateOn === false ||
         sourceLang === (cur.translateTarget || "vi");
@@ -2781,6 +3047,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 6. Translate + save
     if (startStep <= 7) {
+      if (checkPausePoint(id, 7)) return;
       patch(id, { stage: "translating" });
       markStepStart(id, 7);
       const translateTarget = cur.translateTarget || "vi";
@@ -2943,6 +3210,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
               timelineCheck: {
                 waiting: true,
                 open: false,
+                dismissed: false,
                 issues,
                 fixing: false,
               },
@@ -3009,6 +3277,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 7. Dub
     if (startStep <= 8) {
+      if (checkPausePoint(id, 8)) return;
       patch(id, { stage: "dub" });
       markStepStart(id, 8);
       if (cur.dubOn === false) {
@@ -3156,6 +3425,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 8. Hardcode
     if (startStep <= 8) {
+      if (checkPausePoint(id, 9)) return;
       patch(id, { stage: "muxing" });
       markStepStart(id, 9);
       // Resume: nếu video đã có phụ đề cứng thì bỏ qua — nhưng PHẢI encode lại
@@ -3388,7 +3658,9 @@ async function runPipeline(id: string, startStep = 4, force = false) {
           });
         }
         markStepEnd(id, 11);
-        enqueue(id, 10);
+        // Self-chain: runner hiện tại return ngay sau đây, run mới chạy nối
+        // tiếp từ bước 10 — không phải 2 runner chồng nhau.
+        enqueue(id, 10, false, true);
         abortAfterThumbnail = true;
         return true;
       };
@@ -3482,7 +3754,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             // Re-run step 10 from the top (will use the extra_instructions in the body)
             markStepEnd(id, 11);
             // Use setTimeout to avoid deep recursion; enqueue will pick up from step 10
-            enqueue(id, 10);
+            // Self-chain: runner hiện tại return ngay sau đây (xem abortAfterThumbnail).
+            enqueue(id, 10, false, true);
             abortAfterThumbnail = true;
             return;
           }
@@ -3581,7 +3854,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             // Re-run step 10 from the top (will use the extra_instructions in the body)
             markStepEnd(id, 11);
             // Use setTimeout to avoid deep recursion; enqueue will pick up from step 10
-            enqueue(id, 10);
+            // Self-chain: runner hiện tại return ngay sau đây (xem abortAfterThumbnail).
+            enqueue(id, 10, false, true);
             abortAfterThumbnail = true;
             return;
           }
@@ -3601,6 +3875,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 10. Tạo meta — chỉ cần khi bật tự động upload YouTube (meta dùng để
     // đăng YouTube). Nếu tắt auto upload → bỏ qua bước này cho nhanh.
+    // Pause giữa chừng: dừng trước meta/thumbnail (resumeStep 9 chạy lại cả 2).
+    if (checkPausePoint(id, 9)) return;
     if (cur.autoUploadYoutube) {
       await Promise.all([doMeta(), doThumbnail()]);
     } else {
@@ -3612,6 +3888,9 @@ async function runPipeline(id: string, startStep = 4, force = false) {
 
     // 12. Upload YouTube (chỉ khi bật auto upload)
     if (startStep <= 12) {
+      // Yêu cầu pause trong lúc meta/thumbnail → dừng trước khi upload.
+      // (Bước upload không pause được: hủy là up lại từ đầu.)
+      if (checkPausePoint(id, 12)) return;
       if (!cur.autoUploadYoutube) {
         appendLog(id, "Bỏ qua upload YouTube (tự động up tắt).");
         markStepSkipped(id, 12);
@@ -3619,6 +3898,10 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         patch(id, { stage: "youtube" });
         markStepStart(id, 12);
         appendLog(id, "Upload YouTube (kèm meta)...");
+        // Thất bại / thiếu credentials → đánh skipped (không phải done) để
+        // nút "Upload YouTube" thủ công hiện ra, chạy lại chỉ bước này thay
+        // vì phải "Chạy lại" từ bước Nhúng SRT.
+        let uploaded = false;
         try {
           const channelId = cur.youtubeChannel || "";
           const freshPl =
@@ -3639,6 +3922,7 @@ async function runPipeline(id: string, startStep = 4, force = false) {
             const us = await pollYoutubeUpload(ud.job_id, tick(12));
             if (us.status === "done") {
               appendLog(id, "Upload YouTube hoàn tất!");
+              uploaded = true;
             } else {
               appendLog(id, `Upload YouTube thất bại: ${us.error || "lỗi"}`);
             }
@@ -3651,7 +3935,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         } catch {
           appendLog(id, "Bỏ qua upload YouTube (lỗi).");
         }
-        markStepEnd(id, 12);
+        if (uploaded) markStepEnd(id, 12);
+        else markStepSkipped(id, 12);
       }
     }
 
@@ -3665,6 +3950,28 @@ async function runPipeline(id: string, startStep = 4, force = false) {
     appendLog(id, "Hoàn tất!");
     reportPipeline(id, true);
   } catch (e) {
+    // Hủy-để-pause (user chọn "hủy bước hiện tại"): abort backend xong,
+    // poll trả lỗi "Đã hủy" → rẽ vào đây và chuyển sang paused thay vì error.
+    if (pausePendingCancel.has(id)) {
+      pausePendingCancel.delete(id);
+      pauseAfterStep.delete(id);
+      const stage = usePipelineStore
+        .getState()
+        .pipelines.find((x) => x.id === id)?.stage;
+      let resumeStep = stage != null ? (STEP_STAGE[stage] ?? 4) : 4;
+      // Meta dở dang thì resume từ 9 để chạy lại cả meta+thumbnail
+      // (doMeta bỏ qua khi startStep > 9).
+      if (resumeStep === 10) resumeStep = 9;
+      patch(id, {
+        status: "paused",
+        resumeStep,
+        pauseRequested: false,
+        error: "",
+      });
+      appendLog(id, `Đã tạm dừng (đã hủy bước hiện tại — chạy lại từ bước ${resumeStep + 1} khi tiếp tục).`);
+      reportPipeline(id, true);
+      return;
+    }
     const stage = usePipelineStore
       .getState()
       .pipelines.find((x) => x.id === id)?.stage;

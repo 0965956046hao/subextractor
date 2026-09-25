@@ -72,6 +72,32 @@ def _delogo_video_path(video_id: str) -> Path:
     return settings.temp_dir / "videos" / video_id / "delogo.mp4"
 
 
+def _original_video_path(video_id: str) -> Path:
+    """Original video file, IGNORING delogo.mp4.
+
+    Delogo must always encode from the pristine source: re-running delogo on
+    already-blurred delogo.mp4 would stack blur artifacts and generation loss
+    (e.g. re-picking watermark regions from the subtitle-check step).
+    Falls back to the merged Douyin source like _video_path when needed.
+    """
+    video_dir = settings.temp_dir / "videos" / video_id
+    if video_dir.exists():
+        for f in sorted(video_dir.iterdir()):
+            if f.is_file() and f.stem.startswith("video"):
+                return f
+    meta = video_dir / "meta.json"
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+        merge_id = data.get("source_merge_id")
+        if merge_id:
+            merged = settings.temp_dir / "merged" / f"{merge_id}_video.mp4"
+            if merged.exists():
+                return merged
+    except Exception:
+        pass
+    raise FileNotFoundError(f"Original video not found: {video_id}")
+
+
 def _video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():

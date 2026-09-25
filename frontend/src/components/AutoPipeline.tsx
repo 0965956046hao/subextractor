@@ -51,6 +51,7 @@ import {
   DEFAULT_REGION,
   STEPS,
   STEP_STAGE,
+  PAUSABLE_STAGES,
   fmtElapsed,
   usePipelineStore,
   type Pipeline,
@@ -2923,9 +2924,14 @@ function DetailView({
   );
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const uploadYoutubeNow = usePipelineStore((s) => s.uploadYoutubeNow);
+  const requestPause = usePipelineStore((s) => s.requestPause);
+  const resumePipeline = usePipelineStore((s) => s.resumePipeline);
+  const cancelPauseRequest = usePipelineStore((s) => s.cancelPauseRequest);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
+  const dismissTimelineCheck = usePipelineStore((s) => s.dismissTimelineCheck);
+  const reopenTimelineCheck = usePipelineStore((s) => s.reopenTimelineCheck);
   const resolveVoiceCheck = usePipelineStore((s) => s.resolveVoiceCheck);
   const openVoiceCheck = usePipelineStore((s) => s.openVoiceCheck);
   const closeVoiceCheck = usePipelineStore((s) => s.closeVoiceCheck);
@@ -2935,13 +2941,15 @@ function DetailView({
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Popup chọn kiểu tạm dừng (hủy bước hiện tại / chờ xong bước).
+  const [pauseModalOpen, setPauseModalOpen] = useState(false);
 
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [p.logs.length]);
 
-  const canRerun = p.status === "done" || p.status === "error";
+  const canRerun = p.status === "done" || p.status === "error" || p.status === "paused";
 
   const previewUrl = p.resultUrl.replace("/api/download/", "/api/preview/");
 
@@ -3013,7 +3021,18 @@ function DetailView({
             >
               {tr("pipeline.previewMediaBtn")}
             </button>
-            {(p.status === "running" || p.status === "queued") && (
+            {(p.status === "queued" || (p.status === "running" && PAUSABLE_STAGES.includes(p.stage))) && !p.pauseRequested && (
+              <button
+                onClick={() => {
+                  if (p.status === "queued") requestPause(p.id, "wait");
+                  else setPauseModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-warn-muted ring-1 ring-warn/20 text-warn hover:bg-warn/10 transition-colors cursor-pointer"
+              >
+                {tr("pipeline.pauseBtn")}
+              </button>
+            )}
+            {(p.status === "running" || p.status === "queued" || p.status === "paused") && (
               <button
                 onClick={() => setConfirmingCancel(true)}
                 className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-danger-muted ring-1 ring-danger/15 text-danger hover:bg-danger/10 transition-colors cursor-pointer"
@@ -3037,6 +3056,76 @@ function DetailView({
             </button>
           </div>
         </div>
+
+        {p.timelineCheck?.waiting && p.timelineCheck.dismissed && !p.timelineCheck.open && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap px-3.5 py-2.5 rounded-xl bg-warn-muted ring-1 ring-warn/20">
+            <svg
+              className="w-4 h-4 text-warn flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+            >
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <p className="text-[12px] text-ink-muted flex-1 min-w-[160px]">
+              {tr("pipeline.timelineCheckPaused")}
+            </p>
+            <button
+              onClick={() => reopenTimelineCheck(p.id)}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-muted ring-1 ring-accent/20 text-accent hover:bg-accent/15 transition-colors cursor-pointer"
+            >
+              {tr("pipeline.timelineCheckReopen")}
+            </button>
+          </div>
+        )}
+
+        {p.status === "paused" && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap px-3.5 py-2.5 rounded-xl bg-warn-muted ring-1 ring-warn/20">
+            <svg
+              className="w-4 h-4 text-warn flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+            >
+              <rect x="6" y="4" width="4" height="16" rx="1" />
+              <rect x="14" y="4" width="4" height="16" rx="1" />
+            </svg>
+            <p className="text-[12px] text-ink-muted flex-1 min-w-[160px]">
+              {tr("pipeline.pausedBanner", {
+                step:
+                  p.resumeStep != null
+                    ? (STEP_LABEL_KEYS[p.resumeStep] ? tr(STEP_LABEL_KEYS[p.resumeStep]) : `${p.resumeStep + 1}`)
+                    : "?",
+              })}
+            </p>
+            <button
+              onClick={() => resumePipeline(p.id)}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-muted ring-1 ring-accent/20 text-accent hover:bg-accent/15 transition-colors cursor-pointer"
+            >
+              {tr("pipeline.resumeBtn")}
+            </button>
+          </div>
+        )}
+
+        {p.pauseRequested && p.status === "running" && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap px-3.5 py-2.5 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.08]">
+            <p className="text-[12px] text-ink-muted flex-1 min-w-[160px]">
+              {tr("pipeline.pausePendingBanner")}
+            </p>
+            <button
+              onClick={() => cancelPauseRequest(p.id)}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-white/[0.06] ring-1 ring-white/[0.1] text-ink hover:bg-white/[0.12] transition-colors cursor-pointer"
+            >
+              {tr("pipeline.pauseCancelRequest")}
+            </button>
+          </div>
+        )}
 
         {p.stage === "region" && p.videoId && (
           <div className="mb-5">
@@ -3457,7 +3546,12 @@ function DetailView({
                     {i === 12 &&
                       p.videoId &&
                       (p.status === "done" || p.status === "error") &&
-                      p.stepSkipped[12] && (
+                      // Hiện khi chưa từng upload thành công: bao cả video cũ
+                      // bị skip-do-thiếu-credentials (bản cũ đánh done 100%
+                      // nên stepSkipped=false, không bắt được bằng cờ skip).
+                      !p.logs.some((l) =>
+                        l.message.includes("Upload YouTube hoàn tất!"),
+                      ) && (
                         <div className="mt-2">
                           <button
                             type="button"
@@ -3776,8 +3870,86 @@ function DetailView({
         </div>
       )}
 
-      {p.timelineCheck?.waiting && !p.timelineCheck.open && p.videoId && (
+      {pauseModalOpen && (p.status === "running" || p.status === "queued") && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards",
+            }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-9 h-9 rounded-full bg-warn-muted flex items-center justify-center flex-shrink-0">
+                  <svg
+                    className="w-5 h-5 text-warn"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                  >
+                    <rect x="6" y="4" width="4" height="16" rx="1" />
+                    <rect x="14" y="4" width="4" height="16" rx="1" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-ink">
+                    {tr("pipeline.pauseTitle")}
+                  </p>
+                  <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
+                    {tr("pipeline.pauseDesc", {
+                      step: STEP_LABEL_KEYS[activeStep] ? tr(STEP_LABEL_KEYS[activeStep]) : `${activeStep + 1}`,
+                    })}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPauseModalOpen(false)}
+                  aria-label={tr("pipeline.timelineCheckDismiss")}
+                  className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-ink-light hover:text-ink hover:bg-white/[0.08] transition-colors cursor-pointer"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <div className="space-y-2 mt-4">
+                <button
+                  onClick={() => {
+                    setPauseModalOpen(false);
+                    requestPause(p.id, "cancel");
+                  }}
+                  className="w-full text-left px-3.5 py-2.5 rounded-xl bg-warn-muted ring-1 ring-warn/20 hover:bg-warn/10 transition-colors cursor-pointer"
+                >
+                  <p className="text-[13px] font-medium text-ink">{tr("pipeline.pauseCancelNow")}</p>
+                  <p className="text-[11px] text-ink-muted mt-0.5">{tr("pipeline.pauseCancelNote")}</p>
+                </button>
+                <button
+                  onClick={() => {
+                    setPauseModalOpen(false);
+                    requestPause(p.id, "wait");
+                  }}
+                  className="w-full text-left px-3.5 py-2.5 rounded-xl bg-white/[0.04] ring-1 ring-white/[0.09] hover:bg-white/[0.08] transition-colors cursor-pointer"
+                >
+                  <p className="text-[13px] font-medium text-ink">{tr("pipeline.pauseWaitStep")}</p>
+                  <p className="text-[11px] text-ink-muted mt-0.5">{tr("pipeline.pauseWaitNote")}</p>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {p.timelineCheck?.waiting && !p.timelineCheck.open && !p.timelineCheck.dismissed && p.videoId && (        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
           <div
             className="double-bezel w-full max-w-md"
             onClick={(e) => e.stopPropagation()}
@@ -3813,8 +3985,26 @@ function DetailView({
                       : tr("pipeline.timelineCheckOk")}
                   </p>
                 </div>
+                <button
+                  onClick={() => dismissTimelineCheck(p.id)}
+                  title={tr("pipeline.timelineCheckDismiss")}
+                  aria-label={tr("pipeline.timelineCheckDismiss")}
+                  className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-ink-light hover:text-ink hover:bg-white/[0.08] transition-colors cursor-pointer"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
-              <div className="flex items-center justify-end gap-2 mt-5">
+              <div className="flex items-center justify-end gap-2 mt-5 flex-wrap">
                 <button
                   onClick={() => resolveTimelineCheck(p.id, "continue")}
                   className="btn-island-secondary btn-sm"

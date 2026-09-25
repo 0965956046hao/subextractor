@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
-from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _hardcoded_is_complete, _delogo_video_path
+from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _original_video_path, _hardcoded_is_complete, _delogo_video_path
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 import subprocess
@@ -562,9 +562,11 @@ async def preview_subtitle(video_id: str, request: Request):
     """Render a frame (at `time` seconds) with a subtitle overlay using a given
     style, for the manual "tự chỉnh vị trí" preview step.
 
-    Body: { region: {x1,y1,x2,y2}, style: {font_size, margin_v, ...}, text?, time? }
+    Body: { region: {x1,y1,x2,y2}, style: {font_size, margin_v, ...}, text?, time?, prefer_srt? }
     If `time` is omitted, the first frame is used. If the video has an SRT, the
-    subtitle text at that timestamp is used (falling back to `text`).
+    subtitle text at that timestamp is used (falling back to `text`) — unless
+    `prefer_srt` is false, in which case `text` is always used (stable demo box
+    for position editing, like the pre-OCR pipeline step).
     If `format: "overlay"`, returns a transparent PNG overlay (RGBA) sized to the
     video so the caller can layer it on top of a playing <video>. Otherwise a JPEG.
     Returns a JPEG of the frame with the subtitle burned at the given style.
@@ -585,15 +587,17 @@ async def preview_subtitle(video_id: str, request: Request):
     sample_text = body.get("text") or "Phụ đề tiếng Việt"
 
     # Prefer the real SRT line visible at this timestamp so the user can scrub.
-    try:
-        srt_path = _srt_path(video_id)
-        if srt_path.exists():
-            for e in parse_srt(srt_path.read_text(encoding="utf-8")):
-                if e.start <= time_sec < e.end:
-                    sample_text = e.text
-                    break
-    except Exception:
-        pass
+    # Skipped when the caller wants a fixed demo text (position editor).
+    if body.get("prefer_srt", True):
+        try:
+            srt_path = _srt_path(video_id)
+            if srt_path.exists():
+                for e in parse_srt(srt_path.read_text(encoding="utf-8")):
+                    if e.start <= time_sec < e.end:
+                        sample_text = e.text
+                        break
+        except Exception:
+            pass
 
     from fastapi.concurrency import run_in_threadpool
 
@@ -835,9 +839,13 @@ async def delogo_video(
     """
     Apply FFmpeg delogo filter to remove watermark(s).
     After success, updates pipeline state so frontend continues automatically.
+
+    Always encodes from the ORIGINAL video (never from a previous delogo.mp4)
+    so re-picking watermark regions later (e.g. from the subtitle-check step)
+    produces a clean result instead of stacking blur.
     """
 
-    video_path = _video_path(video_id)
+    video_path = _original_video_path(video_id)
 
     logger.info(
         f"[delogo] video_id={video_id} "
