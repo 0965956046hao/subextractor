@@ -40,7 +40,7 @@ Input: numbered lines in the form "position|text" (consecutive subtitle lines, i
 
 For EACH line, check for these problems:
 1. NOT_TRANSLATED — the text is NOT Vietnamese: it still contains Chinese characters, or is in another language that should have been translated to Vietnamese.
-2. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
+2. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one. Compare ONLY with the immediately previous line in the input — NEVER reference distant line numbers.
 
 Output ONLY a JSON array (no markdown, no explanations). One object per risky line:
 [{"i": <position>, "problems": ["NOT_TRANSLATED"], "note": "<ngắn gọn bằng tiếng Việt>"}]
@@ -53,7 +53,7 @@ Input: numbered lines in the form "position|text" (consecutive subtitle lines, i
 
 For EACH line, check for these problems:
 1. NOT_TRANSLATED — the text is NOT {lang_name}: it still contains Chinese/other-language characters or foreign content that should have been translated to {lang_name}.
-2. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one.
+2. ADJACENT_SIMILAR — the text is still very similar (>80% identical) to the PREVIOUS adjacent line, so they should have been merged into one. Compare ONLY with the immediately previous line in the input — NEVER reference distant line numbers.
 
 Output ONLY a JSON array (no markdown, no explanations). One object per risky line:
 [{{"i": <position>, "problems": ["NOT_TRANSLATED"], "note": "<short note in {lang_name}>"}}]
@@ -164,6 +164,29 @@ def _check_untranslated_code(entries, lang: str = "vi") -> list[dict]:
     return risks
 
 
+# Ngưỡng xác minh claim ADJACENT_SIMILAR của model (fuzz với dòng kề trước
+# THẬT trong file). Prompt đòi >80%; cho model biên độ xuống 60% (diễn đạt
+# lại cùng ý), dưới đó coi như ảo giác (vd chém "trùng dòng 24" ở xa) → loại.
+ADJACENT_SIMILAR_MIN = 60.0
+
+
+def _verify_adjacent_claim(entries, pos: int) -> tuple[bool, float, int]:
+    """Verify a claimed ADJACENT_SIMILAR at `entries[pos]` vs its true predecessor.
+
+    Returns (plausible, similarity_ratio, prev_index). Guards against model
+    hallucinations that reference distant lines.
+    """
+    from rapidfuzz import fuzz
+
+    if pos <= 0 or pos >= len(entries):
+        return False, 0.0, -1
+    prev, cur = entries[pos - 1], entries[pos]
+    sim = fuzz.ratio(prev.text or "", cur.text or "")
+    if sim < ADJACENT_SIMILAR_MIN:
+        return False, sim, prev.index
+    return True, sim, prev.index
+
+
 def _check_adjacent_similar_code(entries) -> list[dict]:
     """Deterministic ADJACENT_SIMILAR: adjacent texts >=80% identical.
 
@@ -241,6 +264,7 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
     if cached and cached.get("texts_hash") == cur_hash:
         n_text = 0
         by_index = {e.index: e for e in entries}
+        pos_by_index = {e.index: k for k, e in enumerate(entries)}
         for r in cached.get("risks") or []:
             problems = [p for p in (r.get("problems") or []) if p in ("NOT_TRANSLATED", "ADJACENT_SIMILAR")]
             if not problems:
@@ -248,7 +272,21 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
             entry = by_index.get(r.get("index"))
             if entry is None:
                 continue
-            _add(entry.index, entry.text, problems, str(r.get("note") or ""))
+            note = str(r.get("note") or "")
+            if "ADJACENT_SIMILAR" in problems:
+                # Verdict cũ có thể là ảo giác của model (vd "trùng dòng 24")
+                # → xác minh lại với neighbour thật, sai thì purge luôn.
+                ok, sim, prev_idx = _verify_adjacent_claim(entries, pos_by_index.get(entry.index, -1))
+                if not ok:
+                    logger.info(
+                        "Risk-check cache: purging implausible ADJACENT_SIMILAR #%d", entry.index,
+                    )
+                    problems = [p for p in problems if p != "ADJACENT_SIMILAR"]
+                else:
+                    note = f"Giống {sim:.0f}% với dòng #{prev_idx} liền trước."
+            if not problems:
+                continue
+            _add(entry.index, entry.text, problems, note)
             n_text += 1
         n_overlap = 0
         for r in _check_timeline_overlaps(entries):
@@ -345,9 +383,23 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
             if isinstance(problems, str):
                 problems = [problems]
             problems = [str(p) for p in problems if p and p != "TIMELINE_OVERLAP"]
+            note = str(item.get("note", "") or "")
+            if "ADJACENT_SIMILAR" in problems:
+                # Model hay chém verdict so với dòng ở xa ("trùng dòng 24")
+                # trong khi định nghĩa là dòng LIỀN TRƯỚC → xác minh bằng fuzz
+                # với neighbour thật, sai thì loại, đúng thì note lại cho factual.
+                ok, sim, prev_idx = _verify_adjacent_claim(entries, batch_start + pos)
+                if not ok:
+                    logger.info(
+                        "Risk-check: dropping implausible model ADJACENT_SIMILAR #%d (fuzz %.0f%% vs prev #%d)",
+                        entry.index, sim, prev_idx,
+                    )
+                    problems = [p for p in problems if p != "ADJACENT_SIMILAR"]
+                else:
+                    note = f"Giống {sim:.0f}% với dòng #{prev_idx} liền trước."
             if not problems:
                 continue
-            _add(entry.index, entry.text, problems, str(item.get("note", "") or ""))
+            _add(entry.index, entry.text, problems, note)
 
         if log_fn:
             log_fn(f"  Batch {bi + 1}: xong.")

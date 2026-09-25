@@ -348,6 +348,8 @@ export default function TimelineCheckModal({
   const entryRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const dragRef = useRef<DragState | null>(null);
   const [timelineIssues, setTimelineIssues] = useState<TimelineIssue[]>(initialIssues);
+  // Đã chạy kiểm tra timeline hay chưa (để phân biệt "chưa check" với "check xong, sạch").
+  const [timelineChecked, setTimelineChecked] = useState(initialIssues.length > 0);
   const [risks, setRisks] = useState<SubtitleRisk[]>([]);
   const [risksStale, setRisksStale] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -565,6 +567,8 @@ export default function TimelineCheckModal({
       if (i > 0 && e.start < sorted[i - 1].start) issues.push({ index: e.index, type: "out_of_order", message: `Out of order #${e.index}`, start: e.start, end: e.end, prev_index: sorted[i - 1].index });
     }
     setTimelineIssues(issues);
+    // Vừa validate xong (local) → đánh dấu đã kiểm tra để header hiện trạng thái.
+    setTimelineChecked(true);
     // Content/timing changed → mark risks as stale but keep them visible
     // so the user doesn't lose trace while editing. Will be refreshed on next risk check.
     setRisksStale(true);
@@ -906,6 +910,7 @@ export default function TimelineCheckModal({
     setCheckError("");
     try {
       await performRiskCheck(ctrl.signal);
+      setTimelineChecked(true);
     } catch (e) {
       if ((e as DOMException)?.name === "AbortError") return;
       setCheckError(e instanceof Error ? e.message : t("timeline.riskCheckFailed" as string));
@@ -938,6 +943,7 @@ export default function TimelineCheckModal({
       baseRef.current = snapshot;
       clearDraftStorage(videoId);
       await performRiskCheck(ctrl.signal);
+      setTimelineChecked(true);
     } catch (e) {
       if ((e as DOMException)?.name === "AbortError") return;
       setCheckError(e instanceof Error ? e.message : t("timeline.saveRecheckFailed" as string));
@@ -1004,6 +1010,7 @@ export default function TimelineCheckModal({
       setRisks([]);
       const v = await validateSrtTimeline(videoId);
       setTimelineIssues(v.issues ?? []);
+      setTimelineChecked(true);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : t("timeline.restoreFailed" as string));
     }
@@ -1029,11 +1036,19 @@ export default function TimelineCheckModal({
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-ink">{t("timeline.title" as string)}</p>
-                <p className="text-[12px] text-ink-muted leading-relaxed">
-                  {timelineIssues.length > 0
-                    ? t("timeline.issuesFound" as string, { count: timelineIssues.length })
-                    : t("timeline.noIssues" as string)}
-                </p>
+                {(timelineIssues.length > 0 || timelineChecked) && (
+                  <p className="text-[12px] leading-relaxed">
+                    {timelineIssues.length > 0 ? (
+                      <span className="text-ink-muted">
+                        {t("timeline.issuesFound" as string, { count: timelineIssues.length })}
+                      </span>
+                    ) : (
+                      <span className="text-success font-medium">
+                        {t("timeline.noIssues" as string)}
+                      </span>
+                    )}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2">
