@@ -157,10 +157,12 @@ function AddEntryModal({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const [startStr, setStartStr] = useState(secToSrt(currentTime));
-  const [endStr, setEndStr] = useState(secToSrt(currentTime + 2));
+  const [startStr, setStartStr] = useState(() => secToSrt(currentTime));
+  const [endStr, setEndStr] = useState(() => secToSrt(currentTime + 2));
   const [text, setText] = useState("");
   const [error, setError] = useState("");
+  // NOTE: inputs intentionally NOT reset when currentTime changes — the video
+  // keeps playing behind the modal and resetting would wipe typed text.
 
   const handleSubmit = () => {
     setError("");
@@ -185,11 +187,7 @@ function AddEntryModal({
     onAdd(start, end, text.trim());
   };
 
-  useEffect(() => {
-    setStartStr(secToSrt(currentTime));
-    setEndStr(secToSrt(currentTime + 2));
-    setError("");
-  }, [currentTime]);
+  // (Deliberately no reset on currentTime change — see state init above.)
 
   return createPortal(
     <div
@@ -352,6 +350,7 @@ export default function TimelineCheckModal({
   const [timelineChecked, setTimelineChecked] = useState(initialIssues.length > 0);
   const [risks, setRisks] = useState<SubtitleRisk[]>([]);
   const [risksStale, setRisksStale] = useState(false);
+  const [risksOpen, setRisksOpen] = useState(true);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -365,10 +364,12 @@ export default function TimelineCheckModal({
   const [loadingOriginalIndex, setLoadingOriginalIndex] = useState(-1);
   const [mounted, setMounted] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const riskAbortRef = useRef<AbortController | null>(null);
   // Nội dung backend đã biết (lần load/save gần nhất) — dùng để đối chiếu draft.
   const baseRef = useRef<SrtEntry[] | null>(null);
   const draftAppliedRef = useRef(false);
+  const recomputeTimer = useRef<number | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -574,14 +575,66 @@ export default function TimelineCheckModal({
     setRisksStale(true);
   }, []);
 
-  const patchEntry = useCallback((index: number, patch: Partial<SrtEntry>) => {
-    setEntries((prev) => {
-      const next = prev.map((e) => (e.index === index ? { ...e, ...patch, startLabel: patch.start != null ? secToSrt(patch.start) : e.startLabel, endLabel: patch.end != null ? secToSrt(patch.end) : e.endLabel } : e));
-      // Recompute issues on next tick to avoid setState during render
-      setTimeout(() => recomputeTimelineIssues(next), 0);
+  // Debounced issue recompute (drag fires patchEntry per pointermove).
+  const scheduleRecompute = useCallback((ents: SrtEntry[]) => {
+    if (recomputeTimer.current) window.clearTimeout(recomputeTimer.current);
+    recomputeTimer.current = window.setTimeout(() => recomputeTimelineIssues(ents), 120);
+  }, [recomputeTimelineIssues]);
+
+  useEffect(() => () => {
+    if (recomputeTimer.current) window.clearTimeout(recomputeTimer.current);
+  }, []);
+
+  // Sort by start + reindex positionally, remapping every index-keyed state
+  // (issues, risks, original-text caches, selections). MUST run before any
+  // save: drag edits change times without reordering the array, so the raw
+  // array order is not chronological — writing it raw produces an unsorted
+  // SRT and misaligned backend indices. Returns the ordered array for
+  // immediate use (setState below is async).
+  const normalizeOrder = useCallback((ents: SrtEntry[]): SrtEntry[] => {
+    const sorted = [...ents].sort((a, b) => a.start - b.start || a.end - b.end);
+    if (sorted.every((e, i) => e.index === i + 1)) return ents;
+    const oldToNew = new Map(sorted.map((e, i) => [e.index, i + 1] as const));
+    const remap = (idx: number) => oldToNew.get(idx) ?? idx;
+    const reindexed = sorted.map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
+    setTimelineIssues((prev) => prev.map((it) => ({
+      ...it,
+      index: remap(it.index),
+      prev_index: it.prev_index != null ? remap(it.prev_index) : it.prev_index,
+    })));
+    setRisks((prev) => prev.map((r) => ({ ...r, index: remap(r.index) })));
+    setOriginalTexts((prev) => {
+      const next: Record<number, string> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const ni = oldToNew.get(Number(k));
+        if (ni != null) next[ni] = v;
+      }
       return next;
     });
-  }, [recomputeTimelineIssues]);
+    setOriginalOpen((prev) => {
+      const next: Record<number, boolean> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const ni = oldToNew.get(Number(k));
+        if (ni != null) next[ni] = v;
+      }
+      return next;
+    });
+    setActiveIndex((a) => (a >= 0 ? remap(a) : a));
+    setEditingIndex((a) => (a >= 0 ? remap(a) : a));
+    setEntries(reindexed);
+    scheduleRecompute(reindexed);
+    return reindexed;
+  }, [scheduleRecompute]);
+
+  const patchEntry = useCallback((index: number, patch: Partial<SrtEntry>) => {
+    setDirty(true);
+    setEntries((prev) => {
+      const next = prev.map((e) => (e.index === index ? { ...e, ...patch, startLabel: patch.start != null ? secToSrt(patch.start) : e.startLabel, endLabel: patch.end != null ? secToSrt(patch.end) : e.endLabel } : e));
+      // Recompute issues debounced (drag fires patch per pointermove).
+      scheduleRecompute(next);
+      return next;
+    });
+  }, [scheduleRecompute]);
 
   // Ghi nháp mỗi khi entries lệch khỏi backend (debounce 500ms để không ghi
   // từng phím gõ). Khớp lại backend → xoá nháp.
@@ -754,6 +807,7 @@ export default function TimelineCheckModal({
   }, [fixingAll, checking, saving, risks, entries, timelineIssues, videoId, sourceLang, targetLang, recomputeTimelineIssues]);
 
   const deleteEntry = useCallback((index: number) => {
+    setDirty(true);
     setOriginalTexts((prev) => {
       const next = { ...prev };
       delete next[index];
@@ -766,7 +820,7 @@ export default function TimelineCheckModal({
     });
     setEntries((prev) => {
       const next = prev.filter((e) => e.index !== index).map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
-      setTimeout(() => recomputeTimelineIssues(next), 0);
+      scheduleRecompute(next);
       return next;
     });
     setTimelineIssues((prev) =>
@@ -780,10 +834,11 @@ export default function TimelineCheckModal({
         .map((r) => (r.index > index ? { ...r, index: r.index - 1 } : r))
     );
     setActiveIndex(-1);
-  }, []);
+  }, [scheduleRecompute]);
 
   const addEntry = useCallback(
     (start: number, end: number, text: string) => {
+      setDirty(true);
       setEntries((prev) => {
         const newEntry: SrtEntry = {
           index: 0,
@@ -796,13 +851,13 @@ export default function TimelineCheckModal({
         const next = [...prev, newEntry];
         next.sort((a, b) => a.start - b.start || a.end - b.end);
         const reindexed = next.map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
-        setTimeout(() => recomputeTimelineIssues(reindexed), 0);
+        scheduleRecompute(reindexed);
         return reindexed;
       });
       setShowAddModal(false);
       setRisksStale(true);
     },
-    [recomputeTimelineIssues],
+    [scheduleRecompute],
   );
 
   const handleBlockPointerDown = useCallback(
@@ -852,9 +907,11 @@ export default function TimelineCheckModal({
       if (!entry) return;
       const total = effectiveDuration || entry.end + 1;
       if (drag.mode === "move") {
-        const newStart = Math.max(0, Math.min(timeAtCursor + drag.grabOffset, total - MIN_DURATION));
-        const newEnd = Math.min(newStart + (drag.origEnd - drag.origStart), total);
-        patchEntry(drag.index, { start: newStart, end: newEnd });
+        const dur = drag.origEnd - drag.origStart;
+        // Clamp start so the full duration fits — never silently shorten.
+        const maxStart = Math.max(0, total - dur);
+        const newStart = Math.max(0, Math.min(timeAtCursor + drag.grabOffset, maxStart));
+        patchEntry(drag.index, { start: newStart, end: newStart + dur });
       } else if (drag.mode === "resize-start") {
         const newStart = Math.max(0, Math.min(timeAtCursor, drag.origEnd - MIN_DURATION));
         patchEntry(drag.index, { start: newStart });
@@ -899,6 +956,8 @@ export default function TimelineCheckModal({
     if (signal?.aborted) return;
     setRisks(result.risks ?? []);
     setRisksStale(false);
+    // Nhiều dòng lỗi thì tự gọn panel lại để không đè bẹp phần video.
+    setRisksOpen((result.risks ?? []).length <= 6);
   }, [videoId, targetLang]);
 
   const runRiskCheck = useCallback(async () => {
@@ -924,9 +983,15 @@ export default function TimelineCheckModal({
 
   const saveAndRecheck = useCallback(async () => {
     if (checking || saving) return;
-    // Local overlap validation before save
-    for (let i = 1; i < entries.length; i++) {
-      if (entries[i].start < entries[i - 1].end) {
+    // Normalize order FIRST: drag edits change times without reordering the
+    // array — validating/writing the raw array misses real overlaps and can
+    // save a time-unsorted SRT.
+    const ordered = normalizeOrder(entries);
+    setEntries(ordered);
+    recomputeTimelineIssues(ordered);
+    // Local overlap validation on chronological order.
+    for (let i = 1; i < ordered.length; i++) {
+      if (ordered[i].start < ordered[i - 1].end) {
         setCheckError(t("timeline.saveOverlapError" as string));
         return;
       }
@@ -937,8 +1002,9 @@ export default function TimelineCheckModal({
     setSaving(true);
     setCheckError("");
     try {
-      const snapshot = entries;
+      const snapshot = ordered;
       await updateSrt(videoId, entriesToSrt(snapshot));
+      setDirty(false);
       // Backend đã khớp snapshot → nháp hết tác dụng.
       baseRef.current = snapshot;
       clearDraftStorage(videoId);
@@ -951,12 +1017,16 @@ export default function TimelineCheckModal({
       if (riskAbortRef.current === ctrl) riskAbortRef.current = null;
       setSaving(false);
     }
-  }, [videoId, entries, performRiskCheck, checking, saving]);
+  }, [videoId, entries, performRiskCheck, checking, saving, normalizeOrder, recomputeTimelineIssues]);
 
   const saveAndContinue = useCallback(async () => {
     setSaving(true);
     try {
-      await updateSrt(videoId, entriesToSrt(entries));
+      const ordered = normalizeOrder(entries);
+      setEntries(ordered);
+      recomputeTimelineIssues(ordered);
+      await updateSrt(videoId, entriesToSrt(ordered));
+      setDirty(false);
       clearDraftStorage(videoId);
     } catch {
       // Continue anyway; the pipeline can re-check later.
@@ -964,7 +1034,12 @@ export default function TimelineCheckModal({
       setSaving(false);
       onResolve("continue");
     }
-  }, [videoId, entries, onResolve]);
+  }, [videoId, entries, onResolve, normalizeOrder, recomputeTimelineIssues]);
+
+  const keepAsIs = useCallback(() => {
+    if (dirty && !window.confirm(t("timeline.discardConfirm" as string))) return;
+    onResolve("continue");
+  }, [dirty, onResolve, t]);
 
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
@@ -996,6 +1071,7 @@ export default function TimelineCheckModal({
   const resetEdits = useCallback(async () => {
     setEditingIndex(-1);
     setActiveIndex(-1);
+    setDirty(false);
     setCheckError("");
     setLoadError("");
     setOriginalTexts({});
@@ -1008,6 +1084,7 @@ export default function TimelineCheckModal({
       clearDraftStorage(videoId);
       setEntries(es);
       setRisks([]);
+      setRisksOpen(true);
       const v = await validateSrtTimeline(videoId);
       setTimelineIssues(v.issues ?? []);
       setTimelineChecked(true);
@@ -1095,13 +1172,30 @@ export default function TimelineCheckModal({
           )}
 
           {risks.length > 0 && (
-            <div className="rounded-xl ring-1 px-3.5 py-2.5 bg-warn-muted ring-warn/15">
+            <div className="rounded-xl ring-1 px-3.5 py-2.5 bg-warn-muted ring-warn/15 flex-shrink-0">
               <div className="flex items-center gap-2 mb-1.5">
-                <p className="text-[12px] font-semibold text-amber-300/90">
-                  {activeRisks.length > 0
-                    ? t("timeline.risksFound" as string, { count: activeRisks.length })
-                    : t("timeline.risksResolved" as string)}
-                </p>
+                <button
+                  onClick={() => setRisksOpen((v) => !v)}
+                  className="flex items-center gap-2 cursor-pointer min-w-0"
+                  title={risksOpen ? t("timeline.risksCollapse" as string) : t("timeline.risksExpand" as string)}
+                >
+                  <p className="text-[12px] font-semibold text-amber-300/90">
+                    {activeRisks.length > 0
+                      ? t("timeline.risksFound" as string, { count: activeRisks.length })
+                      : t("timeline.risksResolved" as string)}
+                  </p>
+                  <svg
+                    className={`w-3.5 h-3.5 text-amber-200/60 transition-transform duration-200 ${risksOpen ? "rotate-180" : ""}`}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
                 {risksStale && (
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-white/[0.06] text-ink-light ring-1 ring-white/[0.10]">
                     {t("timeline.staleRisks" as string) || "Đã chỉnh sửa — nhấn Kiểm tra lại"}
@@ -1121,38 +1215,42 @@ export default function TimelineCheckModal({
                   </button>
                 )}
               </div>
-              <ul className="space-y-1 max-h-28 overflow-y-auto">
-                {activeRisks.map((r) => (
-                  <li key={r.index}>
-                    <button
-                      onClick={() => {
-                        const entry = entries.find((e) => e.index === r.index);
-                        if (entry) selectEntry(entry.index, entry.start);
-                      }}
-                      className="w-full text-left text-[12px] leading-snug rounded-md px-1.5 py-0.5 cursor-pointer transition-colors text-amber-200/80 hover:bg-warn/10 hover:text-amber-100"
-                      title={t("timeline.jumpToLine" as string)}
-                    >
-                      <span className="font-mono text-amber-300/90">#{r.index}</span>{" "}
-                      <span className="text-amber-100/85">{r.text}</span>
-                      {r.problems.length > 0 && (
-                        <span className="text-amber-200/60">
-                          {" "}
-                          · {r.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
-                        </span>
-                      )}
-                      {r.note && <span className="text-amber-200/50"> — {r.note}</span>}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {risksOpen && (
+                <ul className="space-y-1 max-h-48 overflow-y-auto">
+                  {activeRisks.map((r) => (
+                    <li key={r.index}>
+                      <button
+                        onClick={() => {
+                          const entry = entries.find((e) => e.index === r.index);
+                          if (entry) selectEntry(entry.index, entry.start);
+                        }}
+                        className="w-full text-left text-[12px] leading-snug rounded-md px-1.5 py-0.5 cursor-pointer transition-colors text-amber-200/80 hover:bg-warn/10 hover:text-amber-100"
+                        title={t("timeline.jumpToLine" as string)}
+                      >
+                        <span className="font-mono text-amber-300/90">#{r.index}</span>{" "}
+                        <span className="text-amber-100/85">{r.text}</span>
+                        {r.problems.length > 0 && (
+                          <span className="text-amber-200/60">
+                            {" "}
+                            · {r.problems.map((p) => t(RISK_LABELS[p] || p)).join(", ")}
+                          </span>
+                        )}
+                        {r.note && <span className="text-amber-200/50"> — {r.note}</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
-          {/* Body: video (left) + SRT list (right), timeline editor full-width below */}
-          <div className="flex flex-col gap-4 min-h-0 flex-1">
+          {/* Body: video (left) + SRT list (right), timeline editor full-width below.
+              overflow-y-auto là lưới an toàn cuối: khung modal overflow-hidden
+              nên khi nội dung vượt 92vh thì vùng này cuộn thay vì cắt footer. */}
+          <div className="flex flex-col gap-4 min-h-0 flex-1 overflow-y-auto">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 flex-1">
-            {/* Left: video */}
-            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-white/15 flex flex-col min-h-0">
+            {/* Left: video (giữ min-height để panel rủi ro không đè bẹp) */}
+            <div className="rounded-xl overflow-hidden bg-black ring-1 ring-white/15 flex flex-col min-h-[220px] lg:min-h-[300px]">
               <div className="relative w-full flex-1 min-h-0">
                 <video
                   ref={videoRef}
@@ -1230,6 +1328,7 @@ export default function TimelineCheckModal({
                           e.stopPropagation();
                           deleteEntry(entry.index);
                         }}
+                        onPointerDown={(e) => e.stopPropagation()}
                         className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-danger/90 text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-danger-light transition-opacity cursor-pointer shadow-sm"
                         title={t("timeline.deleteRow" as string)}
                       >
@@ -1491,6 +1590,7 @@ export default function TimelineCheckModal({
                             e.stopPropagation();
                             deleteEntry(entry.index);
                           }}
+                          onPointerDown={(e) => e.stopPropagation()}
                           className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-danger text-white text-[11px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-danger-light transition-opacity cursor-pointer shadow-md z-10"
                           title={t("timeline.deleteRow" as string)}
                         >
@@ -1526,7 +1626,7 @@ export default function TimelineCheckModal({
               {t("timeline.restore" as string)}
             </button>
             <button
-              onClick={() => onResolve("continue")}
+              onClick={keepAsIs}
               disabled={saving || checking}
               className="btn-island-secondary btn-sm disabled:opacity-50"
             >
