@@ -296,6 +296,10 @@ async def re_translate_srt_line(video_id: str, request: Request):
     index = int(body.get("index", 0))
     source_lang = str(body.get("source_lang", "zh") or "zh")
     target_lang = str(body.get("target_lang", "vi") or "vi")
+    # Time anchor of the displayed (translated) line — preferred over raw index
+    # because the two files often have different line counts (lệch gốc/dịch).
+    anchor_start = body.get("start")
+    anchor_end = body.get("end")
     # Frontend may send current displayed text (dirty, unsaved) to avoid stale index lookup
     override_text = body.get("text") or body.get("source_text") or body.get("current_text")
     if override_text and str(override_text).strip():
@@ -304,7 +308,7 @@ async def re_translate_srt_line(video_id: str, request: Request):
         # Read the current SRT entry text so we can re-translate the same line.
         srt_path = _srt_path(video_id)
         current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
-        entry = next((e for e in current_entries if e.index == index), None)
+        entry, _ = _find_source_entry(current_entries, index, anchor_start, anchor_end)
         if entry is None:
             raise HTTPException(404, f"Không tìm thấy dòng #{index}")
 
@@ -314,7 +318,7 @@ async def re_translate_srt_line(video_id: str, request: Request):
         orig_path = srt_path.with_name("subtitles_original.srt")
         if orig_path.exists():
             orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
-            src = next((e for e in orig_entries if e.index == index), None)
+            src, _ = _find_source_entry(orig_entries, index, anchor_start, anchor_end)
             if src is not None:
                 source_text = src.text
 
@@ -329,30 +333,60 @@ async def re_translate_srt_line(video_id: str, request: Request):
 
 
 # ── GET /api/srt/{video_id}/original-line ──
-# Read the source-language text of ONE SRT line (same resolution as re-translate:
-# subtitles_original.srt by index, fallback to the current line text).
+# Read the source-language text of ONE SRT line. The translated file and the
+# OCR-source file often have DIFFERENT line counts (Gemini drops lines,
+# dedup/fix-timeline merge lines, user deletes lines in the modal), so matching
+# by SRT index silently returns the wrong "original" (lệch gốc/dịch).
+# Match by TIME OVERLAP first (timeline is preserved 1:1 at translate time),
+# fall back to index only when no time info is given or nothing overlaps.
+
+def _find_source_entry(orig_entries, index: int, start=None, end=None):
+    """Return (entry, matched_by). Prefers time overlap over raw index."""
+    if start is not None and end is not None:
+        try:
+            s, e = float(start), float(end)
+        except (TypeError, ValueError):
+            s = e = None
+        else:
+            best, best_ov = None, 0.0
+            for oe in orig_entries:
+                ov = min(oe.end, e) - max(oe.start, s)
+                if ov > best_ov:
+                    best, best_ov = oe, ov
+            if best is not None and best_ov > 0:
+                return best, "time"
+    entry = next((x for x in orig_entries if x.index == index), None)
+    return entry, "index"
+
 
 @router.get("/api/srt/{video_id}/original-line")
-async def get_original_srt_line(video_id: str, index: int = Query(..., ge=1)):
+async def get_original_srt_line(
+    video_id: str,
+    index: int = Query(..., ge=1),
+    start: float | None = Query(default=None),
+    end: float | None = Query(default=None),
+):
     srt_path = _srt_path(video_id)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
-    entry = next((e for e in current_entries if e.index == index), None)
+    entry, _ = _find_source_entry(current_entries, index, start, end)
     if entry is None:
         raise HTTPException(404, f"Không tìm thấy dòng #{index}")
 
     source_text = entry.text
     has_original = False
+    matched_by = "current"
     orig_path = srt_path.with_name("subtitles_original.srt")
     if orig_path.exists():
         orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
-        src = next((e for e in orig_entries if e.index == index), None)
+        src, how = _find_source_entry(orig_entries, index, start, end)
         if src is not None:
             source_text = src.text
             has_original = True
+            matched_by = how
 
-    return {"index": index, "text": source_text, "has_original": has_original}
+    return {"index": index, "text": source_text, "has_original": has_original, "matched_by": matched_by}
 
 
 # ── POST /api/srt/{video_id}/rewrite-line ──

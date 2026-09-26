@@ -268,10 +268,14 @@ export async function updateSrt(
 export async function getOriginalLine(
   videoId: string,
   index: number,
+  start?: number,
+  end?: number,
 ): Promise<{ index: number; text: string; has_original: boolean }> {
   const res = await api.get<{ index: number; text: string; has_original: boolean }>(
     `/srt/${videoId}/original-line`,
-    { params: { index } },
+    // Gửi kèm mốc thời gian để backend khớp câu gốc theo overlap (số dòng
+    // 2 file thường lệch nhau sau dịch/dedup/sửa tay) thay vì theo index.
+    { params: { index, ...(start !== undefined ? { start } : {}), ...(end !== undefined ? { end } : {}) } },
   );
   return res.data;
 }
@@ -282,6 +286,8 @@ export async function reTranslateLine(
   sourceLang: string,
   targetLang: string,
   currentText?: string,
+  start?: number,
+  end?: number,
 ): Promise<string> {
   const res = await api.post<{ text: string }>(
     `/srt/${videoId}/re-translate-line`,
@@ -290,6 +296,8 @@ export async function reTranslateLine(
       source_lang: sourceLang,
       target_lang: targetLang,
       ...(currentText ? { text: currentText } : {}),
+      ...(start !== undefined ? { start } : {}),
+      ...(end !== undefined ? { end } : {}),
     },
   );
   return res.data.text;

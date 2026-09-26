@@ -96,6 +96,62 @@ const RISK_LABELS: Record<string, string> = {
   ADJACENT_SIMILAR: "timeline.risk.adjacentSimilar",
 };
 
+// Một cặp dòng có khoảng thời gian giao nhau (overlap) hoặc sát nhau (near).
+interface DupPair {
+  kind: "overlap" | "near";
+  a: number;
+  b: number;
+  /** overlap: số giây giao nhau; near: khe hở giữa 2 dòng (giây). */
+  gap: number;
+  aText: string;
+}
+
+// Ngưỡng "sát nhau": khe hở giữa 2 dòng liên tiếp nhỏ hơn mức này thì gắn cờ.
+const NEAR_GAP_SEC = 0.5;
+
+// Quét mọi cặp dòng đụng thời gian + các cặp liên tiếp sát nhau (< 1s).
+// Thuần local, chạy trên entries đang hiển thị nên gồm cả edit chưa lưu.
+// Trả về {pairs (tối đa 100 để hiển thị, overlap trước), overTotal, nearTotal}.
+function scanOverlaps(ents: SrtEntry[]): { pairs: DupPair[]; overTotal: number; nearTotal: number } {
+  const sorted = [...ents].sort((a, b) => a.start - b.start || a.end - b.end);
+  const overs: DupPair[] = [];
+  let overTotal = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const a = sorted[i];
+    if (a.end <= a.start) continue;
+    for (let j = i + 1; j < sorted.length; j++) {
+      const b = sorted[j];
+      if (b.start >= a.end) break;
+      if (b.end <= b.start) continue;
+      overTotal++;
+      if (overs.length < 100) {
+        overs.push({
+          kind: "overlap",
+          a: a.index,
+          b: b.index,
+          gap: Math.min(a.end, b.end) - Math.max(a.start, b.start),
+          aText: a.text,
+        });
+      }
+    }
+  }
+  const nears: DupPair[] = [];
+  let nearTotal = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const cur = sorted[i];
+    if (prev.end <= prev.start || cur.end <= cur.start) continue;
+    const gap = cur.start - prev.end;
+    if (gap >= 0 && gap < NEAR_GAP_SEC) {
+      nearTotal++;
+      if (overs.length + nears.length < 100) {
+        nears.push({ kind: "near", a: prev.index, b: cur.index, gap, aText: prev.text });
+      }
+    }
+  }
+  return { pairs: [...overs, ...nears], overTotal, nearTotal };
+}
+
 // Chữ Hán — cùng phạm vi backend `_CJK_RE` (cần `u` flag cho mặt phẳng phụ).
 const CJK_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u{20000}-\u{2A6DF}]/u;
 
@@ -345,12 +401,23 @@ export default function TimelineCheckModal({
   const listRef = useRef<HTMLDivElement>(null);
   const entryRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const dragRef = useRef<DragState | null>(null);
+  // Snapshot text lúc mở editor để nút Hủy hoàn tác được (textarea patch
+  // live từng phím nên không Hủy là mất bản cũ).
+  const editBackupRef = useRef<{ index: number; text: string } | null>(null);
   const [timelineIssues, setTimelineIssues] = useState<TimelineIssue[]>(initialIssues);
   // Đã chạy kiểm tra timeline hay chưa (để phân biệt "chưa check" với "check xong, sạch").
   const [timelineChecked, setTimelineChecked] = useState(initialIssues.length > 0);
   const [risks, setRisks] = useState<SubtitleRisk[]>([]);
   const [risksStale, setRisksStale] = useState(false);
   const [risksOpen, setRisksOpen] = useState(true);
+  // Kết quả quét đụng/sát thời gian (null = chưa quét).
+  const [dupPairs, setDupPairs] = useState<DupPair[] | null>(null);
+  const [dupOverTotal, setDupOverTotal] = useState(0);
+  const [dupNearTotal, setDupNearTotal] = useState(0);
+  const [dupOpen, setDupOpen] = useState(true);
+  const [dupFixing, setDupFixing] = useState(false);
+  const [dupStale, setDupStale] = useState(false);
+  const [dupMsg, setDupMsg] = useState("");
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -452,7 +519,9 @@ export default function TimelineCheckModal({
       for (let i = 0; i < rows.length; i++) {
         const lastIdx = rows[i][rows[i].length - 1];
         const last = entries[lastIdx];
-        if (e.start >= last.end) {
+        // last có thể undefined nếu index không còn positional (dữ liệu cũ) —
+        // coi như hết đụng để không crash trắng modal.
+        if (!last || e.start >= last.end) {
           rows[i].push(e.index - 1);
           laneOf.set(e.index - 1, i);
           placed = true;
@@ -466,6 +535,18 @@ export default function TimelineCheckModal({
     }
     return laneOf;
   }, [entries]);
+
+  // Chiều cao vùng track co theo số lane thực tế. Trước đây fix cứng 3 hàng
+  // trong khi block hàng 3 đã tràn 16px — đúng case có overlap (sau kiểm tra
+  // có lỗi) là hàng dưới bị cắt/tràn đè nội dung bên dưới.
+  const laneCount = useMemo(() => {
+    let m = 0;
+    lanes.forEach((r) => {
+      if (r + 1 > m) m = r + 1;
+    });
+    return Math.max(1, m);
+  }, [lanes]);
+  const trackHeight = ROW_H * laneCount + 12;
 
   const basePps = useMemo(() => {
     if (!effectiveDuration) return 20;
@@ -570,6 +651,10 @@ export default function TimelineCheckModal({
     setTimelineIssues(issues);
     // Vừa validate xong (local) → đánh dấu đã kiểm tra để header hiện trạng thái.
     setTimelineChecked(true);
+    // Nội dung/timing đổi → kết quả quét trùng trước đó thành cũ
+    // (badge chỉ hiện khi đã từng quét).
+    setDupStale(true);
+    setDupMsg("");
     // Content/timing changed → mark risks as stale but keep them visible
     // so the user doesn't lose trace while editing. Will be refreshed on next risk check.
     setRisksStale(true);
@@ -658,7 +743,7 @@ export default function TimelineCheckModal({
   }, [entries, videoId]);
 
   const toggleOriginalText = useCallback(
-    async (index: number) => {
+    async (index: number, start?: number, end?: number) => {
       if (originalOpen[index]) {
         setOriginalOpen((prev) => ({ ...prev, [index]: false }));
         return;
@@ -669,7 +754,7 @@ export default function TimelineCheckModal({
       }
       setLoadingOriginalIndex(index);
       try {
-        const res = await getOriginalLine(videoId, index);
+        const res = await getOriginalLine(videoId, index, start, end);
         setOriginalTexts((prev) => ({ ...prev, [index]: res.text }));
         setOriginalOpen((prev) => ({ ...prev, [index]: true }));
       } catch (e) {
@@ -682,14 +767,14 @@ export default function TimelineCheckModal({
   );
 
   const reTranslateEntry = useCallback(
-    async (index: number) => {
+    async (index: number, start?: number, end?: number) => {
       setRetranslatingIndex(index);
       setCheckError("");
       try {
         // Send the current displayed text so backend doesn't rely on stale file index
         const cur = entries.find((e) => e.index === index);
         const currentText = cur?.text ?? "";
-        const newText = await reTranslateLine(videoId, index, sourceLang, targetLang, currentText);
+        const newText = await reTranslateLine(videoId, index, sourceLang, targetLang, currentText, start, end);
         // Sanitize: backend may return SRT framing with pipes, strip it
         const sanitized = newText.includes("|")
           ? newText.split("|").pop()!.trim()
@@ -742,7 +827,8 @@ export default function TimelineCheckModal({
         setFixProgress(`${i + 1}/${untranslated.length}`);
         const curText = entries.find((e) => e.index === r.index)?.text ?? r.text;
         try {
-          const nt = await reTranslateLine(videoId, r.index, sourceLang, targetLang, curText);
+          const curEntry = entries.find((e) => e.index === r.index);
+          const nt = await reTranslateLine(videoId, r.index, sourceLang, targetLang, curText, curEntry?.start, curEntry?.end);
           const clean = cleanRetranslated(nt.trim());
           if (clean) fixed.set(r.index, clean);
           else failed.push(r.index);
@@ -806,23 +892,74 @@ export default function TimelineCheckModal({
     }
   }, [fixingAll, checking, saving, risks, entries, timelineIssues, videoId, sourceLang, targetLang, recomputeTimelineIssues]);
 
+  // Nút "Kiểm tra trùng": quét local mọi cặp dòng đụng/sát thời gian.
+  const runDupCheck = useCallback(() => {
+    const { pairs, overTotal, nearTotal } = scanOverlaps(entries);
+    setDupPairs(pairs);
+    setDupOverTotal(overTotal);
+    setDupNearTotal(nearTotal);
+    setDupStale(false);
+    setDupMsg("");
+    setDupOpen(true);
+  }, [entries]);
+
+  // Nút "Tự sửa": lưu entries hiện tại rồi gọi backend đẩy start-line đụng
+  // về sau end-line trước, sau đó tải lại + quét lại để xác nhận.
+  const fixDupOverlaps = useCallback(async () => {
+    if (dupFixing || saving || checking) return;
+    setDupFixing(true);
+    setCheckError("");
+    try {
+      const ordered = normalizeOrder(entries);
+      setEntries(ordered);
+      await updateSrt(videoId, entriesToSrt(ordered));
+      setDirty(false);
+      const res = await autoFixSrtOverlaps(videoId);
+      const fresh = await getSrtEntries(videoId);
+      baseRef.current = fresh;
+      clearDraftStorage(videoId);
+      setEntries(fresh);
+      recomputeTimelineIssues(fresh);
+      const again = scanOverlaps(fresh);
+      setDupPairs(again.pairs);
+      setDupOverTotal(again.overTotal);
+      setDupNearTotal(again.nearTotal);
+      setDupStale(false);
+      setDupOpen(true);
+      if (again.overTotal === 0) {
+        setDupMsg(t("timeline.dupFixed" as string, { count: String(res.count) }));
+      } else {
+        setDupMsg("");
+      }
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : t("timeline.dupFixFailed" as string));
+    } finally {
+      setDupFixing(false);
+    }
+  }, [dupFixing, saving, checking, entries, videoId, normalizeOrder, recomputeTimelineIssues]);
+
   const deleteEntry = useCallback((index: number) => {
     setDirty(true);
-    setOriginalTexts((prev) => {
-      const next = { ...prev };
-      delete next[index];
-      return next;
-    });
-    setOriginalOpen((prev) => {
-      const next = { ...prev };
-      delete next[index];
-      return next;
-    });
     setEntries((prev) => {
       const next = prev.filter((e) => e.index !== index).map((e, i) => ({ ...e, index: i + 1, startLabel: secToSrt(e.start), endLabel: secToSrt(e.end) }));
       scheduleRecompute(next);
       return next;
     });
+    // Cache "xem gốc" key theo index hiển thị → dịch key xuống theo để không
+    // trỏ nhầm sang dòng khác sau khi đánh lại số.
+    const shiftDown = <V,>(prev: Record<number, V>): Record<number, V> => {
+      const next: Record<number, V> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const n = Number(k);
+        if (n === index) continue;
+        next[n > index ? n - 1 : n] = v;
+      }
+      return next;
+    };
+    setOriginalTexts(shiftDown);
+    setOriginalOpen(shiftDown);
+    // Đóng editor đang mở (index của nó đã đổi nghĩa sau khi xóa).
+    setEditingIndex(-1);
     setTimelineIssues((prev) =>
       prev
         .filter((i) => i.index !== index)
@@ -854,6 +991,10 @@ export default function TimelineCheckModal({
         scheduleRecompute(reindexed);
         return reindexed;
       });
+      // Dòng mới chèn giữa làm đổi số thứ tự các dòng sau → cache "xem gốc"
+      // key theo index sẽ trỏ nhầm. Xóa cache (bấm xem lại sẽ fetch đúng).
+      setOriginalTexts({});
+      setOriginalOpen({});
       setShowAddModal(false);
       setRisksStale(true);
     },
@@ -1078,6 +1219,11 @@ export default function TimelineCheckModal({
     setOriginalOpen({});
     setLoadingOriginalIndex(-1);
     setRisksStale(false);
+    setDupPairs(null);
+    setDupOverTotal(0);
+    setDupNearTotal(0);
+    setDupStale(false);
+    setDupMsg("");
     try {
       const es = await getSrtEntries(videoId);
       baseRef.current = es;
@@ -1104,7 +1250,7 @@ export default function TimelineCheckModal({
         onClick={(e) => e.stopPropagation()}
         style={{ animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards" }}
       >
-        <div className="double-bezel-inner p-4 sm:p-5 flex flex-col gap-4 min-h-0">
+        <div className="double-bezel-inner p-4 sm:p-5 flex flex-col gap-4 min-h-0 max-h-[92vh] overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0">
@@ -1146,6 +1292,17 @@ export default function TimelineCheckModal({
               >
                 {checking ? <IconSpinner className="w-3.5 h-3.5" /> : <IconAlert className="w-3.5 h-3.5" />}
                 {checking ? t("timeline.checking" as string) : t("timeline.checkRisk" as string)}
+              </button>
+              <button
+                onClick={runDupCheck}
+                disabled={entries.length === 0}
+                className="px-3.5 py-2 rounded-full text-[12px] font-medium bg-sky-600 text-white hover:bg-sky-500 transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                title={t("timeline.checkDupTitle" as string)}
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 3H5a2 2 0 00-2 2v3" /><path d="M16 3h3a2 2 0 012 2v3" /><path d="M8 21H5a2 2 0 01-2-2v-3" /><path d="M16 21h3a2 2 0 002-2v-3" /><line x1="9" y1="12" x2="15" y2="12" />
+                </svg>
+                {t("timeline.checkDup" as string)}
               </button>
               <button
                 onClick={onClose}
@@ -1239,6 +1396,89 @@ export default function TimelineCheckModal({
                       </button>
                     </li>
                   ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {dupPairs !== null && (
+            <div className="rounded-xl ring-1 px-3.5 py-2.5 bg-sky-500/10 ring-sky-400/20 flex-shrink-0">
+              <div className="flex items-center gap-2 mb-1.5">
+                <button
+                  onClick={() => setDupOpen((v) => !v)}
+                  className="flex items-center gap-2 cursor-pointer min-w-0"
+                  title={dupOpen ? t("timeline.dupCollapse" as string) : t("timeline.dupExpand" as string)}
+                >
+                  <p className="text-[12px] font-semibold text-sky-300/90">
+                    {dupOverTotal > 0 && dupNearTotal > 0
+                      ? t("timeline.dupFoundMixed" as string, { over: String(dupOverTotal), near: String(dupNearTotal) })
+                      : dupOverTotal > 0
+                        ? t("timeline.dupFound" as string, { count: String(dupOverTotal) })
+                        : dupNearTotal > 0
+                          ? t("timeline.dupNearOnly" as string, { count: String(dupNearTotal) })
+                          : t("timeline.dupClean" as string)}
+                  </p>
+                  {(dupOverTotal > 0 || dupNearTotal > 0) && (
+                    <svg
+                      className={`w-3.5 h-3.5 text-sky-200/60 transition-transform duration-200 ${dupOpen ? "rotate-180" : ""}`}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  )}
+                </button>
+                {dupStale && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-white/[0.06] text-ink-light ring-1 ring-white/[0.10]">
+                    {t("timeline.dupStale" as string)}
+                  </span>
+                )}
+                {dupMsg && (
+                  <span className="text-[11px] text-emerald-300/90">{dupMsg}</span>
+                )}
+                {dupOverTotal > 0 && (
+                  <button
+                    onClick={fixDupOverlaps}
+                    disabled={dupFixing || saving || checking}
+                    className="ml-auto text-[10px] font-medium px-2.5 py-1 rounded-md bg-sky-600 text-white hover:bg-sky-500 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait inline-flex items-center gap-1 flex-shrink-0"
+                    title={t("timeline.dupFix" as string)}
+                  >
+                    {dupFixing && <IconSpinner className="w-3 h-3" />}
+                    {dupFixing ? t("timeline.dupFixing" as string) : t("timeline.dupFix" as string)}
+                  </button>
+                )}
+              </div>
+              {dupOpen && dupPairs.length > 0 && (
+                <ul className="space-y-1 max-h-48 overflow-y-auto">
+                  {dupPairs.map((p, i) => (
+                    <li key={`${p.a}-${p.b}-${i}`}>
+                      <button
+                        onClick={() => {
+                          const entry = entries.find((e) => e.index === p.a);
+                          if (entry) selectEntry(entry.index, entry.start);
+                        }}
+                        className="w-full text-left text-[12px] leading-snug rounded-md px-1.5 py-0.5 cursor-pointer transition-colors text-sky-200/80 hover:bg-sky-400/10 hover:text-sky-100"
+                        title={t("timeline.jumpToLine" as string)}
+                      >
+                        <span className="font-mono text-sky-300/90">#{p.a} ↔ #{p.b}</span>{" "}
+                        <span className={p.kind === "overlap" ? "text-rose-300/80" : "text-sky-200/60"}>
+                          {p.kind === "overlap"
+                            ? t("timeline.dupOverlapSec" as string, { sec: p.gap.toFixed(2) })
+                            : t("timeline.dupNearSec" as string, { sec: p.gap.toFixed(2) })}
+                        </span>{" "}
+                        <span className="text-sky-100/70">{p.aText.slice(0, 60)}</span>
+                      </button>
+                    </li>
+                  ))}
+                  {dupOverTotal + dupNearTotal > dupPairs.length && (
+                    <li className="text-[11px] text-sky-200/50 px-1.5">
+                      {t("timeline.dupMore" as string, { count: String(dupOverTotal + dupNearTotal - dupPairs.length) })}
+                    </li>
+                  )}
                 </ul>
               )}
             </div>
@@ -1354,6 +1594,7 @@ export default function TimelineCheckModal({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            editBackupRef.current = { index: entry.index, text: entry.text };
                             setEditingIndex(entry.index);
                           }}
                           className="ml-auto text-[10px] font-medium text-ink-muted hover:text-accent transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1"
@@ -1368,7 +1609,7 @@ export default function TimelineCheckModal({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleOriginalText(entry.index);
+                            toggleOriginalText(entry.index, entry.start, entry.end);
                           }}
                           disabled={loadingOriginalIndex === entry.index}
                           className="text-[10px] font-medium text-ink-muted hover:text-sky-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1 disabled:opacity-60 disabled:cursor-wait"
@@ -1387,7 +1628,7 @@ export default function TimelineCheckModal({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            reTranslateEntry(entry.index);
+                            reTranslateEntry(entry.index, entry.start, entry.end);
                           }}
                           disabled={retranslatingIndex === entry.index}
                           className="text-[10px] font-medium text-ink-muted hover:text-emerald-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex items-center gap-1 disabled:opacity-60 disabled:cursor-wait"
@@ -1426,6 +1667,12 @@ export default function TimelineCheckModal({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                // Hoàn tác các phím đã gõ về bản lúc mở editor.
+                                const bak = editBackupRef.current;
+                                if (bak && bak.index === entry.index && bak.text !== entry.text) {
+                                  patchEntry(entry.index, { text: bak.text });
+                                }
+                                editBackupRef.current = null;
                                 setEditingIndex(-1);
                               }}
                               className="px-2 py-1 rounded-full text-[10px] font-medium text-ink-muted hover:bg-white/[0.05] transition-colors cursor-pointer"
@@ -1435,6 +1682,7 @@ export default function TimelineCheckModal({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                editBackupRef.current = null;
                                 setEditingIndex(-1);
                               }}
                               className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-accent text-white hover:bg-accent transition-colors cursor-pointer"
@@ -1511,7 +1759,7 @@ export default function TimelineCheckModal({
                 </p>
               </div>
               <div className="overflow-x-auto overflow-y-hidden scrollbar-thin" ref={trackRef}>
-                <div className="relative select-none" style={{ width: trackWidth, height: ROW_H * 3 + 12 }} onPointerDown={handleTrackPointerDown}>
+                <div className="relative select-none" style={{ width: trackWidth, height: trackHeight }} onPointerDown={handleTrackPointerDown}>
                   {/* ruler — pointer-events-none so clicks fall through to scrub */}
                   <div className="absolute top-0 left-0 right-0 h-5 flex border-b border-white/[0.08] pointer-events-none">
                     {Array.from({ length: Math.ceil(effectiveDuration / interval) + 1 }).map((_, i) => (
@@ -1535,7 +1783,7 @@ export default function TimelineCheckModal({
                   </div>
                   {/* rows */}
                   {entries.map((entry, i) => {
-                    const row = lanes.get(i) ?? 0;
+                    const row = lanes.get(entry.index - 1) ?? 0;
                     const left = entry.start * pps;
                     const width = Math.max((entry.end - entry.start) * pps, 4);
                     const isIssue = issueIndexes.has(entry.index);
