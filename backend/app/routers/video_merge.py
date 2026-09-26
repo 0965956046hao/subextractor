@@ -32,11 +32,16 @@ def _save_context_files(
     big_thumbs: list[str],
     on_log=None,
     on_complete=None,
+    on_frac=None,
 ) -> None:
-    """Download thumbnail + big thumbs images into a context dir (2 threads).
+    """Download thumbnail + big thumbs images into a context dir.
 
     on_log(message, level) — ghi log tiến trình (tuỳ chọn).
-    on_complete(kind)      — báo 1 nhánh ("thumbnail"/"big_thumbs") tải xong (tuỳ chọn).
+    on_complete(kind)      — báo 1 nhánh ("thumbnail"/"big_thumbs") tải xong.
+    on_frac(kind, frac)    — báo tiến độ từng phần (0..1) của nhánh big_thumbs.
+
+    big_thumbs tải SONG SONG (mỗi ảnh CDN chậm vài phút; tải tuần tự khiến
+    cả job đứng im ở 90% rất lâu mà không có log nào).
     """
     ctx_dst.mkdir(parents=True, exist_ok=True)
 
@@ -63,17 +68,54 @@ def _save_context_files(
         thumb_dir = ctx_dst / "context_images"
         thumb_dir.mkdir(parents=True, exist_ok=True)
         ok = 0
-        for idx, u in enumerate(bts):
+        lock = threading.Lock()
+
+        def _one(idx: int, u: str) -> bool:
             dest = thumb_dir / f"context_{idx}.jpg"
+            t0 = time.time()
             try:
                 _download(u, dest)
-                ok += 1
+                logger.info(
+                    "Big thumb %d/%d saved to %s in %.1fs",
+                    idx + 1, len(bts), dest, time.time() - t0,
+                )
+                return True
             except Exception as e:
                 logger.warning("Big thumb %d download failed: %s", idx, e)
-        logger.info("%d big thumb images saved to %s", ok, thumb_dir)
+                return False
+
+        import concurrent.futures
+        workers = min(6, len(bts))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_one, idx, u): idx for idx, u in enumerate(bts)}
+            done_n = 0
+            for fut in concurrent.futures.as_completed(futs):
+                idx = futs[fut]
+                try:
+                    good = fut.result()
+                except Exception as e:
+                    logger.warning("Big thumb %d worker crashed: %s", idx, e)
+                    good = False
+                with lock:
+                    done_n += 1
+                    if good:
+                        ok += 1
+                    frac = done_n / len(bts)
+                if on_log:
+                    on_log(
+                        f"Ảnh ngữ cảnh {done_n}/{len(bts)}"
+                        f" ({'xong' if good else 'lỗi'}).",
+                        "info",
+                    )
+                if on_frac:
+                    try:
+                        on_frac("big_thumbs", frac)
+                    except Exception:
+                        pass
+        logger.info("%d/%d big thumb images saved to %s", ok, len(bts), thumb_dir)
         if ok:
             if on_log:
-                on_log(f"Đã tải {ok} ảnh ngữ cảnh.", "info")
+                on_log(f"Đã tải {ok}/{len(bts)} ảnh ngữ cảnh.", "info")
             if on_complete:
                 on_complete("big_thumbs")
         elif on_log:
@@ -122,21 +164,19 @@ def import_video(body: ImportRequest):
                 raise HTTPException(404, "Merged file not found")
             shutil.copyfile(src, video_path)
         else:
-            # Download thumbnail + big_thumbs in parallel with the video itself.
+            # Download thumbnail + big_thumbs nền (không block): CDN treo thì
+            # API vẫn trả video_id ngay, ảnh về sau tự bổ sung vào context.
             ctx_dst = settings.temp_dir / "context" / video_id
             ctx_dst.mkdir(parents=True, exist_ok=True)
-            ctx_thread = None
             if body.thumbnail_url or body.big_thumbs:
-                ctx_thread = threading.Thread(
-                    target=_save_context_files,
-                    args=(ctx_dst, body.thumbnail_url, body.big_thumbs),
-                )
-                ctx_thread.start()
-            try:
-                _download(body.url, video_path)
-            finally:
-                if ctx_thread:
-                    ctx_thread.join()
+                def _ctx_bg() -> None:
+                    try:
+                        _save_context_files(ctx_dst, body.thumbnail_url, body.big_thumbs)
+                    except Exception:
+                        logger.exception("background context download failed for %s", video_id)
+
+                threading.Thread(target=_ctx_bg, daemon=True).start()
+            _download(body.url, video_path)
     except HTTPException:
         shutil.rmtree(video_dir, ignore_errors=True)
         raise
@@ -462,16 +502,28 @@ def _run_merge(merge_id: str, video_url: str, audio_url: str, thumbnail_url: str
         def _ctx_complete(kind: str) -> None:
             _update_progress(kind, 1.0)
 
-        # Tải video, audio, thumbnail và ảnh ngữ cảnh (big_thumbs) đồng thời.
+        def _ctx_frac(kind: str, frac: float) -> None:
+            _update_progress(kind, max(0.0, min(1.0, frac)))
+
+        # Tải video + audio (block). Ảnh ngữ cảnh (thumbnail/big_thumbs) tải
+        # nền KHÔNG block: CDN Douyin từng treo vài phút/ảnh khiến cả job
+        # đứng im sau log "Đã tải thumbnail" dù video+audio đã xong.
+        def _ctx_bg() -> None:
+            try:
+                _save_context_files(
+                    ctx_dir, thumbnail_url, big_thumbs or [],
+                    _ctx_log, _ctx_complete, _ctx_frac,
+                )
+            except Exception:
+                logger.exception("background context download failed for %s", merge_id)
+
         threads = [
             threading.Thread(target=_download_track, args=("video", video_url, video_path)),
             threading.Thread(target=_download_track, args=("audio", audio_url, audio_path)),
-            threading.Thread(
-                target=_save_context_files,
-                args=(ctx_dir, thumbnail_url, big_thumbs or [], _ctx_log, _ctx_complete),
-            ),
         ]
 
+        ctx_thread = threading.Thread(target=_ctx_bg, daemon=True)
+        ctx_thread.start()
         for t in threads:
             t.start()
         for t in threads:

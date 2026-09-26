@@ -166,16 +166,39 @@ def hamming_distance(h1: int, h2: int) -> int:
     return bin(h1 ^ h2).count("1")
 
 
+def _to_thumb(img: np.ndarray, max_width: int = 160) -> np.ndarray:
+    """Downscale crop về thumbnail để so sánh visual cho rẻ.
+
+    absdiff full-res trên crop lớn (vd 1920x300) tốn ~10x so với thumb
+    mà độ chính xác phát hiện đổi sub gần như tương đương.
+    """
+    h, w = img.shape[:2]
+    if w <= max_width:
+        return img
+    scale = max_width / float(w)
+    new_h = max(1, int(h * scale))
+    return cv2.resize(img, (max_width, new_h), interpolation=cv2.INTER_AREA)
+
+
 def crops_visually_similar(
     a: np.ndarray,
     b: np.ndarray,
     diff_thresh: int = 12,
     ratio_thresh: float = 0.0008,
 ) -> bool:
-    if a.shape != b.shape or a.size == 0:
+    if a is None or b is None or a.size == 0 or b.size == 0:
         return False
+    if a.shape != b.shape:
+        return False
+    # So sánh trên thumbnail thay vì full-res.
+    if a.shape[1] > 160:
+        a = _to_thumb(a)
+        b = _to_thumb(b)
     diff = cv2.absdiff(a, b)
-    changed = np.count_nonzero(np.any(diff > diff_thresh, axis=2))
+    if diff.ndim == 3:
+        changed = np.count_nonzero(np.any(diff > diff_thresh, axis=2))
+    else:
+        changed = np.count_nonzero(diff > diff_thresh)
     return changed / (a.shape[0] * a.shape[1]) < ratio_thresh
 
 

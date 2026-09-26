@@ -68,7 +68,27 @@ class AppleOCREngine(BaseOCREngine):
     def _rebuild_request(self):
         Vision = self._Vision
         request = Vision.VNRecognizeTextRequest.alloc().init()
-        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        # Pin revision mới nhất mà máy hỗ trợ (3 > 2 > 1): model mới bắt
+        # chữ tốt hơn mà gần như không chậm thêm. Không set = chạy
+        # revision mặc định cũ.
+        for rev in (
+            Vision.VNRecognizeTextRequestRevision3,
+            Vision.VNRecognizeTextRequestRevision2,
+            Vision.VNRecognizeTextRequestRevision1,
+        ):
+            try:
+                request.setRevision_(rev)
+                if request.revision() == rev:
+                    logger.info("  Apple Vision: using request revision %d", rev)
+                    break
+            except Exception:
+                continue
+        if settings.apple_ocr_accurate:
+            request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        else:
+            # Fast nhanh hơn Accurate ~2-3x; sub cỡ lớn/rõ vẫn đọc tốt.
+            request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelFast)
+        # Language correction sửa miss/sai theo từ điển — giữ bật ở cả 2 mode.
         request.setUsesLanguageCorrection_(True)
         request.setMinimumTextHeight_(0.0)
         langs = [APPLE_LANG_MAP[self._lang]]
@@ -94,7 +114,22 @@ class AppleOCREngine(BaseOCREngine):
             return ""
         import cv2
 
-        ok, buf = cv2.imencode(".jpg", image)
+        # Upscale trước khi OCR: Fast miss chủ yếu ở chữ nhỏ, phóng to crop
+        # giúp bắt lại phần lớn mà chi phí encode thêm không đáng kể.
+        scale = settings.apple_upscale
+        if scale and scale != 1.0:
+            h, w = image.shape[:2]
+            image = cv2.resize(
+                image, (max(1, int(w * scale)), max(1, int(h * scale))),
+                interpolation=cv2.INTER_CUBIC,
+            )
+
+        # Quality 80 (thay vì default 95): encode nhanh hơn + payload Vision
+        # nhỏ hơn, chất lượng vẫn dư cho OCR chữ.
+        ok, buf = cv2.imencode(
+            ".jpg", image,
+            [cv2.IMWRITE_JPEG_QUALITY, settings.apple_jpeg_quality],
+        )
         if not ok:
             return ""
         data = self._Foundation.NSData.dataWithBytes_length_(

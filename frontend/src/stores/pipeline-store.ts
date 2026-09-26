@@ -842,6 +842,16 @@ export const usePipelineStore = create<PipelineState>()(
         rejectThumbnailReview(id);
         rejectThumbnailFallback(id);
         rejectKeepOriginal(id);
+        rejectVoiceCheck(id);
+        // Hủy mà không nhả slot → pipeline sau xếp hàng mãi sau một "bóng ma"
+        // đã bị xóa khỏi store. Xóa entry chờ + nhả slot của chính id này.
+        for (let i = queue.length - 1; i >= 0; i--) {
+          if (queue[i].id === id) queue.splice(i, 1);
+        }
+        if (processingOwner === id) {
+          processing = false;
+          processingOwner = null;
+        }
         if (videoId) {
           try {
             await fetch(`/api/video/${videoId}/abort`, { method: "POST" });
@@ -849,6 +859,9 @@ export const usePipelineStore = create<PipelineState>()(
             // ignore
           }
         }
+        // Coroutine cũ (nếu còn kẹt ở poll) khi tỉnh sẽ thấy owner đã đổi
+        // nên không ghi đè slot; gọi processQueue để pipeline chờ được chạy ngay.
+        processQueue();
       },
       hydrate: (pipelines) => set({ pipelines }),
       hydrateFinished: (list) =>
@@ -1383,7 +1396,7 @@ const timelineCheckWaiters = new Map<
 >();
 const voiceCheckWaiters = new Map<
   string,
-  { resolve: (action: string) => void }
+  { resolve: (action: string) => void; reject: (e: Error) => void }
 >();
 const watermarkRegionWaiters = new Map<
   string,
@@ -1571,9 +1584,17 @@ function waitForTimelineCheck(id: string): Promise<"fix" | "continue"> {
 }
 
 function waitForVoiceCheck(id: string): Promise<string> {
-  return new Promise<string>((resolve) => {
-    voiceCheckWaiters.set(id, { resolve });
+  return new Promise<string>((resolve, reject) => {
+    voiceCheckWaiters.set(id, { resolve, reject });
   });
+}
+
+function rejectVoiceCheck(id: string) {
+  const w = voiceCheckWaiters.get(id);
+  if (w) {
+    voiceCheckWaiters.delete(id);
+    w.reject(new Error("Đã hủy pipeline"));
+  }
 }
 
 function rejectTimelineCheck(id: string) {
@@ -3151,6 +3172,8 @@ async function runPipeline(id: string, startStep = 4, force = false) {
         } finally {
           patch(id, { voiceCheck: null });
         }
+        // Bị hủy trong lúc duyệt giọng → dừng hẳn, không chạy tiếp burn.
+        if (abortedPipelines.has(id)) return;
       }
     }
 

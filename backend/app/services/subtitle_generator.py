@@ -195,7 +195,10 @@ def generate_srt_entries(
                 progress_callback(i, total_frames or i + 1)
             continue
 
-        similarity = fuzz.ratio(text, prev_text) / 100.0
+        similarity = (
+            1.0 if text == prev_text
+            else fuzz.ratio(text, prev_text) / 100.0
+        )
 
         if similarity < settings.similarity_threshold:
             if prev_text.strip() and stable_count >= min_stable:

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Parallel OCR: chia timeline video thành N đoạn và OCR đồng thời N đoạn.
     # 1 = tắt (xử lý tuần tự như cũ). N > 1 = chạy N luồng OCR song song.
     # Mỗi đoạn dùng 1 engine riêng (RapidOCR load N model vào RAM).
-    ocr_parallel_parts: int = 2
+    ocr_parallel_parts: int = 4
     # Chồng lấn giữa 2 đoạn liền kề (giây) để sub nằm ngay biên không bị cắt đôi;
     # phần trùng được gộp lại khi merge kết quả.
     ocr_parallel_overlap: float = 2.0
@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     stt_min_gap: float = 0.5  # gap tối thiểu (giây) mới xét STT
     stt_no_speech_threshold: float = 0.6
     stt_language: str = ""  # "" = auto, hoặc "zh"/"en"/"vi"
+
+    # Apple Vision OCR: Accurate chậm hơn Fast ~2-3x nhưng Fast miss nhiều
+    # chữ nhỏ (đặc biệt sub Trung) — thực tế giữ Accurate làm mặc định.
+    # Chỉ dùng Fast khi cần tốc độ và chấp nhận miss: STE_apple_ocr_accurate=false.
+    apple_ocr_accurate: bool = True
+    apple_jpeg_quality: int = 80
+    # Phóng to crop trước khi đưa vào Vision: Fast miss chủ yếu ở chữ nhỏ.
+    # 1.0 = tắt; 2.0 = gấp đôi (khuyên dùng với Fast).
+    apple_upscale: float = 2.0
 
     # Parallel Range download (video/audio merge)
     parallel_download_enabled: bool = True

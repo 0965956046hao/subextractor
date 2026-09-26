@@ -27,6 +27,7 @@ class BaseOCREngine:
     def __init__(self):
         self._lock = threading.Lock()
         self._prev_crop: np.ndarray | None = None
+        self._prev_raw: np.ndarray | None = None
         self._prev_text: str = ""
         self._total_calls = 0
         self._cache_hits = 0
@@ -50,8 +51,7 @@ class BaseOCREngine:
     def ocr_region_cached(self, crop: np.ndarray, color_filter=None) -> str:
         if crop.size == 0:
             return ""
-        # Apply color mask before dHash/cache so filtered view is cached
-        # — handle both dict (worker job) and pydantic object
+        # Parse color_filter một lần (dict từ worker job hoặc pydantic object).
         enabled = False
         color = "#FFFFFF"
         tolerance = 30
@@ -63,24 +63,30 @@ class BaseOCREngine:
             enabled = bool(getattr(color_filter, "enabled", False))
             color = getattr(color_filter, "color", "#FFFFFF")
             tolerance = getattr(color_filter, "tolerance", 30)
-        if enabled:
-            try:
-                from app.services.color_mask import apply_color_mask
-                crop = apply_color_mask(crop, color, tolerance)
-            except Exception:
-                pass
+        # Fast path: frame giống hệt frame trước (so trên ảnh gốc, chưa mask)
+        # thì bỏ qua luôn bước mask đắt đỏ + OCR.
+        # Mask là hàm deterministic theo pixel nên raw giống => masked giống.
         if (
-            self._prev_crop is not None
+            self._prev_raw is not None
             and self._hit_streak < settings.ocr_cache_max_streak
-            and crops_visually_similar(self._prev_crop, crop)
+            and crops_visually_similar(self._prev_raw, crop)
         ):
             self._cache_hits += 1
             self._hit_streak += 1
             return self._prev_text
+        # Cache miss mới cần mask (nếu bật) rồi OCR.
+        ocr_input = crop
+        if enabled:
+            try:
+                from app.services.color_mask import apply_color_mask
+                ocr_input = apply_color_mask(crop, color, tolerance)
+            except Exception:
+                ocr_input = crop
         self._total_calls += 1
         self._hit_streak = 0
-        text = self.ocr_image(crop)
-        self._prev_crop = crop
+        text = self.ocr_image(ocr_input)
+        self._prev_raw = crop
+        self._prev_crop = ocr_input
         self._prev_text = text
         return text
 
@@ -92,6 +98,7 @@ class BaseOCREngine:
                 100 * self._cache_hits / (self._total_calls + self._cache_hits) if (self._total_calls + self._cache_hits) else 0,
             )
         self._prev_crop = None
+        self._prev_raw = None
         self._prev_text = ""
         self._total_calls = 0
         self._cache_hits = 0

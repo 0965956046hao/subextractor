@@ -2,6 +2,7 @@ import uuid
 import time
 import asyncio
 import logging
+import queue
 import threading
 import functools
 from pathlib import Path
@@ -162,11 +163,44 @@ def _ocr_segment_entries(
     color_filter: dict | None = None,
 ) -> list[tuple[float, float, str]]:
     """OCR a single time segment and return its (start, end, text) entries."""
+    # Producer/consumer: 1 thread decode + crop (I/O-bound) prefetch vào queue
+    # trong khi thread hiện tại OCR (CPU-bound). Trước đây decode đứng chờ
+    # mỗi lần OCR block -> lãng phí ~20-40% thời gian.
+    _sentinel = object()
+    _q: queue.Queue = queue.Queue(maxsize=16)
+    _stop = threading.Event()
+    _decode_error: list[BaseException] = []
+
+    def _producer():
+        try:
+            for frame, ts in stream_frames_generator(
+                video_path, target_fps, start_time=start_time, end_time=end_time
+            ):
+                if _stop.is_set():
+                    break
+                item = (crop_region(frame, region), ts)
+                while not _stop.is_set():
+                    try:
+                        _q.put(item, timeout=0.2)
+                        break
+                    except queue.Full:
+                        continue
+        except BaseException as e:  # noqa: BLE001 — propagate to consumer
+            _decode_error.append(e)
+        finally:
+            while not _stop.is_set():
+                try:
+                    _q.put(_sentinel, timeout=0.2)
+                    break
+                except queue.Full:
+                    continue
+
     def _gen():
-        for frame, ts in stream_frames_generator(
-            video_path, target_fps, start_time=start_time, end_time=end_time
-        ):
-            yield (crop_region(frame, region), ts)
+        while True:
+            item = _q.get()
+            if item is _sentinel:
+                break
+            yield item
 
     # Wrap crops to inject color_filter into ocr_region_cached via closure
     # We monkey-patch generate_srt_entries' engine call by passing color_filter through
@@ -181,17 +215,29 @@ def _ocr_segment_entries(
     crops = _gen()
     # Mỗi segment dùng đúng 1 engine riêng (dHash cache + language độc lập),
     # nên không cần khoá chung. Vẫn giữ lock cho an toàn nếu engine bị chia sẻ.
+    producer = threading.Thread(target=_producer, daemon=True)
+    producer.start()
     with engine.lock():
         engine.set_lang(lang)
         # Temporarily patch
         engine.ocr_region_cached = filtered_cached  # type: ignore
         try:
-            return generate_srt_entries(
-                crops, engine,
-                progress_callback=progress_cb,
-                text_callback=text_cb,
-                total_frames=None,
-            )
+            try:
+                result = generate_srt_entries(
+                    crops, engine,
+                    progress_callback=progress_cb,
+                    text_callback=text_cb,
+                    total_frames=None,
+                )
+            except BaseException:
+                _stop.set()
+                raise
+            finally:
+                _stop.set()
+                producer.join(timeout=10)
+            if _decode_error:
+                raise _decode_error[0]
+            return result
         finally:
             engine.ocr_region_cached = orig_cached  # type: ignore
 
@@ -264,10 +310,11 @@ def process_job_sync(
     # ── Sequential (parts == 1) ────────────────────────────────────────────
     if parts <= 1 or (eff_end - eff_start) <= overlap * 2 + 1e-6:
         last_pct_log = 0
+        last_pct_sent = -1
         tg_chat_id = job.get("chat_id")
 
         def progress_cb(idx: int, total: int):
-            nonlocal last_pct_log
+            nonlocal last_pct_log, last_pct_sent
             if job.get("cancelled"):
                 raise JobCancelled()
             if total_crops:
@@ -284,9 +331,13 @@ def process_job_sync(
                 )
                 if tg_chat_id:
                     _tg_notify_sync(loop, tg_chat_id, f"🔍 OCR: {pct}%")
-            _notify_sync(loop, ws_clients, job_id, {
-                "type": "progress", "progress": pct, "phase": "ocr",
-            })
+            # Throttle WS: chỉ gửi khi % đổi (tối đa ~100 msg/job thay vì
+            # hàng nghìn msg khi extract_fps cao) để khỏi nghẽn event loop.
+            if pct != last_pct_sent:
+                last_pct_sent = pct
+                _notify_sync(loop, ws_clients, job_id, {
+                    "type": "progress", "progress": pct, "phase": "ocr",
+                })
 
         job_log(job, ws_clients, loop, "Bắt đầu nhận dạng chữ viết trong video…")
         logger.info("job %s: running OCR (sequential)...", job_id)
@@ -320,7 +371,7 @@ def process_job_sync(
             bounds.append((max(eff_start, s), min(eff_end, e)))
 
         progress_lock = threading.Lock()
-        state = {"done": 0, "last_pct": 0, "last_log": 0}
+        state = {"done": 0, "last_pct": 0, "last_log": 0, "last_sent": -1}
         tg_chat_id = job.get("chat_id")
 
         def make_progress_cb():
@@ -339,6 +390,10 @@ def process_job_sync(
                         do_log = True
                     else:
                         do_log = False
+                    # Throttle WS: chỉ gửi khi % đổi.
+                    should_send = pct != state["last_sent"]
+                    if should_send:
+                        state["last_sent"] = pct
                 job["progress"] = pct
                 if do_log:
                     job_log(
@@ -348,9 +403,10 @@ def process_job_sync(
                     )
                     if tg_chat_id:
                         _tg_notify_sync(loop, tg_chat_id, f"🔍 OCR: {pct}%")
-                _notify_sync(loop, ws_clients, job_id, {
-                    "type": "progress", "progress": pct, "phase": "ocr",
-                })
+                if should_send:
+                    _notify_sync(loop, ws_clients, job_id, {
+                        "type": "progress", "progress": pct, "phase": "ocr",
+                    })
             return cb
 
         with ThreadPoolExecutor(max_workers=parts) as ex:
