@@ -1,30 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import VideoPlayer from "@/components/VideoPlayer";
 import type { Region, SubtitleStyle } from "@/lib/api";
 import { getAppConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import VideoPlayer from "@/components/VideoPlayer";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface Props {
   videoId: string;
   region: Region;
   onConfirmed: (style: Partial<SubtitleStyle>) => void;
+  /** Style đã có từ trước (vd sửa giữa chừng) — ưu tiên hơn Settings. */
+  initial?: Partial<SubtitleStyle> | null;
 }
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
-export default function SubtitlePreview({ videoId, region, onConfirmed }: Props) {
+export default function SubtitlePreview({
+  videoId,
+  region,
+  onConfirmed,
+  initial,
+}: Props) {
   const { t } = useI18n();
-  const [fontSize, setFontSize] = useState(48);
-  const [marginV, setMarginV] = useState(40);
-  const [marginH, setMarginH] = useState(0);
-  const [textColor, setTextColor] = useState("#FFFFFF");
-  const [outlineColor, setOutlineColor] = useState("#000000");
-  const [outlineWidth, setOutlineWidth] = useState(0);
-  const [boxColor, setBoxColor] = useState("#000000");
+  const [fontSize, setFontSize] = useState(initial?.font_size ?? 48);
+  const [marginV, setMarginV] = useState(initial?.margin_v ?? 40);
+  const [marginH, setMarginH] = useState(initial?.margin_h ?? 0);
+  const [textColor, setTextColor] = useState(initial?.text_color ?? "#FFFFFF");
+  const [outlineColor, setOutlineColor] = useState(
+    initial?.outline_color ?? "#000000",
+  );
+  const [outlineWidth, setOutlineWidth] = useState(initial?.outline_width ?? 0);
+  const [boxColor, setBoxColor] = useState(initial?.box_color ?? "#000000");
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -32,7 +41,12 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTimeRef = useRef(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ x: number; y: number; mv: number; mh: number } | null>(null);
+  const dragRef = useRef<{
+    x: number;
+    y: number;
+    mv: number;
+    mh: number;
+  } | null>(null);
 
   const fetchOverlay = useCallback(
     async (
@@ -48,13 +62,12 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         box_color: string;
       },
     ) => {
-      const c =
-        colOverride ?? {
-          text_color: textColor,
-          outline_color: outlineColor,
-          outline_width: outlineWidth,
-          box_color: boxColor,
-        };
+      const c = colOverride ?? {
+        text_color: textColor,
+        outline_color: outlineColor,
+        outline_width: outlineWidth,
+        box_color: boxColor,
+      };
       if (!force && Math.abs(time - lastTimeRef.current) < 0.3) return;
       lastTimeRef.current = time;
       setLoading(true);
@@ -75,6 +88,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
               box_color: c.box_color,
             },
             text: t("preview.sampleText"),
+            // Editor vị trí chỉ cần chữ mẫu cố định (box ổn định khi kéo
+            // timeline) — giống hệt bước trong pipeline lúc chưa có SRT.
+            prefer_srt: false,
             time,
             format: "overlay",
           }),
@@ -96,20 +112,22 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
 
   // Initial overlay at t=0, then re-render on slider changes (debounced).
   // Kiểu dáng đã lưu ở Settings (/api/config → subtitle_style) được nạp làm
-  // giá trị khởi đầu để màn chọn vị trí sub "ăn" config.
+  // giá trị khởi đầu để màn chọn vị trí sub "ăn" config. `initial` (style của
+  // pipeline khi sửa giữa chừng) được ưu tiên cao nhất.
   useEffect(() => {
     let alive = true;
     getAppConfig()
       .then((cfg) => {
         if (!alive) return;
-        const s = cfg.subtitle_style;
-        if (s) {
+        const s = { ...(cfg.subtitle_style ?? {}), ...(initial ?? {}) };
+        if (Object.keys(s).length > 0) {
           if (typeof s.font_size === "number") setFontSize(s.font_size);
           if (typeof s.margin_v === "number") setMarginV(s.margin_v);
           if (typeof s.margin_h === "number") setMarginH(s.margin_h);
           if (s.text_color) setTextColor(s.text_color);
           if (s.outline_color) setOutlineColor(s.outline_color);
-          if (typeof s.outline_width === "number") setOutlineWidth(s.outline_width);
+          if (typeof s.outline_width === "number")
+            setOutlineWidth(s.outline_width);
           if (s.box_color) setBoxColor(s.box_color);
           fetchOverlay(
             s.font_size ?? 48,
@@ -145,28 +163,37 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
       // hasn't moved (otherwise the time-throttle silently drops the update).
       fetchOverlay(fs, mv, mh, t, true);
     },
-    [fetchOverlay]
+    [fetchOverlay],
   );
 
   const handleFontSize = (v: number) => {
     const next = clamp(v, 16, 160);
     setFontSize(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => refresh(next, marginV, marginH), 250);
+    debounceRef.current = setTimeout(
+      () => refresh(next, marginV, marginH),
+      250,
+    );
   };
 
   const handleMarginV = (v: number) => {
     const next = clamp(v, 0, 400);
     setMarginV(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => refresh(fontSize, next, marginH), 250);
+    debounceRef.current = setTimeout(
+      () => refresh(fontSize, next, marginH),
+      250,
+    );
   };
 
   const handleMarginH = (v: number) => {
     const next = clamp(v, -600, 600);
     setMarginH(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => refresh(fontSize, marginV, next), 250);
+    debounceRef.current = setTimeout(
+      () => refresh(fontSize, marginV, next),
+      250,
+    );
   };
 
   // Color controls: update state + re-render preview with the new palette.
@@ -196,11 +223,20 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   const handleTimeUpdate = () => {
     const t = videoRef.current?.currentTime ?? 0;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchOverlay(fontSize, marginV, marginH, t), 200);
+    debounceRef.current = setTimeout(
+      () => fetchOverlay(fontSize, marginV, marginH, t),
+      200,
+    );
   };
 
   const handleSeeked = () => {
-    fetchOverlay(fontSize, marginV, marginH, videoRef.current?.currentTime ?? 0, true);
+    fetchOverlay(
+      fontSize,
+      marginV,
+      marginH,
+      videoRef.current?.currentTime ?? 0,
+      true,
+    );
   };
 
   const handleConfirm = () => {
@@ -253,13 +289,16 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     <div className="space-y-4">
       <div className="glass-panel rounded-2xl p-4 sm:p-5 flex items-start justify-between gap-4">
         <p className="text-sm text-ink-muted leading-relaxed">
-          {t("preview.helpDesc1")}{" "}
-          <b>{t("preview.confirmAction")}</b>{" "}
+          {t("preview.helpDesc1")} <b>{t("preview.confirmAction")}</b>{" "}
           {t("preview.helpDesc2")}
         </p>
         <div className="flex gap-2 flex-shrink-0">
-          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">↵</kbd>
-          <span className="text-[10px] text-ink-light self-center hidden sm:inline">{t("preview.confirmShort")}</span>
+          <kbd className="px-2 py-0.5 rounded text-[10px] font-mono text-ink-muted bg-white/[0.04] ring-1 ring-white/[0.09]">
+            ↵
+          </kbd>
+          <span className="text-[10px] text-ink-light self-center hidden sm:inline">
+            {t("preview.confirmShort")}
+          </span>
         </div>
       </div>
 
@@ -373,7 +412,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           </p>
           <div className="grid grid-cols-2 gap-x-5 gap-y-3">
             <label className="flex items-center justify-between gap-2">
-              <span className="text-[12px] text-ink-light">{t("preview.textColor")}</span>
+              <span className="text-[12px] text-ink-light">
+                {t("preview.textColor")}
+              </span>
               <input
                 type="color"
                 value={textColor}
@@ -382,7 +423,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
               />
             </label>
             <label className="flex items-center justify-between gap-2">
-              <span className="text-[12px] text-ink-light">{t("preview.outlineColor")}</span>
+              <span className="text-[12px] text-ink-light">
+                {t("preview.outlineColor")}
+              </span>
               <input
                 type="color"
                 value={outlineColor}
@@ -391,7 +434,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
               />
             </label>
             <label className="flex items-center justify-between gap-2">
-              <span className="text-[12px] text-ink-light">{t("preview.boxColor")}</span>
+              <span className="text-[12px] text-ink-light">
+                {t("preview.boxColor")}
+              </span>
               <input
                 type="color"
                 value={boxColor}
@@ -402,7 +447,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
             <label className="flex flex-col gap-1.5">
               <span className="text-[12px] text-ink-light flex items-center justify-between">
                 {t("preview.outlineWidth")}
-                <span className="text-[11px] font-mono text-accent font-semibold">{outlineWidth}px</span>
+                <span className="text-[11px] font-mono text-accent font-semibold">
+                  {outlineWidth}px
+                </span>
               </span>
               <input
                 type="range"
@@ -410,7 +457,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
                 max={10}
                 step={1}
                 value={outlineWidth}
-                onChange={(e) => applyColors({ outline_width: Number(e.target.value) })}
+                onChange={(e) =>
+                  applyColors({ outline_width: Number(e.target.value) })
+                }
                 className="w-full accent-accent"
               />
             </label>
@@ -425,7 +474,15 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           >
             <span className="tracking-tight">{t("preview.confirm")}</span>
             <span className="btn-island-icon">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             </span>

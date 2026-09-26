@@ -344,6 +344,32 @@ def _process_thumbnail(thumb_path: Path) -> Path:
     return out_path
 
 
+def _uploader_process_running(video_path: Path) -> int | None:
+    """Return the PID of a live youtubeuploader process for this file, if any.
+
+    Reload-proof duplicate guard: ``_youtube_jobs`` is in-memory and is wiped
+    on every uvicorn --reload, but an orphaned uploader binary keeps running.
+    Scanning the OS process table catches those cases too.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-fl", "youtubeuploader"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return None
+    needle = str(video_path)
+    for line in (proc.stdout or "").splitlines():
+        pid_str, _, cmd = line.partition(" ")
+        if needle and needle in cmd and pid_str.strip().isdigit():
+            pid = int(pid_str.strip())
+            if pid != os.getpid():
+                return pid
+    return None
+
+
 def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privacy: str, channel_id: str = "") -> dict:
     """Start YouTube upload in background, return job_id for polling."""
     from app.routers.config_router import get_youtube_channel_secrets, _yt_channel
@@ -360,7 +386,7 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
         token_path = REQUEST_TOKEN_PATH
 
     if not secrets_path.exists():
-        raise HTTPException(400, "client_secrets.json not found. Please configure YouTube API credentials first.")
+        raise HTTPException(400, "client_secrets.json not found (kênh mặc định chưa có credentials). Hãy chọn kênh YouTube đã cấu hình ở dropdown 'Kênh YouTube'.")
     if not _uploader_bin().exists():
         raise HTTPException(500, f"youtubeuploader binary not found at {_uploader_bin()}")
 
@@ -380,6 +406,28 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
         pass
 
     job_id = uuid.uuid4().hex[:12]
+    vp = str(video_path)
+
+    # Idempotency: không up 2 tiến trình cùng 1 file cùng lúc (double-click,
+    # rerun chồng runner sau releaseHeavySlot, 2 tab...). Job đang chạy được
+    # trả về để caller cùng poll — chỉ 1 video được tạo trên YouTube.
+    for jid, j in _youtube_jobs.items():
+        if j.get("status") == "uploading" and j.get("video_path") == vp:
+            logger.info("Upload already in progress for %s — reusing job %s", vp, jid)
+            return {"job_id": jid, "status": "uploading"}
+
+    dup_pid = _uploader_process_running(video_path)
+    if dup_pid is not None:
+        logger.warning(
+            "Refusing duplicate upload for %s: uploader PID %s already running",
+            vp, dup_pid,
+        )
+        raise HTTPException(
+            409,
+            "Video này đang được upload ở tiến trình khác "
+            "(có thể do backend vừa restart) — bỏ qua để tránh trùng video.",
+        )
+
     job = {
         "job_id": job_id,
         "status": "uploading",

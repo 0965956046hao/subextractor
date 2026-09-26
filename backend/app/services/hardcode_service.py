@@ -10,6 +10,7 @@ OpenCV to render a single frame for the interactive "tự chỉnh vị trí" pre
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -96,7 +97,7 @@ def auto_fit_style(
             font = ImageFont.truetype(font_path, font_px) if font_path else ImageFont.load_default()
         except Exception:
             font = ImageFont.load_default()
-        widest = max((draw.textbbox((0, 0), t, font=font)[2] for t in texts), default=0)
+        widest = max((_mixed_width(draw, t, font, font_px) for t in texts), default=0)
         if widest <= region_w - 16:
             break
         font_px -= 2
@@ -404,6 +405,110 @@ def _find_font(family: str = "Arial", bold: bool = False, italic: bool = False) 
 
 
 # ---------------------------------------------------------------------------
+# CJK font fallback for Pillow rendering
+# ---------------------------------------------------------------------------
+# Pillow does NOT do automatic font fallback: any char missing from the main
+# font (e.g. Chinese chars in Arial) renders as tofu boxes. The subtitle
+# preview AND the Pillow hardcode-fallback path share _render_subtitle, so a
+# line that still contains Chinese (untranslated SRT shown while scrubbing the
+# timeline) must be drawn with a CJK-capable font for those runs — while Latin
+# / Vietnamese keeps the user's chosen font.
+
+_CJK_CHAR_RE = re.compile(
+    "[\u2e80-\u2fdf\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf"
+    "\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef"
+    "\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b820-\U0002ceaf]"
+)
+
+_CJK_FONT_CANDIDATES = [
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+    ("/Library/Fonts/Arial Unicode.ttf", 0),
+]
+
+_cjk_font_cache: dict = {}
+
+
+def _cjk_font(size: int):
+    """CJK-capable Pillow font at `size` (cached), or None if unavailable."""
+    if size not in _cjk_font_cache:
+        from PIL import ImageFont
+
+        found = None
+        for path, index in _CJK_FONT_CANDIDATES:
+            try:
+                found = ImageFont.truetype(path, size, index=index)
+                break
+            except Exception:
+                continue
+        _cjk_font_cache[size] = found
+    return _cjk_font_cache[size]
+
+
+def _split_script_runs(text: str):
+    """Split text into (segment, is_cjk) runs for mixed-font rendering."""
+    runs: list = []
+    buf: list = []
+    cur = None
+    for ch in text:
+        is_cjk = _CJK_CHAR_RE.match(ch) is not None
+        if cur is None:
+            cur = is_cjk
+        if is_cjk != cur:
+            runs.append(("".join(buf), cur))
+            buf = []
+            cur = is_cjk
+        buf.append(ch)
+    if buf:
+        runs.append(("".join(buf), cur if cur is not None else False))
+    return runs
+
+
+def _mixed_width(draw, text: str, font_latin, size: int) -> int:
+    """Width of text measured with the same fonts used to draw it.
+
+    Pure-Latin/Vietnamese lines measure exactly as before (zero behavior
+    change); lines containing CJK measure run-by-run with the fallback font.
+    """
+    if _CJK_CHAR_RE.search(text) is None:
+        bb = draw.textbbox((0, 0), text, font=font_latin)
+        return bb[2] - bb[0]
+    cjk = _cjk_font(size)
+    if cjk is None:
+        bb = draw.textbbox((0, 0), text, font=font_latin)
+        return bb[2] - bb[0]
+    w = 0
+    for seg, is_cjk in _split_script_runs(text):
+        f = cjk if is_cjk else font_latin
+        bb = draw.textbbox((0, 0), seg, font=f)
+        w += bb[2] - bb[0]
+    return w
+
+
+def _draw_mixed_text(draw, xy, text: str, font_latin, size: int, **kwargs) -> None:
+    """Draw text run-by-run so CJK chars use the fallback font.
+
+    Falls back to a single draw.text call when the line has no CJK chars.
+    """
+    if _CJK_CHAR_RE.search(text) is None:
+        draw.text(xy, text, font=font_latin, **kwargs)
+        return
+    cjk = _cjk_font(size)
+    if cjk is None:
+        draw.text(xy, text, font=font_latin, **kwargs)
+        return
+    x, y = xy
+    for seg, is_cjk in _split_script_runs(text):
+        f = cjk if is_cjk else font_latin
+        draw.text((x, y), seg, font=f, **kwargs)
+        try:
+            x += draw.textlength(seg, font=f)
+        except Exception:
+            bb = draw.textbbox((x, y), seg, font=f)
+            x = bb[2]
+
+
+# ---------------------------------------------------------------------------
 # FFmpeg text escaping helpers
 # ---------------------------------------------------------------------------
 
@@ -512,15 +617,22 @@ def _render_subtitle(
                 font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
             except Exception:
                 font = ImageFont.load_default()
-            bbox = draw.textbbox((0, 0), text, font=font)
-            if bbox[2] - bbox[0] <= max_w:
+            if _mixed_width(draw, text, font, font_size) <= max_w:
                 break
             font_size -= 2
 
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    top = bbox[1]
+    # Vertical metrics combine latin + CJK runs so tall CJK glyphs fit the box.
+    # (Pure-latin lines reduce to the exact previous single-bbox behavior.)
+    tw = _mixed_width(draw, text, font, font_size)
+    top, bottom = 0, 0
+    for _seg, _is_cjk in _split_script_runs(text):
+        _f = _cjk_font(font_size) if _is_cjk else font
+        if _f is None:
+            _f = font
+        _bb = draw.textbbox((0, 0), _seg, font=_f)
+        top = min(top, _bb[1])
+        bottom = max(bottom, _bb[3])
+    th = bottom - top
 
     pad_x, pad_y = _SUB_PAD_X, _SUB_PAD_Y
     box_w = tw + pad_x * 2 + outline_w * 2
@@ -549,11 +661,13 @@ def _render_subtitle(
                 width=box_border_w,
             )
 
-    # draw text with optional outline stroke
-    draw.text(
+    # draw text with optional outline stroke (CJK runs use the fallback font)
+    _draw_mixed_text(
+        draw,
         (bx + pad_x + outline_w, by + pad_y + outline_w - top),
         text,
-        font=font,
+        font,
+        font_size,
         fill=text_color,
         stroke_width=outline_w,
         stroke_fill=outline_color,
