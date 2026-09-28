@@ -627,6 +627,46 @@ export async function regenerateTtsLine(
   return res.data;
 }
 
+export interface FailedSegment {
+  index: number;
+  text: string;
+  start: number;
+  end: number;
+  voice_type?: string;
+  original_text?: string;
+  error?: string;
+}
+
+export async function getFailedSegments(
+  videoId: string,
+  engine?: "capcut" | "google",
+): Promise<{ failed: FailedSegment[] }> {
+  const res = await api.get<{ failed: FailedSegment[] }>(
+    `/tts/${videoId}/failed-segments`,
+    engine ? { params: { engine } } : undefined,
+  );
+  return res.data;
+}
+
+export async function retryFailedSegments(
+  videoId: string,
+  opts: {
+    indices?: number[];
+    engine?: "capcut" | "google";
+    texts?: Record<string, string>;
+  },
+): Promise<{ succeeded: number; failed: FailedSegment[] }> {
+  const res = await api.post<{ succeeded: number; failed: FailedSegment[] }>(
+    `/tts/${videoId}/retry-segments`,
+    {
+      ...(opts.indices ? { indices: opts.indices } : {}),
+      ...(opts.engine ? { engine: opts.engine } : {}),
+      ...(opts.texts ? { texts: opts.texts } : {}),
+    },
+  );
+  return res.data;
+}
+
 export async function rebuildFullAudio(
   videoId: string,
   opts?: { muteOriginal?: boolean; originalGainDb?: number },

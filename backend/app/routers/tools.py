@@ -2213,6 +2213,299 @@ async def rebuild_full_audio(request: Request, video_id: str):
     }
 
 
+# ── Dub retry helpers (DubRetryModal) ──
+
+_CAPCUT_DEFAULT_VOICE = "BV421_vivn_streaming"
+_GOOGLE_DEFAULT_VOICE = "vi-VN-Standard-A"
+
+
+def _tts_voice_dirs(video_id: str) -> list[Path]:
+    """Các thư mục voice đã có mp3 (bỏ qua `separated`)."""
+    root = settings.temp_dir / "tts" / video_id
+    if not root.exists():
+        return []
+    return sorted(
+        [p for p in root.iterdir() if p.is_dir() and p.name != "separated"],
+        key=lambda p: p.name,
+    )
+
+
+def _tts_active_voice(video_id: str, engine: str | None = None) -> tuple[Path, str, str]:
+    """Đoán voice dir đang dùng: meta full_voice → thư mục nhiều mp3 nhất → mặc định theo engine.
+
+    Trả về (out_dir, voice_name, engine).
+    """
+    root = settings.temp_dir / "tts" / video_id
+    dirs = _tts_voice_dirs(video_id)
+    meta_voice: str | None = None
+    meta_engine: str | None = None
+    try:
+        meta = json.loads((root / "full_voice.meta.json").read_text(encoding="utf-8"))
+        meta_voice = (meta.get("voice") or "").strip() or None
+        meta_engine = (meta.get("engine") or "").strip() or None
+    except Exception:
+        pass
+    eng = (engine or meta_engine or "capcut").strip().lower()
+    if eng not in ("capcut", "google"):
+        eng = "capcut"
+    if meta_voice and (engine is None or meta_engine == eng):
+        key = meta_voice.replace("-", "_")
+        return root / key, meta_voice, eng
+    best: Path | None = None
+    best_count = -1
+    for d in dirs:
+        try:
+            n = sum(1 for _ in d.glob("*.mp3"))
+        except Exception:
+            n = 0
+        if n > best_count:
+            best, best_count = d, n
+    if best is not None and best_count > 0:
+        return best, best.name.replace("_", "-"), eng
+    default_voice = _CAPCUT_DEFAULT_VOICE if eng == "capcut" else _GOOGLE_DEFAULT_VOICE
+    out_dir = root / default_voice.replace("-", "_")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir, default_voice, eng
+
+
+def _tts_failed_indices(video_id: str, out_dir: Path, entry_count: int) -> set[int]:
+    """Hợp marker `.failed_silence.json` + file mp3 thiếu/rỗng (chạy crash giữa chừng)."""
+    failed: set[int] = set()
+    try:
+        marker = out_dir / ".failed_silence.json"
+        if marker.exists():
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                failed.update(int(x) for x in data)
+    except Exception:
+        pass
+    for idx in range(1, entry_count + 1):
+        target = out_dir / f"{idx:04d}.mp3"
+        try:
+            if not target.exists() or target.stat().st_size == 0:
+                failed.add(idx)
+        except Exception:
+            failed.add(idx)
+    return failed
+
+
+def _tts_write_failed_marker(out_dir: Path, failed: set[int]) -> None:
+    marker = out_dir / ".failed_silence.json"
+    try:
+        if failed:
+            marker.write_text(json.dumps(sorted(failed)), encoding="utf-8")
+        else:
+            marker.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+@router.get("/api/tts/{video_id}/failed-segments")
+async def get_failed_segments(video_id: str, engine: str | None = Query(default=None)):
+    """Liệt kê các dòng TTS lỗi (đang là khoảng lặng): marker + mp3 thiếu."""
+    from app.services.translation_service import load_voice_map
+
+    srt_path = _srt_best_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    if not entries:
+        return {"failed": []}
+    out_dir, _voice_name, eng = _tts_active_voice(video_id, engine)
+    failed_idx = _tts_failed_indices(video_id, out_dir, len(entries))
+    voice_map = load_voice_map(video_id) if eng == "capcut" else {}
+
+    orig_entries: list = []
+    try:
+        orig_path = _srt_path(video_id).with_name("subtitles_original.srt")
+        if orig_path.exists():
+            orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
+    failed = []
+    for i, entry in enumerate(entries):
+        idx = i + 1
+        if idx not in failed_idx or not entry.text.strip():
+            continue
+        orig = next((x for x in orig_entries if x.index == idx), None)
+        failed.append({
+            "index": idx,
+            "text": entry.text.strip(),
+            "start": entry.start,
+            "end": entry.end,
+            "voice_type": voice_map.get(idx),
+            "original_text": (orig.text.strip() if orig else ""),
+        })
+    return {"failed": failed}
+
+
+@router.post("/api/tts/{video_id}/retry-segments")
+async def retry_segments(request: Request, video_id: str):
+    """Thử lại TTS cho các dòng lỗi (ghi đè mp3 + xóa marker khi xong).
+
+    Body: ``{"indices": [1, 5], "engine": "capcut"|"google",
+    "texts": {"1": "text sửa tay"}}``. Không truyền `indices` = retry toàn bộ
+    dòng đang lỗi. `texts[idx]` khác SRT sẽ được ghi ngược vào SRT để hardcode
+    khớp audio.
+    """
+    from fastapi.concurrency import run_in_threadpool
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    engine = str(body.get("engine") or "capcut").strip().lower()
+    if engine not in ("capcut", "google"):
+        engine = "capcut"
+    raw_indices = body.get("indices")
+    raw_texts = body.get("texts") or {}
+
+    srt_path = _srt_best_path(video_id)
+    if not srt_path.exists():
+        raise HTTPException(404, "SRT not found")
+    entries = parse_srt(srt_path.read_text(encoding="utf-8"))
+    if not entries:
+        raise HTTPException(400, "No subtitle entries found")
+
+    out_dir, voice_name, eng = _tts_active_voice(video_id, engine)
+    if raw_indices:
+        try:
+            indices = sorted({int(x) for x in raw_indices})
+        except Exception:
+            raise HTTPException(400, "indices must be numbers")
+        indices = [i for i in indices if 1 <= i <= len(entries)]
+    else:
+        indices = sorted(_tts_failed_indices(video_id, out_dir, len(entries)))
+    if not indices:
+        return {"succeeded": 0, "failed": []}
+
+    # Text override (sửa tay trong modal) → ghi ngược vào SRT để hardcode khớp audio.
+    overrides: dict[int, str] = {}
+    for k, v in (raw_texts.items() if isinstance(raw_texts, dict) else []):
+        try:
+            idx = int(k)
+        except Exception:
+            continue
+        text = str(v or "").strip()
+        if 1 <= idx <= len(entries) and text and text != entries[idx - 1].text.strip():
+            overrides[idx] = text
+    if overrides:
+        for idx, text in overrides.items():
+            entries[idx - 1] = entries[idx - 1].model_copy(update={"text": text})
+        srt_path.write_text(entries_to_srt(entries), encoding="utf-8")
+
+    if eng == "capcut":
+        from app.services.translation_service import load_voice_map
+
+        voice_map = load_voice_map(video_id)
+        rate = settings.capcut_tts_default_rate
+        groups: dict[str, list[tuple[int, str]]] = {}
+        for idx in indices:
+            text = overrides.get(idx, entries[idx - 1].text.strip())
+            if not text:
+                continue
+            voice = voice_map.get(idx) or voice_name
+            groups.setdefault(voice, []).append((idx, text))
+        failed: list[dict] = []
+        succeeded = 0
+        for voice, items in groups.items():
+            # Xóa silence cũ để batch retry gen lại từ đầu (giống resume trong tts_service).
+            for idx, _text in items:
+                try:
+                    (out_dir / f"{idx:04d}.mp3").unlink(missing_ok=True)
+                except Exception:
+                    pass
+            try:
+                from app.services.capcut_tts_client import generate_segments_to_dir
+
+                await run_in_threadpool(
+                    generate_segments_to_dir,
+                    [t for _, t in items],
+                    out_dir,
+                    voice,
+                    rate,
+                    "",  # prefix rỗng → file {index:04d}.mp3
+                    None,
+                    None,
+                    [i for i, _ in items],
+                )
+            except Exception as e:
+                from app.services.tts_service import _create_silence
+
+                for idx, _text in items:
+                    failed.append({"index": idx, "error": str(e)[:300]})
+                    try:
+                        target = out_dir / f"{idx:04d}.mp3"
+                        if not target.exists():
+                            _create_silence(target, max(entries[idx - 1].end - entries[idx - 1].start, 0.5))
+                    except Exception:
+                        pass
+                continue
+            for idx, _text in items:
+                target = out_dir / f"{idx:04d}.mp3"
+                try:
+                    ok = target.exists() and target.stat().st_size > 0
+                except Exception:
+                    ok = False
+                if ok:
+                    succeeded += 1
+                else:
+                    failed.append({"index": idx, "error": "TTS file not created"})
+                    try:
+                        from app.services.tts_service import _create_silence
+
+                        _create_silence(target, max(entries[idx - 1].end - entries[idx - 1].start, 0.5))
+                    except Exception:
+                        pass
+    else:
+        from app.services.tts_service import _get_tts_client, _synthesize_with_retry
+
+        try:
+            client = _get_tts_client()
+        except Exception as e:
+            raise HTTPException(400, f"Google TTS chưa cấu hình: {e}")
+        failed = []
+        succeeded = 0
+        for idx in indices:
+            text = overrides.get(idx, entries[idx - 1].text.strip())
+            if not text:
+                continue
+            try:
+                (out_dir / f"{idx:04d}.mp3").unlink(missing_ok=True)
+            except Exception:
+                pass
+            entry = entries[idx - 1].model_copy(update={"text": text})
+            try:
+                await run_in_threadpool(
+                    _synthesize_with_retry, client, entry, out_dir, idx, voice_name, None,
+                )
+                target = out_dir / f"{idx:04d}.mp3"
+                if target.exists() and target.stat().st_size > 0:
+                    succeeded += 1
+                else:
+                    raise RuntimeError("TTS file not created")
+            except Exception as e:
+                failed.append({"index": idx, "error": str(e)[:300]})
+                try:
+                    from app.services.tts_service import _create_silence
+
+                    target = out_dir / f"{idx:04d}.mp3"
+                    _create_silence(target, max(entries[idx - 1].end - entries[idx - 1].start, 0.5))
+                except Exception:
+                    pass
+
+    remaining = _tts_failed_indices(video_id, out_dir, len(entries))
+    for idx, _item in [(f["index"], f) for f in failed]:
+        remaining.add(idx)
+    for idx in indices:
+        if idx not in {f["index"] for f in failed}:
+            remaining.discard(idx)
+    _tts_write_failed_marker(out_dir, remaining)
+    return {"succeeded": succeeded, "failed": failed}
+
+
 # ── GET /api/download/translated/{video_id} ──
 
 @router.get("/api/download/translated/{video_id}")
