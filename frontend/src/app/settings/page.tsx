@@ -9,7 +9,8 @@ import {
   saveAppConfig,
   getPipelineHealth,
   getProfilesConfig,
-  douyinLogin,
+  douyinLoginVisibleStart,
+  douyinLoginVisibleStatus,
   chatgptLogin,
   geminiLogin,
   createWatermarkPreset,
@@ -426,7 +427,21 @@ export default function SettingsPage() {
     setProfileBusy(svc);
     try {
       if (svc === "douyin") {
-        await douyinLogin();
+        // Visible-Chrome QR login: POST starts (returns at once), then poll
+        // GET until the user finishes scanning the QR in the opened window.
+        const started = await douyinLoginVisibleStart();
+        if (started.status === "error") throw new Error(started.status);
+        setStatus(t("settings.profile.waitingQR"));
+        const deadline = Date.now() + 200_000;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const st = await douyinLoginVisibleStatus();
+          if (st.status === "done") break;
+          if (st.status === "timeout" || st.status === "error") {
+            throw new Error(st.detail || t("settings.profile.errOpen"));
+          }
+          if (Date.now() > deadline) throw new Error(t("settings.profile.loginTimeout"));
+        }
       } else if (svc === "chatgpt") {
         await chatgptLogin();
       } else {
@@ -436,7 +451,7 @@ export default function SettingsPage() {
       setProfileStatus(pc.resolved);
       setStatus(
         svc === "douyin"
-          ? t("settings.profile.openedDouyin")
+          ? t("settings.profile.loginDone")
           : svc === "chatgpt"
             ? t("settings.profile.openedChatgpt")
             : t("settings.profile.openedGemini"),

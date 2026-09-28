@@ -7,6 +7,12 @@ import {
   USER_AGENT,
   type BrowserHandle,
 } from "@/lib/douyin";
+import {
+  loadCache,
+  saveCache,
+  mergeVideos,
+  maxCreateTime,
+} from "@/lib/channel-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +35,13 @@ interface AwemeItem {
     comment_count?: number;
     share_count?: number;
   };
+  mix_info?: { mix_id?: string; mix_name?: string };
+}
+
+interface PlaylistGroup {
+  id: string;
+  title: string;
+  videos: AwemeItem[];
 }
 
 interface ScanResult {
@@ -36,10 +49,16 @@ interface ScanResult {
   total: number;
   filtered: number;
   videos: AwemeItem[];
+  playlists: PlaylistGroup[];
+  /** Incremental-cache info. */
+  cached?: number;
+  added?: number;
+  scanned_at?: number;
+  from_cache?: boolean;
 }
 
 export async function POST(req: NextRequest) {
-  let body: { url?: string; since?: number };
+  let body: { url?: string; since?: number; full?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -50,7 +69,13 @@ export async function POST(req: NextRequest) {
   if (!url)
     return NextResponse.json({ detail: "URL is required" }, { status: 400 });
 
-  const sinceTimestamp = body.since ?? 0;
+  const cache = loadCache();
+  const prev = cache.channel_scans[url];
+  const prevVideos = prev?.videos ?? [];
+  // Incremental default: only fetch newer than the newest cached video.
+  // full=true ignores the cache and rescans from the requested date.
+  const sinceTimestamp =
+    body.full ? (body.since ?? 0) : Math.max(body.since ?? 0, prev?.max_time ?? 0);
 
   let handle: BrowserHandle;
   try {
@@ -68,6 +93,7 @@ export async function POST(req: NextRequest) {
   }
 
   const capturedAwemeLists: AwemeItem[][] = [];
+  const capturedMixLists: Array<Array<{ mix_id: string; mix_name: string }>> = [];
   let channelName = "";
   let scanComplete = false;
 
@@ -84,6 +110,24 @@ export async function POST(req: NextRequest) {
         const awemeList: AwemeItem[] = data?.aweme_list ?? [];
         if (awemeList.length > 0) {
           capturedAwemeLists.push(awemeList);
+        }
+      } catch {
+        // non-JSON response, skip
+      }
+    });
+
+    page.on("response", async (resp) => {
+      const u = resp.url();
+      if (!u.includes("mix")) return;
+      try {
+        const data = await resp.json();
+        const mixList = data?.mix_list ?? [];
+        if (Array.isArray(mixList) && mixList.length > 0) {
+          capturedMixLists.push(
+            mixList
+              .filter((m: any) => m?.mix_id)
+              .map((m: any) => ({ mix_id: String(m.mix_id), mix_name: String(m.mix_name || m.mix_id) })),
+          );
         }
       } catch {
         // non-JSON response, skip
@@ -110,11 +154,19 @@ export async function POST(req: NextRequest) {
       // ignore
     }
 
-    // Try scrolling to load more if needed
+    // Try scrolling to load more if needed. NOTE: channel pages scroll an
+    // inner `.route-scroll-container` div — window.scrollBy loads nothing.
     if (capturedAwemeLists.length > 0) {
       for (let scroll = 0; scroll < 3; scroll++) {
         const prevCount = capturedAwemeLists.flat().length;
-        await page.evaluate(() => window.scrollBy(0, 1000));
+        await page
+          .evaluate(() => {
+            const el = document.querySelector(
+              ".route-scroll-container",
+            ) as HTMLElement | null;
+            (el ?? document.scrollingElement)?.scrollBy(0, 1000);
+          })
+          .catch(() => {});
         await new Promise((r) => setTimeout(r, 2000));
         if (capturedAwemeLists.flat().length > prevCount) continue;
         break;
@@ -125,6 +177,21 @@ export async function POST(req: NextRequest) {
     scanComplete = true;
   } catch (err) {
     await closeBrowser(handle).catch(() => {});
+    // Resilience: serve the cache when a live scan fails.
+    if (prevVideos.length > 0) {
+      const groups = buildGroups(prevVideos, new Map());
+      return NextResponse.json({
+        channel_name: "",
+        total: prevVideos.length,
+        filtered: prevVideos.length,
+        videos: prevVideos,
+        playlists: Array.from(groups.values()),
+        cached: prevVideos.length,
+        added: 0,
+        scanned_at: prev?.scanned_at ?? 0,
+        from_cache: true,
+      });
+    }
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
       { detail: `Quét kênh thất bại: ${msg}` },
@@ -154,12 +221,56 @@ export async function POST(req: NextRequest) {
   // Sort by create_time descending
   filtered.sort((a, b) => b.create_time - a.create_time);
 
+  const mixIdToName = new Map<string, string>();
+  for (const list of capturedMixLists) {
+    for (const m of list) {
+      if (!mixIdToName.has(m.mix_id)) mixIdToName.set(m.mix_id, m.mix_name);
+    }
+  }
+
+  // Merge fresh items over the cache and persist.
+  const { merged, added } = mergeVideos(prevVideos, filtered);
+  const nowSec = Math.floor(Date.now() / 1000);
+  cache.channel_scans[url] = {
+    scanned_at: nowSec,
+    max_time: maxCreateTime(merged),
+    videos: merged,
+  };
+  saveCache(cache);
+
+  const groups = buildGroups(merged, mixIdToName);
+
   const result: ScanResult = {
     channel_name: channelName,
     total: allVideos.length,
     filtered: filtered.length,
-    videos: filtered,
+    videos: merged,
+    playlists: Array.from(groups.values()),
+    cached: prevVideos.length,
+    added,
+    scanned_at: nowSec,
+    from_cache: false,
   };
 
   return NextResponse.json(result);
+}
+
+function buildGroups(
+  videos: AwemeItem[],
+  mixIdToName: Map<string, string>,
+): Map<string, PlaylistGroup> {
+  const groups = new Map<string, PlaylistGroup>();
+  for (const v of videos) {
+    const mid = v.mix_info?.mix_id ? String(v.mix_info.mix_id) : "";
+    if (!mid) continue;
+    if (!groups.has(mid)) {
+      groups.set(mid, {
+        id: mid,
+        title: v.mix_info?.mix_name || mixIdToName.get(mid) || mid,
+        videos: [],
+      });
+    }
+    groups.get(mid)!.videos.push(v);
+  }
+  return groups;
 }

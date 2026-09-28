@@ -513,6 +513,24 @@ export async function douyinLogin(): Promise<{ status: string; mode: string }> {
   return res.data;
 }
 
+/** Visible-Chrome QR login (2-step: POST starts, GET polls until done). */
+export async function douyinLoginVisibleStart(): Promise<{ status: string }> {
+  const res = await api.post<{ status: string }>(
+    "/video-download/login-visible",
+  );
+  return res.data;
+}
+
+export async function douyinLoginVisibleStatus(): Promise<{
+  status: string;
+  detail?: string;
+}> {
+  const res = await api.get<{ status: string; detail?: string }>(
+    "/video-download/login-visible",
+  );
+  return res.data;
+}
+
 export async function chatgptLogin(): Promise<{
   status: string;
   mode: string;

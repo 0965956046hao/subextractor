@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AnimatedBlock } from "@/lib/animation";
 import PageHeader from "@/components/layout/PageHeader";
 import { useI18n } from "@/lib/i18n";
+import { Checkbox } from "@/components/ui/checkbox";
+import { getPipelinePresets, type PipelinePreset } from "@/lib/api";
+import { usePipelineStore } from "@/stores/pipeline-store";
 
 interface Channel {
   id: string;
@@ -35,11 +39,29 @@ interface AwemeVideo {
   };
 }
 
+interface PlaylistGroup {
+  id: string;
+  title: string;
+  videos: AwemeVideo[];
+}
+
 interface ScanResult {
   channel_name: string;
   total: number;
   filtered: number;
   videos: AwemeVideo[];
+  playlists: PlaylistGroup[];
+  cached?: number;
+  added?: number;
+  scanned_at?: number;
+  from_cache?: boolean;
+}
+
+interface MixInfo {
+  id: string;
+  title: string;
+  cover?: string;
+  video_count?: number;
 }
 
 interface WorkerVideo {
@@ -113,10 +135,14 @@ function fmtDate(ts: number): string {
   });
 }
 
-function truncateText(text: string, max: number): string {
+function truncateText(text: string | null | undefined, max: number): string {
+  if (!text) return "";
   if (text.length <= max) return text;
   return text.slice(0, max) + "...";
 }
+
+/** Local pagination size for the scan results table (many videos → pages). */
+const RESULTS_PAGE_SIZE = 20;
 
 export default function ChannelsPage() {
   const { t } = useI18n();
@@ -133,10 +159,25 @@ export default function ChannelsPage() {
   const [scanning, setScanning] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [mixes, setMixes] = useState<MixInfo[] | null>(null);
+  const [mixesChannelName, setMixesChannelName] = useState("");
+  const [mixesMeta, setMixesMeta] = useState<{
+    scanned_at?: number;
+    from_cache?: boolean;
+  } | null>(null);
+  const [mixScanning, setMixScanning] = useState<string | null>(null);
+  const [mixVideosScanning, setMixVideosScanning] = useState<string | null>(null);
+  const [videoPage, setVideoPage] = useState(0);
   const [workerHist, setWorkerHist] = useState<WorkerChannel[]>([]);
   const [workerLoading, setWorkerLoading] = useState(false);
   const [workerLastRun, setWorkerLastRun] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const router = useRouter();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingIds, setPendingIds] = useState<string[]>([]);
+  const [presets, setPresets] = useState<PipelinePreset[]>([]);
+  const [batchPresetId, setBatchPresetId] = useState("");
+  const [crossOpen, setCrossOpen] = useState(false);
   const [playingVideo, setPlayingVideo] = useState<AwemeVideo | null>(null);
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
     if (typeof window !== "undefined") {
@@ -203,6 +244,15 @@ export default function ChannelsPage() {
     loadWorkerHist();
   }, [loadWorkerHist]);
 
+  useEffect(() => {
+    getPipelinePresets()
+      .then((r) => {
+        setPresets(r.presets || []);
+        if (r.presets?.length) setBatchPresetId(r.presets[0].id);
+      })
+      .catch(() => setPresets([]));
+  }, []);
+
   const handleAdd = async () => {
     const url = newUrl.trim();
     if (!url) return;
@@ -237,12 +287,15 @@ export default function ChannelsPage() {
     }
   };
 
-  const handleScan = async (ch: Channel) => {
-    setScanning(ch.id);
+  const handleScan = async (ch: Channel, full = false) => {
+    setScanning(full ? `full-${ch.id}` : ch.id);
     setScanResult(null);
+    setSelected(new Set());
+    setVideoPage(0);
     setScanError(null);
     try {
-      // Ngày riêng của kênh ưu tiên hơn ngày chung.
+      // Ngày riêng của kênh ưu tiên hơn ngày chung. Incremental mặc định:
+      // server chỉ tải mới hơn video mới nhất đã lưu; full=true quét lại.
       const dateStr = ch.since_date || scanDate;
       const sinceTs = dateStr
         ? Math.floor(new Date(dateStr + "T00:00:00").getTime() / 1000)
@@ -250,7 +303,7 @@ export default function ChannelsPage() {
       const res = await fetch("/api/channels/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: ch.url, since: sinceTs }),
+        body: JSON.stringify({ url: ch.url, since: sinceTs, full }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -264,6 +317,304 @@ export default function ChannelsPage() {
       setScanning(null);
     }
   };
+
+  /** Phase 1 full scan: list the channel's collections only (no date filter). */
+  const handleMixScan = async (ch: Channel) => {
+    setMixScanning(ch.id);
+    setMixes(null);
+    setMixesChannelName("");
+    setMixesMeta(null);
+    setScanError(null);
+    try {
+      const res = await fetch("/api/channels/mixes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: ch.url }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setScanError(data.detail || t("channel.scanError"));
+        return;
+      }
+      setMixes(Array.isArray(data.playlists) ? data.playlists : []);
+      setMixesChannelName(data.channel_name || ch.name);
+      setMixesMeta({
+        scanned_at: data.scanned_at,
+        from_cache: data.from_cache,
+      });
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : t("channel.scanError"));
+    } finally {
+      setMixScanning(null);
+    }
+  };
+
+  /** Card click: show cached videos instantly; live-scan only when the
+   *  collection was never scanned. The Cập nhật/↻ buttons always scan. */
+  const handleMixCardClick = async (mix: MixInfo) => {
+    if (mixVideosScanning !== null) return;
+    setScanError(null);
+    try {
+      const res = await fetch(
+        `/api/channels/cached?mix_id=${encodeURIComponent(mix.id)}`,
+      );
+      const data = await res.json();
+      const videos: AwemeVideo[] = Array.isArray(data?.mix_scan?.videos)
+        ? data.mix_scan.videos
+        : [];
+      if (videos.length === 0) {
+        await handleMixVideos(mix);
+        return;
+      }
+      setScanResult({
+        channel_name: mix.title,
+        total: videos.length,
+        filtered: videos.length,
+        videos,
+        playlists: [{ id: mix.id, title: mix.title, videos }],
+        cached: videos.length,
+        added: 0,
+        scanned_at: data?.mix_scan?.scanned_at,
+        from_cache: true,
+      });
+      setSelected(new Set());
+      setVideoPage(0);
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : t("channel.scanError"));
+    }
+  };
+
+  /** Phase 2 full scan: fetch all videos inside one collection, then reuse
+   *  the standard results table + batch UI below. Incremental default. */
+  const handleMixVideos = async (mix: MixInfo, full = false) => {
+    if (mixVideosScanning !== null) return;
+    setMixVideosScanning(full ? `full-${mix.id}` : mix.id);
+    setScanError(null);
+    try {
+      const res = await fetch("/api/channels/mix-videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mix_id: mix.id, full }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setScanError(data.detail || t("channel.scanError"));
+        return;
+      }
+      const videos: AwemeVideo[] = Array.isArray(data.videos) ? data.videos : [];
+      setScanResult({
+        channel_name: data.playlist_title || mix.title,
+        total: data.total ?? videos.length,
+        filtered: videos.length,
+        videos,
+        playlists: [{ id: mix.id, title: mix.title, videos }],
+      });
+      setSelected(new Set());
+      setVideoPage(0);
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : t("channel.scanError"));
+    } finally {
+      setMixVideosScanning(null);
+    }
+  };
+
+  /** Load previously scanned data from the server cache (no browser).
+   *  Clicking a channel name restores its last videos + playlists. */
+  const handleLoadCached = async (ch: Channel) => {
+    setScanError(null);
+    try {
+      const res = await fetch(
+        `/api/channels/cached?url=${encodeURIComponent(ch.url)}`,
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setScanError(data.detail || t("channel.scanError"));
+        return;
+      }
+      const videos: AwemeVideo[] = Array.isArray(data?.scan?.videos)
+        ? data.scan.videos
+        : [];
+      const mixes: MixInfo[] = Array.isArray(data?.mixes?.playlists)
+        ? data.mixes.playlists
+        : [];
+      if (videos.length === 0 && mixes.length === 0) {
+        setScanError(t("channel.noCache"));
+        return;
+      }
+      // Rebuild playlist groups from embedded mix_info tags (best-effort).
+      type Tagged = AwemeVideo & {
+        mix_info?: { mix_id?: string; mix_name?: string };
+      };
+      const groups = new Map<string, PlaylistGroup>();
+      for (const v of videos) {
+        const tag = (v as Tagged).mix_info;
+        const mid = tag?.mix_id ? String(tag.mix_id) : "";
+        if (!mid) continue;
+        if (!groups.has(mid)) {
+          groups.set(mid, { id: mid, title: tag?.mix_name || mid, videos: [] });
+        }
+        groups.get(mid)!.videos.push(v);
+      }
+      if (videos.length > 0) {
+        setScanResult({
+          channel_name: ch.name,
+          total: videos.length,
+          filtered: videos.length,
+          videos,
+          playlists: Array.from(groups.values()),
+          cached: videos.length,
+          added: 0,
+          scanned_at: data?.scan?.scanned_at,
+          from_cache: true,
+        });
+      }
+      if (mixes.length > 0) {
+        setMixes(mixes);
+        setMixesChannelName(ch.name);
+        setMixesMeta({
+          scanned_at: data?.mixes?.scanned_at,
+          from_cache: true,
+        });
+      }
+      setSelected(new Set());
+      setVideoPage(0);
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : t("channel.scanError"));
+    }
+  };
+
+  const shareTextOf = (v: AwemeVideo): string =>
+    v.share_link_desc ||
+    v.share_url ||
+    `https://www.douyin.com/video/${v.aweme_id}`;
+
+  const playlistIdOf = (awemeId: string): string | null => {
+    if (!scanResult) return null;
+    for (const pl of scanResult.playlists || []) {
+      if (pl.videos.some((x) => x.aweme_id === awemeId)) return pl.id;
+    }
+    return null;
+  };
+
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const toggleMany = (ids: string[], on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+
+  const enqueueWithPreset = (url: string, cfg: Record<string, unknown>) => {
+    const addPipeline = usePipelineStore.getState().addPipeline;
+    addPipeline(
+      url,
+      (cfg.regionMode as "manual" | "auto") ?? "manual",
+      {
+        engine: (cfg.dubEngine as "google" | "capcut") ?? "capcut",
+        voice: (cfg.dubVoice as string) ?? "BV421_vivn_streaming",
+        muteOriginal: (cfg.muteOriginal as boolean) ?? false,
+        originalGainDb: (cfg.originalGainDb as number) ?? 12,
+        multiVoice: (cfg.multiVoice as boolean) ?? false,
+        keepOriginalEnabled: (cfg.keepOriginalEnabled as boolean) ?? false,
+      },
+      (cfg.autoFitSubs as boolean) ?? false,
+      (cfg.watermarkOn as boolean) ?? false,
+      ((cfg.watermarkOn ? cfg.watermarkPreset : "") as string) ?? "",
+      (cfg.removeWatermarkEnabled as boolean) ?? false,
+      (cfg.removeWatermarkRegions as never[]) ?? [],
+      (cfg.region as null) ?? null,
+      (cfg.subtitleStyle as null) ?? null,
+      (cfg.checkSubs as boolean) ?? false,
+      (cfg.checkVoice as boolean) ?? false,
+      (cfg.autoUploadYoutube as boolean) ?? false,
+      (cfg.youtubeChannel as string) ?? "",
+      (cfg.youtubePlaylist as string) ?? "",
+      (cfg.useFalThumbnail as boolean) ?? false,
+      (cfg.useGptThumbnail as boolean) ?? false,
+      (cfg.srcLang as string) ?? "zh",
+      (cfg.translateOn as boolean) ?? true,
+      (cfg.translateTarget as string) ?? "vi",
+      (cfg.dubOn as boolean) ?? true,
+      (cfg.voiceLang as string) ?? "",
+      (cfg.colorFilter as null) ?? null,
+      (cfg.playbackSpeed as number) ?? 1.0,
+      (cfg.useGeminiThumbnail as boolean) ?? false,
+      (cfg.fillGaps as boolean) ?? false,
+    );
+  };
+
+  const handleBatchRequest = () => {
+    if (!scanResult || selected.size === 0) return;
+    const ids = scanResult.videos
+      .filter((v) => selected.has(v.aweme_id))
+      .map((v) => v.aweme_id);
+    const groups = new Set(ids.map((id) => playlistIdOf(id) ?? "__none"));
+    if (groups.size > 1) {
+      setPendingIds(ids);
+      setCrossOpen(true);
+      return;
+    }
+    setPendingIds(ids);
+    void handleBatchExecute(true, ids);
+  };
+
+  const handleBatchExecute = (shared: boolean, ids: string[] = pendingIds) => {
+    setCrossOpen(false);
+    if (!scanResult || ids.length === 0) return;
+    const byId = new Map(scanResult.videos.map((v) => [v.aweme_id, v]));
+    const existingUrls = new Set(
+      usePipelineStore.getState().pipelines.map((p) => p.url),
+    );
+    const preset = presets.find((p) => p.id === batchPresetId);
+    const sharedCfg =
+      shared && preset ? (preset.config as Record<string, unknown>) : null;
+    let pushed = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const v = byId.get(id);
+      if (!v) continue;
+      const url = shareTextOf(v);
+      if (existingUrls.has(url)) {
+        skipped += 1;
+        continue;
+      }
+      existingUrls.add(url);
+      if (sharedCfg) {
+        enqueueWithPreset(url, sharedCfg);
+      } else {
+        usePipelineStore.getState().addPipeline(url, "manual");
+      }
+      pushed += 1;
+    }
+    setPendingIds([]);
+    setSelected(new Set());
+    if (skipped > 0) alert(t("channel.skippedDupes", { count: skipped }));
+    if (pushed > 0) router.push("/auto");
+  };
+
+  const crossCount = new Set(pendingIds.map(playlistIdOf)).size;
+
+  // Local pagination for the results table (selection stays global).
+  const pageCount = scanResult
+    ? Math.max(1, Math.ceil(scanResult.videos.length / RESULTS_PAGE_SIZE))
+    : 1;
+  const safePage = Math.min(videoPage, pageCount - 1);
+  const pageVideos = scanResult
+    ? scanResult.videos.slice(
+        safePage * RESULTS_PAGE_SIZE,
+        (safePage + 1) * RESULTS_PAGE_SIZE,
+      )
+    : [];
 
   return (
     <div>
@@ -282,7 +633,7 @@ export default function ChannelsPage() {
                 onChange={(e) => setNewUrl(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAdd()}
                 placeholder="https://www.douyin.com/user/MS4wLjAB..."
-                input-field flex-1 font-mono
+                className="input-field flex-1 min-w-0 font-mono"
                 disabled={adding}
               />
               <button
@@ -378,9 +729,13 @@ export default function ChannelsPage() {
                           </div>
                         )}
                         <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-ink truncate">
+                          <button
+                            onClick={() => handleLoadCached(ch)}
+                            title={t("channel.loadCached")}
+                            className="text-[13px] font-medium text-ink truncate hover:text-accent transition-colors cursor-pointer"
+                          >
                             {ch.name}
-                          </p>
+                          </button>
                           <p className="text-[11px] text-ink-light font-mono truncate">
                             {ch.url}
                           </p>
@@ -389,15 +744,50 @@ export default function ChannelsPage() {
                       <button
                         onClick={() => handleScan(ch)}
                         disabled={scanning !== null}
+                        title={t("channel.scanTip")}
                         className="px-4 py-2 rounded-full text-[12px] font-medium bg-accent text-white hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 flex-shrink-0 cursor-pointer"
                       >
-                        {scanning === ch.id ? (
+                        {scanning === ch.id || scanning === `full-${ch.id}` ? (
                           <>
                             <IconSpinner className="w-3.5 h-3.5" />
                             {t("channel.scanning")}
                           </>
                         ) : (
                           t("channel.scan")
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleScan(ch, true)}
+                        disabled={scanning !== null}
+                        title={t("channel.fullScanTip")}
+                        className="w-8 h-8 rounded-full bg-white/[0.06] ring-1 ring-white/[0.09] text-ink-muted hover:text-ink hover:bg-white/[0.1] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center flex-shrink-0 cursor-pointer"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M21 12a9 9 0 11-2.64-6.36" />
+                          <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleMixScan(ch)}
+                        disabled={scanning !== null || mixScanning !== null}
+                        title={t("channel.playlistsTip")}
+                        className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/[0.06] ring-1 ring-white/[0.09] text-ink hover:bg-white/[0.1] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 flex-shrink-0 cursor-pointer"
+                      >
+                        {mixScanning === ch.id ? (
+                          <>
+                            <IconSpinner className="w-3.5 h-3.5" />
+                            {t("channel.scanning")}
+                          </>
+                        ) : (
+                          t("channel.playlistsBtn")
                         )}
                       </button>
                       <button
@@ -433,6 +823,129 @@ export default function ChannelsPage() {
         </AnimatedBlock>
       )}
 
+      {mixes && (
+        <AnimatedBlock delay={0}>
+          <div className="double-bezel mb-6">
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                    {t("channel.fullscanTitle")}
+                  </p>
+                  {mixesChannelName && (
+                    <p className="text-[13px] text-ink mt-1">
+                      {mixesChannelName}
+                    </p>
+                  )}
+                  {mixesMeta?.scanned_at != null && (
+                    <p className="text-[11px] text-ink-light mt-1 font-mono">
+                      {t("channel.scannedAt", { time: fmtDate(mixesMeta.scanned_at) })}
+                      {mixesMeta.from_cache ? ` (${t("channel.fromCache")})` : ""}
+                    </p>
+                  )}
+                </div>
+                <span className="tag">
+                  {t("channel.videoCount", { count: mixes.length })}
+                </span>
+              </div>
+              {mixes.length === 0 ? (
+                <p className="text-[13px] text-ink-light py-6 text-center">
+                  {t("channel.noMixes")}
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {mixes.map((m) => (
+                    <div
+                      key={m.id}
+                      onClick={() => handleMixCardClick(m)}
+                      title={t("channel.loadCached")}
+                      className="rounded-xl ring-1 ring-white/[0.07] bg-white/[0.02] hover:bg-white/[0.05] hover:ring-white/[0.14] transition-colors p-3 flex items-center gap-3 cursor-pointer"
+                    >
+                      {m.cover ? (
+                        <img
+                          src={m.cover}
+                          alt=""
+                          className="w-12 h-16 object-cover rounded-lg flex-shrink-0 bg-white/[0.06]"
+                        />
+                      ) : (
+                        <div className="w-12 h-16 rounded-lg bg-white/[0.08] flex items-center justify-center flex-shrink-0">
+                          <svg className="w-5 h-5 text-ink-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="7" height="7" rx="1" />
+                            <rect x="14" y="3" width="7" height="7" rx="1" />
+                            <rect x="3" y="14" width="7" height="7" rx="1" />
+                            <rect x="14" y="14" width="7" height="7" rx="1" />
+                          </svg>
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-ink line-clamp-2 leading-snug">
+                          {truncateText(m.title || m.id, 60)}
+                        </p>
+                        <p className="text-[11px] text-ink-light mt-1 font-mono">
+                          {m.video_count != null
+                            ? t("channel.videoCount", { count: m.video_count })
+                            : `#${m.id}`}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMixVideos(m);
+                        }}
+                        disabled={mixVideosScanning !== null}
+                        title={t("channel.scanVideosTip")}
+                        className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-accent text-white hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 flex-shrink-0 cursor-pointer"
+                      >
+                        {mixVideosScanning === m.id ||
+                        mixVideosScanning === `full-${m.id}` ? (
+                          <IconSpinner className="w-3 h-3" />
+                        ) : null}
+                        {t("channel.scanVideos")}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMixVideos(m, true);
+                        }}
+                        disabled={mixVideosScanning !== null}
+                        title={t("channel.fullScanTip")}
+                        className="w-7 h-7 rounded-full text-ink-light hover:text-ink hover:bg-white/[0.06] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center flex-shrink-0 cursor-pointer"
+                      >
+                        <svg
+                          className="w-3 h-3"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M21 12a9 9 0 11-2.64-6.36" />
+                          <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </AnimatedBlock>
+      )}
+
+      {mixVideosScanning !== null && (
+        <AnimatedBlock delay={0}>
+          <div className="double-bezel mb-6">
+            <div className="double-bezel-inner p-5 sm:p-6 flex items-center gap-3">
+              <IconSpinner className="w-4 h-4 text-accent" />
+              <p className="text-[13px] text-ink-muted">
+                {t("channel.scanning")} {t("channel.fullscanTitle")}...
+              </p>
+            </div>
+          </div>
+        </AnimatedBlock>
+      )}
+
       {scanResult && (
         <AnimatedBlock delay={0}>
           <div className="double-bezel mb-6">
@@ -445,6 +958,19 @@ export default function ChannelsPage() {
                   {scanResult.channel_name && (
                     <p className="text-[13px] text-ink mt-1">
                       {scanResult.channel_name}
+                    </p>
+                  )}
+                  {(scanResult.cached != null ||
+                    scanResult.scanned_at != null) && (
+                    <p className="text-[11px] text-ink-light mt-1 font-mono">
+                      {t("channel.cacheStatus", {
+                        cached: scanResult.cached ?? 0,
+                        added: scanResult.added ?? 0,
+                      })}
+                      {scanResult.scanned_at
+                        ? ` · ${t("channel.scannedAt", { time: fmtDate(scanResult.scanned_at) })}`
+                        : ""}
+                      {scanResult.from_cache ? ` (${t("channel.fromCache")})` : ""}
                     </p>
                   )}
                 </div>
@@ -467,6 +993,26 @@ export default function ChannelsPage() {
                   <table className="w-full text-left">
                     <thead>
                       <tr className="border-b border-white/[0.07]">
+                        <th className="pb-3 w-10">
+                          <Checkbox
+                            checked={
+                              scanResult &&
+                              scanResult.videos.length > 0 &&
+                              selected.size === scanResult.videos.length
+                                ? true
+                                : selected.size > 0
+                                  ? "indeterminate"
+                                  : false
+                            }
+                            onCheckedChange={(c) =>
+                              toggleMany(
+                                scanResult?.videos.map((v) => v.aweme_id) || [],
+                                c === true,
+                              )
+                            }
+                            aria-label={t("channel.selectAll")}
+                          />
+                        </th>
                         <th className="pb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-muted w-12">
                           #
                         </th>
@@ -491,19 +1037,23 @@ export default function ChannelsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {scanResult.videos.map((v, idx) => {
-                        const shareText =
-                          v.share_link_desc ||
-                          v.share_url ||
-                          `https://www.douyin.com/video/${v.aweme_id}`;
+                      {pageVideos.map((v, idx) => {
+                        const shareText = shareTextOf(v);
                         const isCopied = copiedId === v.aweme_id;
                         return (
                           <tr
                             key={v.aweme_id}
                             className="border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors"
                           >
+                            <td className="py-4">
+                              <Checkbox
+                                checked={selected.has(v.aweme_id)}
+                                onCheckedChange={() => toggleOne(v.aweme_id)}
+                                aria-label={v.aweme_id}
+                              />
+                            </td>
                             <td className="py-4 text-[13px] text-ink-light font-mono">
-                              {idx + 1}
+                              {safePage * RESULTS_PAGE_SIZE + idx + 1}
                             </td>
                             <td className="py-4">
                               <div className="flex items-start gap-4">
@@ -626,6 +1176,80 @@ export default function ChannelsPage() {
                   </table>
                 </div>
               )}
+              {scanResult.videos.length > RESULTS_PAGE_SIZE && (
+                <div className="mt-4 flex items-center justify-center gap-3">
+                  <button
+                    onClick={() => setVideoPage((p) => Math.max(0, p - 1))}
+                    disabled={safePage === 0}
+                    className="px-4 py-1.5 rounded-full text-[12px] font-medium bg-white/[0.06] ring-1 ring-white/[0.09] text-ink hover:bg-white/[0.1] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {t("channel.prevPage")}
+                  </button>
+                  <span className="text-[12px] text-ink-muted font-mono">
+                    {t("channel.pageOf", { page: safePage + 1, pages: pageCount })}
+                  </span>
+                  <button
+                    onClick={() =>
+                      setVideoPage((p) => Math.min(pageCount - 1, p + 1))
+                    }
+                    disabled={safePage >= pageCount - 1}
+                    className="px-4 py-1.5 rounded-full text-[12px] font-medium bg-white/[0.06] ring-1 ring-white/[0.09] text-ink hover:bg-white/[0.1] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {t("channel.nextPage")}
+                  </button>
+                </div>
+              )}
+              {(scanResult.playlists || []).map((pl) => {
+                const ids = pl.videos.map((x) => x.aweme_id);
+                const n = ids.filter((id) => selected.has(id)).length;
+                return (
+                  <details
+                    key={pl.id}
+                    className="mt-3 rounded-xl ring-1 ring-white/[0.07] bg-white/[0.02]"
+                  >
+                    <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer list-none">
+                      <span onClick={(e) => e.preventDefault()}>
+                        <Checkbox
+                          checked={
+                            n === ids.length && ids.length > 0
+                              ? true
+                              : n > 0
+                                ? "indeterminate"
+                                : false
+                          }
+                          onCheckedChange={(c) => toggleMany(ids, c === true)}
+                          aria-label={pl.title}
+                        />
+                      </span>
+                      <span className="text-[13px] font-medium text-ink truncate">
+                        {pl.title}
+                      </span>
+                      <span className="tag">
+                        {n}/{ids.length}
+                      </span>
+                    </summary>
+                    <div className="px-4 pb-3 space-y-1.5">
+                      {pl.videos.map((x) => (
+                        <label
+                          key={x.aweme_id}
+                          className="flex items-center gap-2.5 cursor-pointer"
+                        >
+                          <Checkbox
+                            checked={selected.has(x.aweme_id)}
+                            onCheckedChange={() => toggleOne(x.aweme_id)}
+                          />
+                          <span className="text-[12px] text-ink truncate">
+                            {truncateText(x.desc || t("channel.noTitle"), 60)}
+                          </span>
+                          <span className="text-[11px] text-ink-light font-mono ml-auto">
+                            {fmtDate(x.create_time)}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
             </div>
           </div>
         </AnimatedBlock>
@@ -730,6 +1354,84 @@ export default function ChannelsPage() {
           </div>
         </div>
       </AnimatedBlock>
+
+      {selected.size > 0 && (
+        <div className="sticky bottom-4 z-30 double-bezel">
+          <div className="double-bezel-inner px-4 py-3 flex items-center gap-3 flex-wrap">
+            <span className="tag bg-accent-muted text-accent ring-accent/15">
+              {t("channel.selectedCount", { count: selected.size })}
+            </span>
+            <label className="text-[12px] text-ink-muted">
+              {t("channel.presetLabel")}
+            </label>
+            <select
+              value={batchPresetId}
+              onChange={(e) => setBatchPresetId(e.target.value)}
+              className="input-field text-[12px] !py-1.5"
+              disabled={presets.length === 0}
+            >
+              {presets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {presets.length === 0 && (
+              <span className="text-[11px] text-warn">
+                {t("channel.noPreset")}
+              </span>
+            )}
+            <button
+              onClick={() => void handleBatchRequest()}
+              disabled={presets.length === 0}
+              className="btn-island-primary text-sm !px-5 !py-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t("channel.pushToPipeline")}
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="btn-island-secondary text-[12px]"
+            >
+              {t("channel.clearSelection")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {crossOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setCrossOpen(false)}
+        >
+          <div
+            className="double-bezel w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="double-bezel-inner p-5">
+              <p className="text-[14px] font-semibold text-ink">
+                {t("channel.crossTitle", { count: crossCount })}
+              </p>
+              <p className="text-[13px] text-ink-muted mt-1">
+                {t("channel.crossDesc")}
+              </p>
+              <div className="mt-4 flex gap-2 justify-end">
+                <button
+                  onClick={() => void handleBatchExecute(false)}
+                  className="btn-island-secondary text-[12px]"
+                >
+                  {t("channel.setSeparate")}
+                </button>
+                <button
+                  onClick={() => void handleBatchExecute(true)}
+                  className="btn-island-primary text-[12px]"
+                >
+                  {t("channel.useShared")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Video Player Modal */}
       {playingVideo && (
