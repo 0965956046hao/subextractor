@@ -9,6 +9,7 @@ import {
   RiFlashlightLine,
   RiScissorsCutLine,
   RiTv2Line,
+  RiLinksLine,
   RiSettings3Line,
   RiMenuLine,
   RiCloseLine,
@@ -46,6 +47,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/extract", labelKey: "nav.extract", icon: RiScissorsCutLine },
       { href: "/auto", labelKey: "nav.auto", icon: RiFlashlightLine },
+      { href: "/merge", labelKey: "nav.merge", icon: RiLinksLine },
       { href: "/channels", labelKey: "nav.channels", icon: RiTv2Line },
     ],
   },

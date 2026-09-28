@@ -1115,6 +1115,230 @@ export async function listYoutubePlaylists(
   return res.data.playlists || [];
 }
 
+// ── Ghép video YouTube (chọn kênh → playlist → tick video → ghép → push) ──
+
+export interface YTMergeItem {
+  video_id: string;
+  title: string;
+  position: number;
+  published_at: string;
+  channel_title: string;
+  thumbnail: string;
+  duration: string;
+  description: string;
+  tags: string[];
+  category_id: string;
+}
+
+export async function listYTMergeItems(
+  channelId: string,
+  playlistId: string,
+): Promise<YTMergeItem[]> {
+  const res = await api.get<{ items: YTMergeItem[] }>("/yt-merge/playlist-items", {
+    params: { channel_id: channelId, playlist_id: playlistId },
+  });
+  return res.data.items || [];
+}
+
+export async function startYTMerge(body: {
+  channel_id: string;
+  video_ids: string[];
+  titles?: string[];
+  output_name?: string;
+  prepare_job_id?: string;
+  segments?: { video_id: string; start: number; end: number | null }[];
+  project_id?: string;
+  items?: YTMergeItem[];
+}): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>("/yt-merge/concat", body, {
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+export async function cancelYTMerge(jobId: string): Promise<void> {
+  await api.post(`/yt-merge/${jobId}/cancel`, {}, { timeout: 15000 });
+}
+
+// ── Prepare: tải trước để cắt trên timeline ──
+
+export interface YTPrepPart {
+  index: number;
+  video_id: string;
+  title: string;
+  duration: number;
+  size: number;
+  file: string;
+  preview: string;
+}
+
+export interface YTPrepStatus {
+  job_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  parts: YTPrepPart[];
+  error: string | null;
+  logs: { message: string; ts: number; level: string }[];
+}
+
+export async function startYTPrepare(body: {
+  video_ids: string[];
+  titles?: string[];
+}): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>("/yt-merge/prepare", body, {
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+export async function getYTPrepareStatus(jobId: string): Promise<YTPrepStatus> {
+  const res = await api.get<YTPrepStatus>(`/yt-merge/prepare/${jobId}`);
+  return res.data;
+}
+
+export async function uploadYTMergeThumbnail(
+  file: File,
+): Promise<{ path: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await api.post<{ path: string }>("/yt-merge/thumbnail", fd, {
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+export async function cancelYTPrepare(jobId: string): Promise<void> {
+  await api.post(`/yt-merge/prepare/${jobId}/cancel`, {}, { timeout: 15000 });
+}
+
+// ── Upload video local để merge chung ──
+
+export interface YTUploadItem {
+  video_id: string;
+  title: string;
+  duration: number;
+  size: number;
+  preview: string;
+}
+
+export async function uploadYTMergeFiles(
+  files: File[],
+  onProgress?: (pct: number) => void,
+): Promise<{ items: YTUploadItem[]; errors: string[] }> {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const res = await api.post<{ items: YTUploadItem[]; errors: string[] }>(
+    "/yt-merge/uploads",
+    fd,
+    {
+      timeout: 120 * 60 * 1000,
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
+      },
+    },
+  );
+  return res.data;
+}
+
+export async function deleteYTMergeUpload(uid: string): Promise<void> {
+  await api.delete(`/yt-merge/uploads/${uid}`);
+}
+
+// ── Merge projects (danh sách các merge đã tạo) ──
+
+export interface YTProjectSegment {
+  video_id: string;
+  start: number;
+  end: number | null;
+  duration: number;
+}
+
+export interface YTProjectSummary {
+  id: string;
+  name: string;
+  status: string;
+  stage: string;
+  progress: number;
+  video_count: number;
+  total_trimmed: number;
+  prepare_job_id: string;
+  output: string | null;
+  output_size: number;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface YTProjectFull extends YTProjectSummary {
+  items: YTMergeItem[];
+  segments: YTProjectSegment[];
+  meta: Record<string, unknown> | null;
+  push_channel_id: string;
+  push_playlist_id: string;
+  thumb_path: string;
+  upload_job_id: string | null;
+}
+
+export async function listYTProjects(): Promise<YTProjectSummary[]> {
+  const res = await api.get<{ projects: YTProjectSummary[] }>("/yt-merge/projects");
+  return res.data.projects || [];
+}
+
+export async function getYTProject(id: string): Promise<YTProjectFull> {
+  const res = await api.get<YTProjectFull>(`/yt-merge/projects/${id}`);
+  return res.data;
+}
+
+export async function deleteYTProject(id: string): Promise<void> {
+  await api.delete(`/yt-merge/projects/${id}`);
+}
+
+export interface YTMergeStatus {
+  job_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  output: string | null;
+  output_size: number;
+  error: string | null;
+  logs: { message: string; ts: number; level: string }[];
+}
+
+export async function getYTMergeStatus(jobId: string): Promise<YTMergeStatus> {
+  const res = await api.get<YTMergeStatus>(`/yt-merge/${jobId}`);
+  return res.data;
+}
+
+export async function pushYTMerged(
+  jobId: string,
+  body: {
+    title: string;
+    description?: string;
+    privacy?: string;
+    channel_id?: string;
+    playlist_id?: string;
+    thumbnail_path?: string;
+    meta?: Record<string, unknown>;
+  },
+): Promise<{ job_id: string; status: string }> {
+  const res = await api.post(`/yt-merge/upload/${jobId}`, body, {
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+export async function getYoutubeUploadStatus(jobId: string): Promise<{
+  job_id: string;
+  status: string;
+  progress: number;
+  output_lines: string[];
+  error: string | null;
+}> {
+  const res = await api.get(`/youtube/upload/${jobId}`);
+  return res.data;
+}
+
 // ── Telegram notifications ──
 
 export interface TelegramConfig {
