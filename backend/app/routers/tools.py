@@ -1385,13 +1385,14 @@ async def delogo_video(
         "-vf",
         video_filter,
 
-        # Re-encode video because delogo modifies frames
+        # Re-encode video because delogo modifies frames.
+        # Quality-based (not fixed bitrate): a fixed "-b:v 10M" blows a
+        # ~0.5 Mbps Douyin source up ~20x (648 MB -> 13.5 GB) with zero
+        # visual gain. -q:v 70 keeps OCR-grade quality at ~source bitrate.
         "-c:v",
         "h264_videotoolbox",
-        # "libx264",
-
-        "-b:v",
-        "10M",
+        "-q:v",
+        "80",
 
         # Good quality
         # "-preset",
