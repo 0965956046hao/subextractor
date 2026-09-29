@@ -24,7 +24,12 @@ PROMPT = """Parse the following video metadata into a valid JSON object with thi
   "hashtags": ["#Hashtag1", "#Hashtag2", ...],
   "episode": 1,
   "original_title": "Original Chinese/English title",
-  "original_description": "Original short description"
+  "original_description": "Original short description",
+  "series_title": "Main series/movie name in Vietnamese",
+  "subtitle": "Secondary title line in Vietnamese",
+  "part": 1,
+  "episode_start": 1,
+  "episode_end": 49
 }}
 
 - title: catchy Vietnamese title, include episode number if provided
@@ -34,6 +39,12 @@ PROMPT = """Parse the following video metadata into a valid JSON object with thi
 - episode: integer episode number
 - original_title: keep the original language title
 - original_description: keep the original short description
+- series_title: main series/movie name, without episode or part numbers
+- subtitle: short catchy secondary title line (e.g. a highlight plot point)
+- part: part number (continuation in the playlist/channel) if the share text
+  or original name mentions "part N"/"P N"/"phần N"; null if not present
+- episode_start / episode_end: first and last episode covered in this video
+  (merged video, e.g. "1-19" → 1 and 19). Single-episode video: both equal episode
 
 VIDEO CONTEXT (analyzed from frames):
 {context}
@@ -54,6 +65,32 @@ def _original_name(video_id: str) -> str:
         return name.rsplit(".", 1)[0].strip() if name else ""
     except Exception:
         return ""
+
+
+SUBSCRIBE_CTA = "👉 Đăng ký kênh để không bỏ lỡ tập mới nhất!"
+
+
+def enrich_description_for_upload(meta: dict) -> bool:
+    """Append subscribe CTA + hashtags to the description.
+
+    YouTube only renders hashtags embedded in the description text (the
+    separate ``hashtags`` array is ignored by the upload API), so they must
+    be part of ``description``. Idempotent — returns True if modified.
+    """
+    desc = str(meta.get("description", "") or "").rstrip()
+    tags = [str(t).strip() for t in (meta.get("hashtags") or []) if str(t).strip()]
+    changed = False
+    if SUBSCRIBE_CTA not in desc:
+        desc = f"{desc}\n\n{SUBSCRIBE_CTA}" if desc else SUBSCRIBE_CTA
+        changed = True
+    if tags:
+        tag_line = " ".join(t if t.startswith("#") else f"#{t}" for t in tags)
+        if tag_line not in desc:
+            desc = f"{desc}\n\n{tag_line}"
+            changed = True
+    if changed:
+        meta["description"] = desc
+    return changed
 
 
 def generate_video_meta(video_id: str, playlist_id: str = "") -> dict:
@@ -120,6 +157,11 @@ def generate_video_meta(video_id: str, playlist_id: str = "") -> dict:
     meta.setdefault("episode", 1)
     meta.setdefault("original_title", "")
     meta.setdefault("original_description", "")
+    meta.setdefault("series_title", "")
+    meta.setdefault("subtitle", "")
+    meta.setdefault("part", None)
+    meta.setdefault("episode_start", meta.get("episode", 1))
+    meta.setdefault("episode_end", meta.get("episode", 1))
     if playlist_id:
         ids = meta.get("playlistIds") or []
         if not isinstance(ids, list):
@@ -136,6 +178,8 @@ def generate_video_meta(video_id: str, playlist_id: str = "") -> dict:
     title = title[:100].strip()
     meta["title"] = title
     meta["ctr_title"] = title
+
+    enrich_description_for_upload(meta)
 
     out_dir = settings.temp_dir / "meta" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)

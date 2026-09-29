@@ -56,6 +56,17 @@ def _load_meta_title(video_id: str) -> str:
     return ""
 
 
+def _load_meta(video_id: str) -> dict:
+    p = settings.temp_dir / "meta" / video_id / "meta.json"
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _resolve_fal_key() -> str:
     cf = settings.temp_dir / "user_config.json"
     cfg_key = ""
@@ -68,13 +79,56 @@ def _resolve_fal_key() -> str:
     return key.strip()
 
 
-def build_thumbnail_prompt(context: str, title: str) -> str:
+def build_thumbnail_prompt(context: str, title: str, meta: dict | None = None) -> str:
+    """Build the thumbnail edit prompt with a fixed text layout.
+
+    Layout (all Vietnamese):
+    - Top-left badge: "PHẦN {part}" — only when meta has a part number.
+    - Bottom-center badge: episode range "{start}-{end}", or "TẬP {n}" when
+      the video covers a single episode.
+    - Center: main series title (large), subtitle line right below it.
+    """
+    meta = meta or {}
     parts = []
     if context:
         parts.append(context)
     parts.append("Regenerate this thumbnail in a 16:9 landscape format.")
-    if title:
-        parts.append(f'Replace the title text in the image with: "{title}"')
+
+    series_title = str(meta.get("series_title") or "").strip()
+    subtitle = str(meta.get("subtitle") or "").strip()
+    part = meta.get("part")
+    try:
+        ep_start = int(meta.get("episode_start", meta.get("episode", 1)))
+    except (TypeError, ValueError):
+        ep_start = 1
+    try:
+        ep_end = int(meta.get("episode_end", meta.get("episode", 1)))
+    except (TypeError, ValueError):
+        ep_end = 1
+
+    layout = []
+    try:
+        part_num = int(part) if part is not None else None
+    except (TypeError, ValueError):
+        part_num = None
+    if part_num:
+        layout.append(f'- Top-left corner badge with the text "PHẦN {part_num}".')
+    if ep_end > ep_start:
+        layout.append(
+            f'- Bottom-center badge with the episode range "{ep_start}-{ep_end}".'
+        )
+    else:
+        layout.append(f'- Bottom-center badge with the text "TẬP {ep_start}".')
+    main_title = series_title or title
+    if main_title:
+        layout.append(f'- Large centered main title: "{main_title}"')
+    if subtitle:
+        layout.append(f'- Smaller subtitle line directly below the main title: "{subtitle}"')
+    elif title and title != main_title:
+        layout.append(f'- Smaller subtitle line directly below the main title: "{title}"')
+    if layout:
+        parts.append("Place text on the image with this exact layout:\n" + "\n".join(layout))
+
     parts.append(
         "All text in the image must be in Vietnamese, except when a title, "
         "proper name or brand must stay in English (character names, series names, logos, etc.). "
@@ -98,7 +152,8 @@ def get_thumbnail_prompt(video_id: str) -> tuple[str, str]:
 
     context = load_video_context(video_id) or ""
     title = _load_meta_title(video_id)
-    return build_thumbnail_prompt(context, title), f"/api/context/{video_id}/thumbnail"
+    meta = _load_meta(video_id)
+    return build_thumbnail_prompt(context, title, meta), f"/api/context/{video_id}/thumbnail"
 
 
 def update_thumbnail(video_id: str) -> Path:
@@ -109,6 +164,7 @@ def update_thumbnail(video_id: str) -> Path:
 
     context = load_video_context(video_id) or ""
     title = _load_meta_title(video_id)
+    meta = _load_meta(video_id)
 
     out_dir = settings.temp_dir / "thumb" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -127,7 +183,7 @@ def update_thumbnail(video_id: str) -> Path:
 
     os.environ["FAL_KEY"] = api_key
 
-    prompt = build_thumbnail_prompt(context, title)
+    prompt = build_thumbnail_prompt(context, title, meta)
     logger.info("fal.ai gpt-image-2 edit for %s (16:9)", video_id)
 
     try:

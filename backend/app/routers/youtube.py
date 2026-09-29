@@ -396,10 +396,16 @@ def _start_upload(video_path: Path, meta_path: Path, thumbnail_path: str, privac
         raise HTTPException(404, f"Meta JSON not found: {meta_path}")
 
     # Validate title non-empty trước khi upload (tránh lỗi 400 invalidTitle).
+    # Đồng thời vá description cho meta cũ: nhúng hashtags + lời kêu gọi đăng
+    # ký (YouTube chỉ hiện hashtag nằm trong description).
     try:
         _meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if not str(_meta.get("title", "")).strip():
             raise HTTPException(400, "Meta title is empty — run the meta step again.")
+        from app.services.meta_service import enrich_description_for_upload
+        if enrich_description_for_upload(_meta):
+            meta_path.write_text(json.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Enriched description with hashtags + CTA for %s", meta_path)
     except HTTPException:
         raise
     except Exception:
