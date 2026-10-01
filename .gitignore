@@ -1,5 +1,6 @@
 backend/temp/
-backend/.venv/
+text2speech/temp/
+.venv/
 frontend/node_modules/
 frontend/build/
 frontend/.next/
