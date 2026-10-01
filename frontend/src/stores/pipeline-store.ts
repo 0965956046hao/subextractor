@@ -14,6 +14,9 @@ import {
   getPipelineState,
   reportTimelineAction,
   getJobStatus,
+  startConcat,
+  pollConcatJob,
+  getConcatDownloadUrl,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
 
@@ -154,6 +157,15 @@ export interface Pipeline {
   videoUrl: string | null;
   audioUrl: string | null;
   videoId: string | null;
+  batchId?: string | null;
+  /** Merge-before in progress: entry is driven by runMergedPipelineBody, NOT
+   *  by runPrep/runPipeline. Guards below refuse generic runners while set. */
+  merging?: boolean;
+  mergeSpec?: {
+    urls: string[];
+    cfg: Record<string, unknown> | null;
+    label: string;
+  } | null;
   startedAt: number | null;
   finishedAt: number | null;
   stepStarts: (number | null)[];
@@ -259,6 +271,20 @@ export interface ImportedDone {
   hasDubbed: boolean;
 }
 
+export interface BatchMerge {
+  id: string;
+  batchId: string;
+  name: string;
+  videoIds: string[];
+  status: "running" | "done" | "error" | "cancelled";
+  progress: number;
+  resultUrl: string;
+  videoId: string | null;
+  error: string;
+  /** Backend concat job id — needed to cancel a running merge. */
+  concatId?: string | null;
+}
+
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
   voice: "BV421_vivn_streaming",
@@ -270,6 +296,10 @@ const DEFAULT_DUB: DubOptions = {
 
 interface PipelineState {
   pipelines: Pipeline[];
+  batchMerges: BatchMerge[];
+  addBatchMerge: (m: BatchMerge) => void;
+  updateBatchMerge: (id: string, patch: Partial<BatchMerge>) => void;
+  removeBatchMerge: (id: string) => void;
   addPipeline: (
     url: string,
     regionMode?: "manual" | "auto",
@@ -327,6 +357,14 @@ interface PipelineState {
     useGeminiThumbnail?: boolean;
     fillGaps?: boolean;
   }) => string;
+  /** Merge-before: resolve each URL → concat raw videos → ONE pipeline on the
+   *  merged video (preset applied, or manual defaults when config is null).
+   *  Returns the pipeline id. router.push is left to the caller. */
+  addMergedPipeline: (
+    urls: string[],
+    presetConfig: Record<string, unknown> | null,
+    label: string,
+  ) => Promise<string>;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
@@ -375,6 +413,8 @@ interface PipelineState {
   restorePaused: () => void;
   /** Upload YouTube thủ công cho pipeline đã xong mà quên tick auto-upload. */
   uploadYoutubeNow: (id: string) => void;
+  /** Merge-after watcher: khi cả batch đã settle thì gộp các sibling done. */
+  checkBatchComplete: (batchId: string) => void;
 }
 
 function emptySteps<T>(v: T): T[] {
@@ -430,6 +470,9 @@ function newPipeline(
     videoUrl: null,
     audioUrl: null,
     videoId: null,
+    batchId: null,
+    merging: false,
+    mergeSpec: null,
     startedAt: null,
     finishedAt: null,
     stepStarts: emptySteps(null),
@@ -496,10 +539,140 @@ function schedulePersist() {
   }, 800);
 }
 
+async function runMergedPipelineBody(
+  id: string,
+  urls: string[],
+  presetConfig: Record<string, unknown> | null,
+  label: string,
+) {
+        // Resolve each URL sequentially — failures are skipped with a note.
+        const videoIds: string[] = [];
+        let failed = 0;
+        for (const u of urls) {
+          try {
+            const vid = await resolveUrlToVideoId(u);
+            videoIds.push(vid);
+            appendLog(
+              id,
+              `Đã import video (${videoIds.length}/${urls.length}): ${vid}`,
+            );
+            setStepProgress(
+              id,
+              0,
+              Math.round((videoIds.length / urls.length) * 100),
+            );
+            recalcOverall(id);
+          } catch (e) {
+            failed += 1;
+            appendLog(
+              id,
+              `Bỏ qua link lỗi (${failed}): ${e instanceof Error ? e.message : "lỗi"}`,
+            );
+          }
+        }
+        if (videoIds.length < 2) {
+          patch(id, {
+            status: "error",
+            stage: "error",
+            finishedAt: Date.now(),
+            failedStep: 0,
+            merging: false,
+            error: translate("channel.mergeFailedCount", {
+              ok: videoIds.length,
+              fail: failed,
+            }),
+          });
+          schedulePersist();
+          return;
+        }
+        if (failed > 0) {
+          appendLog(
+            id,
+            translate("channel.mergeFailedCount", {
+              ok: videoIds.length,
+              fail: failed,
+            }),
+          );
+        }
+
+        // Concat raw videos server-side; the merged video is auto-registered
+        // by the backend (returns video_id).
+        try {
+          patch(id, { stage: "merging" });
+          markStepStart(id, 0);
+          markStepStart(id, 1);
+          appendLog(id, `Gộp ${videoIds.length} video (concat)...`);
+          const { concat_id } = await startConcat(videoIds, "raw", label);
+          const res = await pollConcatJob(concat_id, (tk) => {
+            setStepProgress(id, 1, tk.progress ?? 0);
+            recalcOverall(id);
+            if (tk.logs) appendBackendLogs(id, tk.logs);
+          });
+          if (res.status === "cancelled") {
+            patch(id, {
+              status: "error",
+              stage: "error",
+              finishedAt: Date.now(),
+              failedStep: 1,
+              merging: false,
+              error: translate("pipeline.batchCancelled"),
+            });
+            schedulePersist();
+            return;
+          }
+          if (res.status !== "done" || !res.video_id) {
+            throw new Error(res.error || "Gộp video thất bại");
+          }
+          markStepEnd(id, 0);
+          markStepEnd(id, 1);
+          patch(id, {
+            videoId: res.video_id,
+            videoUrl: null,
+            audioUrl: null,
+          });
+          appendLog(id, `Đã gộp xong → video: ${res.video_id}`);
+        } catch (e) {
+          patch(id, {
+            status: "error",
+            stage: "error",
+            finishedAt: Date.now(),
+            failedStep: 1,
+            merging: false,
+            error: e instanceof Error ? e.message : "Gộp video thất bại",
+          });
+          schedulePersist();
+          return;
+        }
+
+        // Merged video already registered → hand over to the normal runner.
+        patch(id, { merging: false });
+        runPrep(id, 2);
+        schedulePersist();
+}
+
 export const usePipelineStore = create<PipelineState>()(
   persist(
     (set, get) => ({
       pipelines: [],
+      batchMerges: [],
+      addBatchMerge: (m) => {
+        set((s) => ({ batchMerges: [...(s.batchMerges ?? []), m] }));
+        schedulePersist();
+      },
+      updateBatchMerge: (id, patch) => {
+        set((s) => ({
+          batchMerges: (s.batchMerges ?? []).map((m) =>
+            m.id === id ? { ...m, ...patch } : m,
+          ),
+        }));
+        schedulePersist();
+      },
+      removeBatchMerge: (id) => {
+        set((s) => ({
+          batchMerges: (s.batchMerges ?? []).filter((m) => m.id !== id),
+        }));
+        schedulePersist();
+      },
       addPipeline: (
         url,
         regionMode = "manual",
@@ -614,6 +787,31 @@ export const usePipelineStore = create<PipelineState>()(
         runPrep(id, 2);
         return id;
       },
+      addMergedPipeline: async (urls, presetConfig, label) => {
+        const id = Math.random().toString(36).slice(2, 10);
+        const p = pipelineFromPreset(id, label, presetConfig);
+        set((s) => ({
+          pipelines: [
+            ...s.pipelines,
+            {
+              ...p,
+              title: label,
+              originalName: sanitizeFilename(label) || "merged",
+              status: "running",
+              stage: "resolving",
+              startedAt: Date.now(),
+              merging: true,
+              mergeSpec: { urls, cfg: presetConfig, label },
+            },
+          ],
+        }));
+        schedulePersist();
+        // Return immediately so the caller navigates to /auto at once —
+        // the heavy work below streams logs into the entry live.
+        void runMergedPipelineBody(id, urls, presetConfig, label);
+        return id;
+      },
+
       importActive: (v) => {
         const videoId = v.video_id;
         if (get().pipelines.some((p) => p.videoId === videoId)) return "";
@@ -741,6 +939,23 @@ export const usePipelineStore = create<PipelineState>()(
         // fast-forward qua các bước cache và upload YouTube 2 lần cùng 1 file.
         if (liveRunners.has(id) || queue.some((q) => q.id === id)) {
           appendLog(id, "Pipeline đang chạy — không thể chạy lại khi chưa xong.");
+          return;
+        }
+        const cur = get().pipelines.find((p) => p.id === id);
+        // Merge-before entry: rerun restarts the merge body, not runPrep
+        // (its url is a label, not a link).
+        if (cur?.mergeSpec && step <= 1) {
+          const spec = cur.mergeSpec;
+          patch(id, {
+            status: "running",
+            stage: "resolving",
+            finishedAt: null,
+            error: "",
+            failedStep: null,
+            merging: true,
+          });
+          appendLog(id, "Chạy lại gộp video từ đầu...");
+          void runMergedPipelineBody(id, spec.urls, spec.cfg, spec.label);
           return;
         }
         if (step <= 3) {
@@ -1252,10 +1467,13 @@ export const usePipelineStore = create<PipelineState>()(
           reportPipeline(id, true);
         }
       },
+      checkBatchComplete: (batchId) => {
+        void maybeMergeBatch(batchId);
+      },
     }),
     {
       name: "ste-pipelines",
-      partialize: (s) => ({ pipelines: s.pipelines }),
+      partialize: (s) => ({ pipelines: s.pipelines, batchMerges: s.batchMerges }),
       version: 1,
     },
   ),
@@ -1388,6 +1606,160 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
       }
     }
   }
+}
+
+// ── Merge-before shared helpers ─────────────────────────────────────────────
+// Per-URL resolve→merge→import trio, extracted from runPrep steps 0+1
+// (runPrep itself is untouched). Resolves one share URL to a backend video_id.
+async function resolveUrlToVideoId(url: string): Promise<string> {
+  const cleaned = extractUrl(url);
+  if (!cleaned)
+    throw new Error("Không tìm thấy link (https://...) trong nội dung đã dán.");
+  if (isYouTubeUrl(cleaned)) {
+    // YouTube: yt-dlp downloads + merges server-side → import directly.
+    const yr = await fetch("/api/video-download/yt-import", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ url: cleaned }),
+    });
+    const yd = await yr.json();
+    if (!yr.ok) throw new Error(yd.detail || "Không thể tải video YouTube");
+    return yd.video_id as string;
+  }
+  const r = await fetch("/api/video-download/resolve", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ url: cleaned }),
+  });
+  const rd = await r.json();
+  if (!r.ok) throw new Error(rd.detail || "Không thể phân tích link");
+  const videoUrl = rd.video_url ?? null;
+  const audioUrl = rd.audio_url ?? null;
+  let mergeId = "";
+  if (audioUrl && videoUrl) {
+    const mr = await fetch("/api/video-merge", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        video_url: videoUrl,
+        audio_url: audioUrl,
+        thumbnail_url: rd.thumbnail || "",
+        big_thumbs: rd.bigThumbs || [],
+      }),
+    });
+    const md = await mr.json();
+    if (!mr.ok) throw new Error(md.detail || "Merge thất bại");
+    const ms = await pollMerge(md.job_id, () => {});
+    if (ms.status !== "done") throw new Error(ms.error || "Merge thất bại");
+    mergeId = (ms.filename || "").replace(/\.mp4$/, "");
+  }
+  const originalName = sanitizeFilename(rd.title || "") || "video";
+  const impName = `${originalName}.mp4`;
+  const impBody = mergeId
+    ? { merge_id: mergeId, filename: impName }
+    : {
+        url: videoUrl,
+        filename: impName,
+        thumbnail_url: rd.thumbnail || "",
+        big_thumbs: rd.bigThumbs || [],
+      };
+  const ir = await fetch("/api/import-video", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(impBody),
+  });
+  const idata = await ir.json();
+  if (!ir.ok) throw new Error(idata.detail || "Import thất bại");
+  const videoId = await pollImportJob(idata.job_id);
+  try {
+    await fetch(`/api/context/${videoId}/share-text`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ text: url }),
+    });
+  } catch {
+    // ignore
+  }
+  return videoId;
+}
+
+/** Poll an import-video job to completion (import runs server-side so long
+ *  downloads never trip proxy timeouts). Returns the registered video_id. */
+async function pollImportJob(
+  jobId: string,
+  onTick?: (t: JobTick) => void,
+): Promise<string> {
+  let fails = 0;
+  while (true) {
+    await sleep(1500);
+    try {
+      const r = await fetch(`/api/import-video/${jobId}`);
+      if (r.status === 404) {
+        throw new Error("Import job không tồn tại (backend đã restart?)");
+      }
+      if (!r.ok) continue;
+      fails = 0;
+      const d = await r.json();
+      onTick?.({ progress: d.progress ?? 0, logs: d.logs });
+      if (d.status === "done") return d.video_id as string;
+      if (d.status === "error")
+        throw new Error(d.error || "Import thất bại");
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("Import job không tồn tại"))
+        throw e;
+      fails += 1;
+      if (fails >= 40) {
+        throw new Error(
+          "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+        );
+      }
+    }
+  }
+}
+
+/** Build a pipeline from a saved preset config (null = manual defaults).
+ *  Mirrors enqueueWithPreset in channels/page.tsx. */
+function pipelineFromPreset(
+  id: string,
+  url: string,
+  cfg: Record<string, unknown> | null,
+): Pipeline {
+  return newPipeline(
+    id,
+    url,
+    (cfg?.regionMode as "manual" | "auto") ?? "manual",
+    {
+      engine: (cfg?.dubEngine as "google" | "capcut") ?? "capcut",
+      voice: (cfg?.dubVoice as string) ?? "BV421_vivn_streaming",
+      muteOriginal: (cfg?.muteOriginal as boolean) ?? false,
+      originalGainDb: (cfg?.originalGainDb as number) ?? 12,
+      multiVoice: (cfg?.multiVoice as boolean) ?? false,
+      keepOriginalEnabled: (cfg?.keepOriginalEnabled as boolean) ?? false,
+    },
+    (cfg?.autoFitSubs as boolean) ?? false,
+    (cfg?.watermarkOn as boolean) ?? false,
+    ((cfg?.watermarkOn ? cfg?.watermarkPreset : "") as string) ?? "",
+    (cfg?.removeWatermarkEnabled as boolean) ?? false,
+    (cfg?.removeWatermarkRegions as unknown as Region[]) ?? [],
+    (cfg?.region as Region | null) ?? null,
+    (cfg?.subtitleStyle as SubtitleStyle | null) ?? null,
+    (cfg?.checkSubs as boolean) ?? false,
+    (cfg?.checkVoice as boolean) ?? false,
+    (cfg?.autoUploadYoutube as boolean) ?? false,
+    (cfg?.youtubeChannel as string) ?? "",
+    (cfg?.youtubePlaylist as string) ?? "",
+    (cfg?.useFalThumbnail as boolean) ?? false,
+    (cfg?.useGptThumbnail as boolean) ?? false,
+    (cfg?.srcLang as string) ?? "zh",
+    (cfg?.translateOn as boolean) ?? true,
+    (cfg?.translateTarget as string) ?? "vi",
+    (cfg?.dubOn as boolean) ?? true,
+    (cfg?.voiceLang as string) ?? "",
+    (cfg?.colorFilter as ColorFilter | null) ?? null,
+    (cfg?.playbackSpeed as number) ?? 1.0,
+    (cfg?.useGeminiThumbnail as boolean) ?? false,
+    (cfg?.fillGaps as boolean) ?? false,
+  );
 }
 
 // ── Remote job tracking ─────────────────────────────────────────────────────
@@ -1567,6 +1939,102 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
     }
   }
   return { status: "error", error: "Quá thời gian chờ upload" };
+}
+
+// ── Merge-after watcher (Task 4) ─────────────────────────────────────────────
+// Runs ONCE per batchId (guard flag): when every sibling pipeline has left
+// queued/running/paused, concat the done siblings' finished videos ("result"
+// artifact). Failures are skipped (noted in log); <2 done siblings → skip,
+// no concat. Old persisted payloads may hydrate batchMerges as undefined —
+// every read below is guarded with `?? []`, persist version stays at 1.
+const batchMergeStarted = new Set<string>();
+
+async function maybeMergeBatch(batchId: string | null | undefined) {
+  if (!batchId) return;
+  if (batchMergeStarted.has(batchId)) return;
+  const st = usePipelineStore.getState();
+  const merges = st.batchMerges ?? [];
+  if (merges.some((m) => m.batchId === batchId)) return;
+  const sibs = st.pipelines.filter((p) => p.batchId === batchId);
+  if (sibs.length === 0) return;
+  if (
+    sibs.some(
+      (p) =>
+        p.status === "queued" ||
+        p.status === "running" ||
+        p.status === "paused",
+    )
+  )
+    return;
+  const doneIds = sibs
+    .filter((p) => p.status === "done" && p.videoId)
+    .map((p) => p.videoId as string);
+  const skipped = sibs.length - doneIds.length;
+  const noteTarget = [...sibs].sort(
+    (a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0),
+  )[0];
+  if (doneIds.length < 2) {
+    if (noteTarget)
+      appendLog(
+        noteTarget.id,
+        translate("pipeline.batchDone", {
+          ok: doneIds.length,
+          skipped,
+        }),
+      );
+    return;
+  }
+  batchMergeStarted.add(batchId);
+  const name = translate("pipeline.batchMergeName", { n: doneIds.length });
+  const mergeId = `batch-${batchId}`;
+  st.addBatchMerge({
+    id: mergeId,
+    batchId,
+    name,
+    videoIds: doneIds,
+    status: "running",
+    progress: 0,
+    resultUrl: "",
+    videoId: null,
+    error: "",
+  });
+  if (noteTarget)
+    appendLog(
+      noteTarget.id,
+      translate("pipeline.batchMerging", { n: doneIds.length }),
+    );
+  try {
+    const { concat_id } = await startConcat(doneIds, "result", name);
+    usePipelineStore.getState().updateBatchMerge(mergeId, { concatId: concat_id });
+    const res = await pollConcatJob(concat_id, (tk) => {
+      usePipelineStore
+        .getState()
+        .updateBatchMerge(mergeId, { progress: tk.progress ?? 0 });
+    });
+    if (res.status === "cancelled") {
+      usePipelineStore
+        .getState()
+        .updateBatchMerge(mergeId, { status: "cancelled", progress: 0 });
+      if (noteTarget) appendLog(noteTarget.id, translate("pipeline.batchCancelled"));
+      return;
+    }
+    if (res.status !== "done" || !res.video_id)
+      throw new Error(res.error || "Gộp video thất bại");
+    usePipelineStore.getState().updateBatchMerge(mergeId, {
+      status: "done",
+      progress: 100,
+      resultUrl: getConcatDownloadUrl(concat_id),
+      videoId: res.video_id,
+    });
+    if (noteTarget) appendLog(noteTarget.id, translate("pipeline.batchMerged"));
+  } catch (e) {
+    usePipelineStore.getState().updateBatchMerge(mergeId, {
+      status: "error",
+      error: e instanceof Error ? e.message : "Gộp video thất bại",
+    });
+    if (noteTarget)
+      appendLog(noteTarget.id, translate("pipeline.batchMergeFailed"));
+  }
 }
 
 // ── Queue ──────────────────────────────────────────────────────────────────
@@ -2109,6 +2577,12 @@ function markStepSkipped(id: string, i: number) {
 async function runPrep(id: string, startStep = 0) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
+  // Merge-before entries are driven by runMergedPipelineBody, never by the
+  // generic runner (their url is a label, not a link — resolving it errors).
+  if (cur.merging) {
+    appendLog(id, "Pipeline gộp đang chạy ở tiến trình riêng — bỏ qua runner chung.");
+    return;
+  }
   const rawUrl = cur.url;
 
   const tick = (i: number) => (t: JobTick) => {
@@ -2334,7 +2808,13 @@ async function runPrep(id: string, startStep = 0) {
           appendLog(id, `Import HTTP ${ir.status}: ${idata.detail || "lỗi"}`);
           throw new Error(idata.detail || "Import thất bại");
         }
-        videoId = idata.video_id;
+        videoId = await pollImportJob(idata.job_id, (t) => {
+          // % tải vẫn đổ vào step 2 (cho thanh tổng) dù step đã xong/bỏ qua —
+          // không đổi flow hiển thị cũ.
+          setStepProgress(id, 1, t.progress ?? 0);
+          recalcOverall(id);
+          if (t.logs) appendBackendLogs(id, t.logs);
+        });
         patch(id, { videoId });
         appendLog(id, `Video ID: ${videoId}`);
         try {
@@ -3949,6 +4429,10 @@ async function runPipeline(id: string, startStep = 4, force = false) {
     });
     appendLog(id, "Hoàn tất!");
     reportPipeline(id, true);
+    // Merge-after: batch may now be fully settled → concat done siblings once.
+    void maybeMergeBatch(
+      usePipelineStore.getState().pipelines.find((x) => x.id === id)?.batchId,
+    );
   } catch (e) {
     // Hủy-để-pause (user chọn "hủy bước hiện tại"): abort backend xong,
     // poll trả lỗi "Đã hủy" → rẽ vào đây và chuyển sang paused thay vì error.
@@ -3983,6 +4467,10 @@ async function runPipeline(id: string, startStep = 4, force = false) {
       finishedAt: Date.now(),
     });
     reportPipeline(id, true);
+    // Merge-after: an error also settles the batch (failures are skipped).
+    void maybeMergeBatch(
+      usePipelineStore.getState().pipelines.find((x) => x.id === id)?.batchId,
+    );
   } finally {
     liveRunners.delete(id);
   }
@@ -4008,6 +4496,19 @@ async function runRestorePaused() {
     for (const p of pipes) {
       if (p.status !== "running" && p.status !== "queued") continue;
       if (liveRunners.has(p.id)) continue;
+
+      // Merge-before entry restored mid-merge (reload): restart its body.
+      if (p.merging) {
+        if (p.mergeSpec) {
+          const spec = p.mergeSpec;
+          appendLog(p.id, "Tiếp tục gộp video dang dở sau khi tải lại trang...");
+          void runMergedPipelineBody(p.id, spec.urls, spec.cfg, spec.label);
+        } else {
+          patch(p.id, { merging: false });
+          continue;
+        }
+        continue;
+      }
 
       // Interactive waits: nothing to do — the confirm/resolve handlers resume.
       if (p.stage === "region" || p.stage === "subtitle_preview") continue;

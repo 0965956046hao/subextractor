@@ -21,6 +21,10 @@ export interface CachedVideoScan {
   scanned_at: number;
   max_time: number;
   videos: any[];
+  /** Playlist membership for regrouping (id + title + member ids). */
+  playlists?: { id: string; title: string; ids: string[] }[];
+  /** Collection title (only for mix_scans entries). */
+  title?: string;
 }
 
 export interface CachedMixList {

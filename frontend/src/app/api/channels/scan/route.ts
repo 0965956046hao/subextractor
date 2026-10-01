@@ -12,6 +12,7 @@ import {
   saveCache,
   mergeVideos,
   maxCreateTime,
+  SCAN_CACHE_CAP,
 } from "@/lib/channel-cache";
 
 export const runtime = "nodejs";
@@ -72,10 +73,10 @@ export async function POST(req: NextRequest) {
   const cache = loadCache();
   const prev = cache.channel_scans[url];
   const prevVideos = prev?.videos ?? [];
-  // Incremental default: only fetch newer than the newest cached video.
-  // full=true ignores the cache and rescans from the requested date.
-  const sinceTimestamp =
-    body.full ? (body.since ?? 0) : Math.max(body.since ?? 0, prev?.max_time ?? 0);
+  // Date filter is display-only. The merge always absorbs every freshly
+  // captured video (deep scroll reaches old ones the cache never saw) —
+  // filtering by cache max_time here would silently drop them.
+  const sinceTimestamp = body.since ?? 0;
 
   let handle: BrowserHandle;
   try {
@@ -154,22 +155,35 @@ export async function POST(req: NextRequest) {
       // ignore
     }
 
-    // Try scrolling to load more if needed. NOTE: channel pages scroll an
-    // inner `.route-scroll-container` div — window.scrollBy loads nothing.
+    // Deep-scroll the 作品 list: the tab holds hundreds of videos but only
+    // loads more while its own scroll container moves (manual refetch of
+    // aweme/post is WAF-blocked — verified live, the page's own signed XHRs
+    // are the only way). Jump to the bottom each round; stop after 4 stable.
+    // NOTE: channel pages scroll an inner `.route-scroll-container` div —
+    // window.scrollBy loads nothing.
     if (capturedAwemeLists.length > 0) {
-      for (let scroll = 0; scroll < 3; scroll++) {
-        const prevCount = capturedAwemeLists.flat().length;
+      let stableRounds = 0;
+      let prevCount = capturedAwemeLists.flat().length;
+      for (let scroll = 0; scroll < 40; scroll++) {
         await page
           .evaluate(() => {
             const el = document.querySelector(
               ".route-scroll-container",
             ) as HTMLElement | null;
-            (el ?? document.scrollingElement)?.scrollBy(0, 1000);
+            const target = el ?? document.scrollingElement;
+            if (target) target.scrollTop = target.scrollHeight;
           })
           .catch(() => {});
-        await new Promise((r) => setTimeout(r, 2000));
-        if (capturedAwemeLists.flat().length > prevCount) continue;
-        break;
+        await new Promise((r) => setTimeout(r, 3000));
+        const now = capturedAwemeLists.flat().length;
+        if (now > prevCount) {
+          stableRounds = 0;
+          prevCount = now;
+        } else {
+          stableRounds += 1;
+          if (stableRounds >= 4) break;
+        }
+        if (now >= SCAN_CACHE_CAP) break;
       }
     }
 
@@ -177,16 +191,32 @@ export async function POST(req: NextRequest) {
     scanComplete = true;
   } catch (err) {
     await closeBrowser(handle).catch(() => {});
-    // Resilience: serve the cache when a live scan fails.
+    // Resilience: serve the cache when a live scan fails (unioned with
+    // collections like the live path).
     if (prevVideos.length > 0) {
-      const groups = buildGroups(prevVideos, new Map());
+      const unioned = [...prevVideos];
+      const seenIds = new Set(unioned.map((v) => String(v?.aweme_id || "")));
+      const mixIds = new Set(
+        (cache.mix_lists[url]?.playlists || []).map((p) => String(p.id)),
+      );
+      for (const [mid, ms] of Object.entries(cache.mix_scans)) {
+        if (!mixIds.has(mid)) continue;
+        for (const v of ms?.videos || []) {
+          const aid = String(v?.aweme_id || "");
+          if (aid && !seenIds.has(aid)) {
+            seenIds.add(aid);
+            unioned.push(v);
+          }
+        }
+      }
+      const groups = buildGroups(unioned, new Map());
       return NextResponse.json({
         channel_name: "",
-        total: prevVideos.length,
-        filtered: prevVideos.length,
-        videos: prevVideos,
+        total: unioned.length,
+        filtered: unioned.length,
+        videos: unioned,
         playlists: Array.from(groups.values()),
-        cached: prevVideos.length,
+        cached: unioned.length,
         added: 0,
         scanned_at: prev?.scanned_at ?? 0,
         from_cache: true,
@@ -213,13 +243,14 @@ export async function POST(req: NextRequest) {
 
   const allVideos = Array.from(allItems.values());
 
-  // Filter by create_time > sinceTimestamp
+  // Date filter is display-only (the Lọc được tag). Every captured video
+  // joins the merge below regardless of age.
   const filtered = sinceTimestamp > 0
     ? allVideos.filter((v) => v.create_time > sinceTimestamp)
     : allVideos;
 
   // Sort by create_time descending
-  filtered.sort((a, b) => b.create_time - a.create_time);
+  allVideos.sort((a, b) => b.create_time - a.create_time);
 
   const mixIdToName = new Map<string, string>();
   for (const list of capturedMixLists) {
@@ -228,17 +259,56 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Merge fresh items over the cache and persist.
-  const { merged, added } = mergeVideos(prevVideos, filtered);
+  // Merge fresh items over the cache and persist (ALL captured videos —
+  // never the date-filtered subset, or deep-scroll discoveries get lost).
+  const { merged, added } = mergeVideos(prevVideos, allVideos);
+
+  // Union with this channel's collections: date-scan only reaches recent
+  // videos, older ones live inside mix_scans (phase-2). Without this the
+  // channel total is absurdly smaller than a single collection.
+  const mixIds = new Set(
+    (cache.mix_lists[url]?.playlists || []).map((p) => String(p.id)),
+  );
+  if (mixIds.size > 0) {
+    const seen = new Set(merged.map((v) => String(v?.aweme_id || "")));
+    for (const [mid, ms] of Object.entries(cache.mix_scans)) {
+      if (!mixIds.has(mid)) continue;
+      for (const v of ms?.videos || []) {
+        const aid = String(v?.aweme_id || "");
+        if (aid && !seen.has(aid)) {
+          seen.add(aid);
+          merged.push(v);
+        }
+      }
+    }
+    merged.sort((a, b) => (b.create_time || 0) - (a.create_time || 0));
+  }
+  if (merged.length > SCAN_CACHE_CAP) merged.length = SCAN_CACHE_CAP;
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // Membership lookup from per-collection caches (title known at save time).
+  const memberOf = new Map<string, { id: string; title: string }>();
+  for (const [mixId, ms] of Object.entries(cache.mix_scans)) {
+    const title = ms?.title || mixId;
+    for (const v of ms?.videos || []) {
+      const aid = v?.aweme_id ? String(v.aweme_id) : "";
+      if (aid && !memberOf.has(aid)) memberOf.set(aid, { id: mixId, title });
+    }
+  }
+
+  const groups = buildGroups(merged, mixIdToName, memberOf);
+
   cache.channel_scans[url] = {
     scanned_at: nowSec,
     max_time: maxCreateTime(merged),
     videos: merged,
+    playlists: Array.from(groups.values()).map((g) => ({
+      id: g.id,
+      title: g.title,
+      ids: g.videos.map((v) => String(v.aweme_id)),
+    })),
   };
   saveCache(cache);
-
-  const groups = buildGroups(merged, mixIdToName);
 
   const result: ScanResult = {
     channel_name: channelName,
@@ -258,19 +328,21 @@ export async function POST(req: NextRequest) {
 function buildGroups(
   videos: AwemeItem[],
   mixIdToName: Map<string, string>,
+  memberOf?: Map<string, { id: string; title: string }>,
 ): Map<string, PlaylistGroup> {
   const groups = new Map<string, PlaylistGroup>();
+  const ensure = (id: string, title: string) => {
+    if (!groups.has(id)) groups.set(id, { id, title, videos: [] });
+    return groups.get(id)!;
+  };
   for (const v of videos) {
     const mid = v.mix_info?.mix_id ? String(v.mix_info.mix_id) : "";
-    if (!mid) continue;
-    if (!groups.has(mid)) {
-      groups.set(mid, {
-        id: mid,
-        title: v.mix_info?.mix_name || mixIdToName.get(mid) || mid,
-        videos: [],
-      });
+    if (mid) {
+      ensure(mid, v.mix_info?.mix_name || mixIdToName.get(mid) || mid).videos.push(v);
+      continue;
     }
-    groups.get(mid)!.videos.push(v);
+    const m = memberOf?.get(String(v.aweme_id));
+    if (m) ensure(m.id, m.title).videos.push(v);
   }
   return groups;
 }

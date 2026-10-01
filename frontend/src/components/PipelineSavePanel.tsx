@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import type { Pipeline } from "@/stores/pipeline-store";
-import { createPipelinePreset } from "@/lib/api";
+import { createPipelinePreset, getPipelinePresets } from "@/lib/api";
+import { findDuplicatePreset } from "@/lib/preset-utils";
 
 function collectCurrentConfig(p: Pipeline): Record<string, unknown> {
   return {
@@ -102,7 +103,16 @@ export default function PipelineSavePanel({
           setBusy(true);
           setErr("");
           try {
-            await createPipelinePreset(name.trim(), collectCurrentConfig(p));
+            const config = collectCurrentConfig(p);
+            const existing = await getPipelinePresets().catch(() => null);
+            const dupe = existing
+              ? findDuplicatePreset(existing.presets || [], config)
+              : null;
+            if (dupe) {
+              setErr(t("preset.duplicate", { name: dupe.name }));
+              return;
+            }
+            await createPipelinePreset(name.trim(), config);
             setOpen(false);
             setName("");
             onSaved();

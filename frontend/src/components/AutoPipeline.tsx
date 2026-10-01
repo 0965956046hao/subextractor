@@ -3,6 +3,7 @@
 import KeepOriginalSelector from "@/components/KeepOriginalSelector";
 import PageHeader from "@/components/layout/PageHeader";
 import PipelineSavePanel from "@/components/PipelineSavePanel";
+import PresetBuilderModal from "@/components/PresetBuilderModal";
 import PreviewModal from "@/components/PreviewModal";
 import RegionSelector from "@/components/RegionSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
@@ -32,6 +33,10 @@ import {
   listVideos,
   listYoutubeChannels,
   listYoutubePlaylists,
+  pollConcatJob,
+  getConcatDownloadUrl,
+  cancelConcat,
+  startConcat,
   setActiveWatermarkPreset,
   uploadVideo,
   type CapCutVoice,
@@ -54,9 +59,10 @@ import {
   PAUSABLE_STAGES,
   fmtElapsed,
   usePipelineStore,
+  type BatchMerge,
   type Pipeline,
 } from "@/stores/pipeline-store";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 type TFunc = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -260,6 +266,45 @@ function pipelineElapsed(p: Pipeline, now: number): string {
   return fmtElapsed(end - p.startedAt);
 }
 
+/** Split a pipeline list into batch groups (by batchId) + ungrouped rows. */
+function groupPipes(list: Pipeline[]): {
+  groups: Map<string, Pipeline[]>;
+  ungrouped: Pipeline[];
+} {
+  const groups = new Map<string, Pipeline[]>();
+  const ungrouped: Pipeline[] = [];
+  for (const p of list) {
+    if (p.batchId) {
+      const arr = groups.get(p.batchId) ?? [];
+      arr.push(p);
+      groups.set(p.batchId, arr);
+    } else {
+      ungrouped.push(p);
+    }
+  }
+  return { groups, ungrouped };
+}
+
+/** Local poller for ad-hoc YouTube uploads of history videos (mirrors the
+ *  store's pollYoutubeUpload: GET /api/youtube/upload/{jobId}). */
+async function pollYoutubeJobLocal(
+  jobId: string,
+): Promise<{ status: string; error?: string }> {
+  for (let i = 0; i < 2400; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const r = await fetch(`/api/youtube/upload/${jobId}`);
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (d.status === "done") return d;
+      if (d.status === "error") return { status: "error", error: d.error };
+    } catch {
+      // ignore transient
+    }
+  }
+  return { status: "error", error: "timeout" };
+}
+
 export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -271,6 +316,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const removePipeline = usePipelineStore((s) => s.removePipeline);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
   const importDone = usePipelineStore((s) => s.importDone);
+  const batchMerges = usePipelineStore((s) => s.batchMerges);
+  const addBatchMerge = usePipelineStore((s) => s.addBatchMerge);
+  const updateBatchMerge = usePipelineStore((s) => s.updateBatchMerge);
+  const removeBatchMerge = usePipelineStore((s) => s.removeBatchMerge);
+  const uploadYoutubeNow = usePipelineStore((s) => s.uploadYoutubeNow);
 
   const [url, setUrl] = useState(initialUrl || "");
   const [sourceType, setSourceType] = useState<"douyin" | "youtube" | "upload">(
@@ -300,6 +350,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [presetId, setPresetId] = useState<string>("");
   const [pipelinePresets, setPipelinePresets] = useState<PipelinePreset[]>([]);
   const [presetOpen, setPresetOpen] = useState(false);
+  const [presetBuilderOpen, setPresetBuilderOpen] = useState(false);
   const presetSnapshotRef = useRef<Record<string, unknown> | null>(null);
   // Đánh dấu giọng đã được chọn rõ ràng (preset / tay). Effect nạp danh sách
   // voices không được ghi đè giọng đã chọn nếu list fetch về thiếu nó — nếu
@@ -356,6 +407,13 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [healthLoading, setHealthLoading] = useState(true);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
+  // Ad-hoc done-list selection (videoIds) for Merge / Upload-to-YouTube.
+  const [selectedDone, setSelectedDone] = useState<Set<string>>(new Set());
+  const [collapsedBatches, setCollapsedBatches] = useState<Set<string>>(
+    new Set(),
+  );
+  const [doneNote, setDoneNote] = useState<string | null>(null);
+  const [doneBusy, setDoneBusy] = useState<"merge" | "upload" | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -484,6 +542,15 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         // Resume pipelines persisted to localStorage (page reload): re-attach
         // in-flight backend jobs and re-register interactive waits.
         usePipelineStore.getState().restorePaused();
+        // Mount-time batch sweep: reload-mid-batch loses the watcher, so
+        // re-check every distinct batch once (fire-and-forget).
+        const seen = new Set<string>();
+        for (const p of usePipelineStore.getState().pipelines) {
+          if (p.batchId && !seen.has(p.batchId)) {
+            seen.add(p.batchId);
+            usePipelineStore.getState().checkBatchComplete(p.batchId);
+          }
+        }
       })
       .catch(() => {
         // ignore — no history available
@@ -1056,6 +1123,154 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     if (selectedId != null && !pipelines.some((x) => x.id === selectedId))
       setSelectedId(null);
     setHistoryVideos((prev) => prev.filter((v) => v.status !== "done"));
+  };
+
+  // Batch groups (merge-after): group active+done pipelines by batchId.
+  // Old persisted payloads may hydrate batchMerges as undefined → `?? []`.
+  const merges = batchMerges ?? [];
+  const activeGroups = groupPipes(activePipelines);
+  const doneGroups = groupPipes(
+    donePipelines.filter((p) => p.status === "done"),
+  );
+  const doneErrorRows = donePipelines.filter((p) => p.status === "error");
+
+  const toggleDoneSelect = (vid: string) => {
+    setSelectedDone((prev) => {
+      const next = new Set(prev);
+      if (next.has(vid)) next.delete(vid);
+      else next.add(vid);
+      return next;
+    });
+  };
+
+  const toggleBatch = (bid: string) => {
+    setCollapsedBatches((prev) => {
+      const next = new Set(prev);
+      if (next.has(bid)) next.delete(bid);
+      else next.add(bid);
+      return next;
+    });
+  };
+
+  // Ad-hoc merge of ticked done videos → new BatchMerge in "File gộp".
+  const handleMergeSelected = async () => {
+    const ids = [...selectedDone];
+    if (doneBusy) return;
+    if (ids.length < 2) {
+      setDoneNote(tr("channel.mergeSkipped"));
+      return;
+    }
+    setDoneBusy("merge");
+    setDoneNote(tr("channel.merging"));
+    const mergeId = `adhoc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const name = tr("pipeline.batchMergeName", { n: ids.length });
+    addBatchMerge({
+      id: mergeId,
+      batchId: mergeId,
+      name,
+      videoIds: ids,
+      status: "running",
+      progress: 0,
+      resultUrl: "",
+      videoId: null,
+      error: "",
+    });
+    try {
+      const { concat_id } = await startConcat(ids, "result", name);
+      updateBatchMerge(mergeId, { concatId: concat_id });
+      const res = await pollConcatJob(concat_id, (tk) =>
+        updateBatchMerge(mergeId, { progress: tk.progress ?? 0 }),
+      );
+      if (res.status === "cancelled") {
+        updateBatchMerge(mergeId, { status: "cancelled", progress: 0 });
+        setDoneNote(tr("pipeline.batchCancelled"));
+        return;
+      }
+      if (res.status !== "done" || !res.video_id)
+        throw new Error(res.error || "Gộp thất bại");
+      updateBatchMerge(mergeId, {
+        status: "done",
+        progress: 100,
+        resultUrl: getConcatDownloadUrl(concat_id),
+        videoId: res.video_id,
+      });
+      setSelectedDone(new Set());
+      setDoneNote(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Gộp thất bại";
+      updateBatchMerge(mergeId, { status: "error", error: msg });
+      setDoneNote(msg);
+    } finally {
+      setDoneBusy(null);
+    }
+  };
+
+  // Ad-hoc upload of ticked done videos, one by one. Pipeline videos reuse
+  // the store's uploadYoutubeNow flow; history videos POST directly with the
+  // same /api/youtube/upload/{id}?channel_id=&playlist_id= query shape.
+  const handleUploadSelected = async () => {
+    const ids = [...selectedDone];
+    if (doneBusy || ids.length === 0) return;
+    setDoneBusy("upload");
+    setDoneNote(tr("channel.uploading"));
+    // Skip videos already uploading in this run.
+    const busy = new Set<string>();
+    let ok = 0;
+    let fail = 0;
+    for (const vid of ids) {
+      if (busy.has(vid)) continue;
+      busy.add(vid);
+      try {
+        const pipe = pipelines.find(
+          (p) =>
+            p.videoId === vid &&
+            (p.status === "done" || p.status === "error"),
+        );
+        if (pipe) {
+          await uploadYoutubeNow(pipe.id);
+          ok += 1;
+        } else {
+          const qs = [
+            ytChannel ? `channel_id=${encodeURIComponent(ytChannel)}` : "",
+            ytPlaylist ? `playlist_id=${encodeURIComponent(ytPlaylist)}` : "",
+          ]
+            .filter(Boolean)
+            .join("&");
+          const ur = await fetch(
+            `/api/youtube/upload/${vid}${qs ? `?${qs}` : ""}`,
+            { method: "POST" },
+          );
+          const ud = await ur.json();
+          if (!ur.ok || !ud.job_id)
+            throw new Error(ud.detail || "upload failed");
+          const us = await pollYoutubeJobLocal(ud.job_id);
+          if (us.status !== "done") throw new Error(us.error || "upload failed");
+          ok += 1;
+        }
+      } catch {
+        fail += 1;
+      }
+    }
+    setDoneNote(tr("channel.uploadSummary", { ok, fail }));
+    setDoneBusy(null);
+  };
+
+  // Merge order helpers: videoIds order = tick order at merge time.
+  const mergeVideoTitle = (vid: string): string => {
+    const p = pipelines.find((x) => x.videoId === vid);
+    if (p) return p.title || p.originalName || vid;
+    const h = historyVideos.find((v) => v.video_id === vid);
+    if (h) return h.filename || vid;
+    return vid;
+  };
+
+  const handleCancelMerge = async (m: BatchMerge) => {
+    if (m.status !== "running" || !m.concatId) return;
+    try {
+      await cancelConcat(m.concatId);
+    } catch {
+      // poll loop will surface the terminal state
+    }
   };
 
   return (
@@ -2151,6 +2366,24 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   )}
                 </div>
 
+                <div className="mt-5 border-t border-white/[0.07] pt-4 flex items-center gap-3 flex-wrap">
+                  <div className="flex-1 min-w-[200px]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
+                      {tr("pipeline.savePresetTitle")}
+                    </p>
+                    <p className="text-[11px] text-ink-light leading-relaxed mt-0.5">
+                      {tr("pipeline.savePresetHint")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPresetBuilderOpen(true)}
+                    className="btn-island-secondary text-[12px] flex-shrink-0"
+                  >
+                    {t("preset.save")}
+                  </button>
+                </div>
+
               </div>
 
             </div>
@@ -2212,7 +2445,33 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    {activePipelines.map((p) => (
+                    {[...activeGroups.groups.entries()].map(([bid, pipes]) => (
+                      <BatchGroup
+                        key={bid}
+                        batchId={bid}
+                        pipes={pipes}
+                        merge={merges.find((m) => m.batchId === bid)}
+                        collapsed={collapsedBatches.has(bid)}
+                        onToggle={() => toggleBatch(bid)}
+                        onCancelMerge={(m) => handleCancelMerge(m)}
+                      >
+                        {pipes.map((p) => (
+                          <PipelineRow
+                            key={p.id}
+                            p={p}
+                            now={now}
+                            onOpen={() => {
+                              setSelectedId(p.id);
+                              setTab("detail");
+                            }}
+                            onRemove={() => {
+                              removePipelineEntry(p);
+                            }}
+                          />
+                        ))}
+                      </BatchGroup>
+                    ))}
+                    {activeGroups.ungrouped.map((p) => (
                       <PipelineRow
                         key={p.id}
                         p={p}
@@ -2241,47 +2500,164 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     {tr("pipeline.emptyDone")}
                   </p>
                 ) : (
-                  <div className="space-y-2">
-                    {donePipelines.map((p) => (
-                      <PipelineRow
-                        key={p.id}
-                        p={p}
-                        now={now}
-                        onOpen={() => {
-                          setSelectedId(p.id);
-                          setTab("detail");
-                        }}
-                        onRemove={() => {
-                          removePipelineEntry(p);
-                        }}
-                      />
-                    ))}
-                    {historyVideosDone.map((v) => (
-                      <HistoryRow
-                        key={v.video_id}
-                        v={v}
-                        onOpen={() => {
-                          const id = importDone({
-                            videoId: v.video_id,
-                            title: v.filename || v.video_id,
-                            hasDubbed: v.has_dubbed ?? false,
-                          });
-                          setSelectedId(id);
-                          setTab("detail");
-                        }}
-                        onDelete={async () => {
-                          try {
-                            await deleteVideo(v.video_id);
-                          } catch {
-                            // ignore
+                  <>
+                    <div className="flex items-center gap-2 flex-wrap mb-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleMergeSelected()}
+                        disabled={doneBusy !== null || selectedDone.size < 2}
+                        className="btn-island-secondary !px-4 !py-2 text-[12px] disabled:opacity-50"
+                      >
+                        {doneBusy === "merge"
+                          ? tr("channel.merging")
+                          : `${tr("channel.mergeSelected")}${selectedDone.size > 0 ? ` (${selectedDone.size})` : ""}`}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleUploadSelected()}
+                        disabled={doneBusy !== null || selectedDone.size < 1}
+                        className="btn-island-secondary !px-4 !py-2 text-[12px] disabled:opacity-50"
+                      >
+                        {doneBusy === "upload"
+                          ? tr("channel.uploading")
+                          : `${tr("channel.uploadSelected")}${selectedDone.size > 0 ? ` (${selectedDone.size})` : ""}`}
+                      </button>
+                      {selectedDone.size > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDone(new Set())}
+                          className="text-[11px] text-ink-light hover:text-ink transition-colors cursor-pointer"
+                        >
+                          {tr("channel.clearSelection")}
+                        </button>
+                      )}
+                    </div>
+                    {doneNote && (
+                      <p className="text-[12px] text-ink-muted mb-3">{doneNote}</p>
+                    )}
+                    <p className="text-[11px] text-ink-light mb-3">
+                      {tr("channel.uploadTargetHint")}
+                    </p>
+                    {merges.length > 0 && (
+                      <div className="glass-panel p-4 mb-3">
+                        <p className="eyebrow mb-2">
+                          {tr("channel.mergedFiles")}
+                        </p>
+                        <p className="text-[11px] text-ink-light mb-3">
+                          {tr("channel.mergeOrderNote")}
+                        </p>
+                        <div className="space-y-2">
+                          {merges.map((m) => (
+                            <MergeEntry
+                              key={m.id}
+                              merge={m}
+                              titleOf={mergeVideoTitle}
+                              onCancel={() => handleCancelMerge(m)}
+                              onRemove={() => removeBatchMerge(m.id)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      {[...doneGroups.groups.entries()].map(([bid, pipes]) => (
+                        <BatchGroup
+                          key={bid}
+                          batchId={bid}
+                          pipes={pipes}
+                          merge={merges.find((m) => m.batchId === bid)}
+                          collapsed={collapsedBatches.has(bid)}
+                          onToggle={() => toggleBatch(bid)}
+                          onCancelMerge={(m) => handleCancelMerge(m)}
+                        >
+                          {pipes.map((p) => (
+                            <PipelineRow
+                              key={p.id}
+                              p={p}
+                              now={now}
+                              selectable={!!p.videoId}
+                              selected={!!p.videoId && selectedDone.has(p.videoId)}
+                              onToggleSelect={
+                                p.videoId
+                                  ? () => toggleDoneSelect(p.videoId as string)
+                                  : undefined
+                              }
+                              onOpen={() => {
+                                setSelectedId(p.id);
+                                setTab("detail");
+                              }}
+                              onRemove={() => {
+                                removePipelineEntry(p);
+                              }}
+                            />
+                          ))}
+                        </BatchGroup>
+                      ))}
+                      {doneGroups.ungrouped.map((p) => (
+                        <PipelineRow
+                          key={p.id}
+                          p={p}
+                          now={now}
+                          selectable={!!p.videoId}
+                          selected={!!p.videoId && selectedDone.has(p.videoId)}
+                          onToggleSelect={
+                            p.videoId
+                              ? () => toggleDoneSelect(p.videoId as string)
+                              : undefined
                           }
-                          setHistoryVideos((prev) =>
-                            prev.filter((x) => x.video_id !== v.video_id),
-                          );
-                        }}
-                      />
-                    ))}
-                  </div>
+                          onOpen={() => {
+                            setSelectedId(p.id);
+                            setTab("detail");
+                          }}
+                          onRemove={() => {
+                            removePipelineEntry(p);
+                          }}
+                        />
+                      ))}
+                      {doneErrorRows.map((p) => (
+                        <PipelineRow
+                          key={p.id}
+                          p={p}
+                          now={now}
+                          onOpen={() => {
+                            setSelectedId(p.id);
+                            setTab("detail");
+                          }}
+                          onRemove={() => {
+                            removePipelineEntry(p);
+                          }}
+                        />
+                      ))}
+                      {historyVideosDone.map((v) => (
+                        <HistoryRow
+                          key={v.video_id}
+                          v={v}
+                          selectable
+                          selected={selectedDone.has(v.video_id)}
+                          onToggleSelect={() => toggleDoneSelect(v.video_id)}
+                          onOpen={() => {
+                            const id = importDone({
+                              videoId: v.video_id,
+                              title: v.filename || v.video_id,
+                              hasDubbed: v.has_dubbed ?? false,
+                            });
+                            setSelectedId(id);
+                            setTab("detail");
+                          }}
+                          onDelete={async () => {
+                            try {
+                              await deleteVideo(v.video_id);
+                            } catch {
+                              // ignore
+                            }
+                            setHistoryVideos((prev) =>
+                              prev.filter((x) => x.video_id !== v.video_id),
+                            );
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -2315,8 +2691,19 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
         )}
       </div>
 
-      {confirmingClear && (
-        <div
+      <PresetBuilderModal
+        open={presetBuilderOpen}
+        onClose={() => setPresetBuilderOpen(false)}
+        formConfig={collectFormConfig()}
+        sampleVideos={historyVideos}
+        existingPresets={pipelinePresets}
+        onSaved={(p) => {
+          setPipelinePresets((prev) => [...prev, p]);
+          setPresetId(p.id);
+        }}
+      />
+
+      {confirmingClear && (        <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
           onClick={() => setConfirmingClear(false)}
         >
@@ -2356,16 +2743,182 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   );
 }
 
+function MergeEntry({
+  merge,
+  titleOf,
+  onCancel,
+  onRemove,
+}: {
+  merge: BatchMerge;
+  titleOf: (vid: string) => string;
+  onCancel: () => void;
+  onRemove: () => void;
+}) {
+  const { t } = useI18n();
+  const tr = makeT(t);
+  return (
+    <div className="rounded-xl ring-1 ring-white/[0.07] bg-white/[0.02] p-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[12px] font-medium text-ink truncate flex-1 min-w-0">
+          {merge.name}
+        </span>
+        <span className="tag">{merge.videoIds.length}</span>
+        {merge.status === "done" && merge.resultUrl ? (
+          <a
+            href={merge.resultUrl}
+            className="btn-island-secondary !px-3 !py-1.5 text-[11px]"
+          >
+            {tr("channel.downloadMerged")}
+          </a>
+        ) : merge.status === "running" ? (
+          <>
+            <span className="text-[11px] text-accent/80 inline-flex items-center gap-1">
+              <IconSpinner className="w-3 h-3" />
+              {tr("channel.merging")} {merge.progress}%
+            </span>
+            <button
+              onClick={onCancel}
+              className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-danger-muted ring-1 ring-danger/20 text-danger hover:bg-danger/15 transition-colors cursor-pointer"
+            >
+              {tr("channel.cancelMerge")}
+            </button>
+          </>
+        ) : merge.status === "cancelled" ? (
+          <span className="text-[11px] text-ink-light">
+            {tr("channel.mergeCancelled")}
+          </span>
+        ) : (
+          <span className="text-[11px] text-danger/80">{merge.error}</span>
+        )}
+        {merge.status !== "running" && (
+          <button
+            onClick={onRemove}
+            title={tr("channel.removeMerged")}
+            className="icon-btn-ghost text-ink-light cursor-pointer"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+      <ol className="mt-2 space-y-1 max-h-[160px] overflow-y-auto">
+        {merge.videoIds.map((vid, i) => (
+          <li
+            key={`${vid}-${i}`}
+            className="flex items-baseline gap-2 text-[11px]"
+          >
+            <span className="font-mono text-accent/80 tabular-nums flex-shrink-0">
+              {i + 1}.
+            </span>
+            <span className="text-ink-muted truncate" title={titleOf(vid)}>
+              {titleOf(vid)}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function BatchGroup({
+  batchId,
+  pipes,
+  merge,
+  collapsed,
+  onToggle,
+  onCancelMerge,
+  children,
+}: {
+  batchId: string;
+  pipes: Pipeline[];
+  merge: BatchMerge | undefined;
+  collapsed: boolean;
+  onToggle: () => void;
+  onCancelMerge: (m: BatchMerge) => void;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  const tr = makeT(t);
+  const doneCount = pipes.filter((p) => p.status === "done").length;
+  return (
+    <div className="rounded-xl ring-1 ring-white/[0.09] bg-white/[0.02] overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
+      >
+        <svg
+          className={`w-3.5 h-3.5 text-ink-light flex-shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        <span className="tag">{tr("channel.batchGroup", { count: pipes.length })}</span>
+        <span className="text-[11px] font-mono text-ink-light tabular-nums">
+          {doneCount}/{pipes.length}
+        </span>
+        <span className="text-[10px] font-mono text-ink-light truncate hidden sm:inline">
+          {batchId.slice(0, 8)}
+        </span>
+        <span className="ml-auto flex items-center gap-2 flex-shrink-0">
+          {merge?.status === "done" && merge.resultUrl ? (
+            <a
+              href={merge.resultUrl}
+              onClick={(e) => e.stopPropagation()}
+              className="px-2.5 h-7 inline-flex items-center rounded-full text-[11px] font-medium bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.11] hover:text-ink transition-colors"
+            >
+              {tr("channel.downloadMerged")}
+            </a>
+          ) : merge?.status === "running" ? (
+            <>
+              <span className="text-[11px] text-accent/80 inline-flex items-center gap-1">
+                <IconSpinner className="w-3 h-3" />
+                {tr("channel.merging")} {merge.progress}%
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancelMerge(merge);
+                }}
+                className="px-2.5 h-7 inline-flex items-center rounded-full text-[11px] font-medium bg-danger-muted ring-1 ring-danger/20 text-danger hover:bg-danger/15 transition-colors"
+              >
+                {tr("channel.cancelMerge")}
+              </button>
+            </>
+          ) : merge?.status === "error" ? (
+            <span className="text-[11px] text-danger/80 truncate max-w-[220px]">
+              {merge.error}
+            </span>
+          ) : null}
+        </span>
+      </button>
+      {!collapsed && <div className="space-y-2 p-2 pt-1">{children}</div>}
+    </div>
+  );
+}
+
 function PipelineRow({
   p,
   now,
   onOpen,
   onRemove,
+  selectable,
+  selected,
+  onToggleSelect,
 }: {
   p: Pipeline;
   now: number;
   onOpen: () => void;
   onRemove: () => void;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2391,6 +2944,15 @@ function PipelineRow({
       onClick={onOpen}
       className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05] transition-colors cursor-pointer"
     >
+      {selectable && onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleSelect}
+          className="w-4 h-4 flex-shrink-0 cursor-pointer"
+        />
+      )}
       <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-white/[0.11]">
         {p.videoId ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -2614,10 +3176,16 @@ function HistoryRow({
   v,
   onOpen,
   onDelete,
+  selectable,
+  selected,
+  onToggleSelect,
 }: {
   v: VideoMeta;
   onOpen: () => void;
   onDelete: () => void;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2627,6 +3195,15 @@ function HistoryRow({
       onClick={onOpen}
       className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05] transition-colors cursor-pointer"
     >
+      {selectable && onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleSelect}
+          className="w-4 h-4 flex-shrink-0 cursor-pointer"
+        />
+      )}
       <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-white/[0.11]">
         {v.has_video ? (
           // eslint-disable-next-line @next/next/no-img-element

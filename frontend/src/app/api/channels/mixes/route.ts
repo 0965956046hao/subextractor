@@ -47,6 +47,10 @@ export async function POST(req: NextRequest) {
   if (!url)
     return NextResponse.json({ detail: "URL is required" }, { status: 400 });
 
+  // Channel identity for attributing API responses (see handler below).
+  const secUid =
+    url.match(/\/user\/([^/?#]+)/)?.[1] || "";
+
   let handle: BrowserHandle;
   try {
     handle = await openBrowser({ headless: true });
@@ -65,10 +69,13 @@ export async function POST(req: NextRequest) {
   const capturedMixLists: MixEntry[][] = [];
   const seenApis = new Set<string>();
   let channelName = "";
+  /** First channel-scoped mix/list URL — reused for cursor pagination. */
+  let seedListUrl = "";
 
   const pickCover = (m: any): string | undefined => {
     const lists = [
       m?.cover_url?.url_list,
+      m?.horizontal_cover_url?.url_list,
       m?.mix_cover?.url_list,
       m?.cover?.url_list,
       m?.mix_pic?.url_list,
@@ -86,6 +93,9 @@ export async function POST(req: NextRequest) {
       m?.count,
       m?.statis?.updated_to_episode,
       m?.statis?.current_episode,
+      m?.stats?.updated_to_episode,
+      m?.stats?.total_episode_count,
+      m?.stats?.episode_count,
     ];
     for (const c of cands) {
       if (typeof c === "number") return c;
@@ -93,17 +103,28 @@ export async function POST(req: NextRequest) {
     return undefined;
   };
 
+  const pickId = (m: any): string =>
+    m?.mix_id ? String(m.mix_id) : m?.series_id ? String(m.series_id) : "";
+
+  const pickTitle = (m: any, fallback: string): string =>
+    String(m?.mix_name || m?.series_name || m?.name || fallback);
+
   const pushMixList = (mixList: any) => {
     if (!Array.isArray(mixList) || mixList.length === 0) return;
     capturedMixLists.push(
       mixList
-        .filter((m: any) => m?.mix_id)
-        .map((m: any) => ({
-          id: String(m.mix_id),
-          title: String(m.mix_name || m.name || m.mix_id),
-          cover: pickCover(m),
-          video_count: pickCount(m),
-        })),
+        .map((m: any): MixEntry | null => {
+          const id = pickId(m);
+          return id
+            ? {
+                id,
+                title: pickTitle(m, id),
+                cover: pickCover(m),
+                video_count: pickCount(m),
+              }
+            : null;
+        })
+        .filter((x): x is MixEntry => !!x),
     );
   };
 
@@ -121,10 +142,29 @@ export async function POST(req: NextRequest) {
       } catch {
         // ignore malformed URL
       }
+      // ONLY channel-scoped sources: mix/list + series/list whose sec_user_id
+      // matches the visited channel (fire on 合集 tab click). Page-load
+      // prefetches WITHOUT sec_user_id are session-scoped and misattribute
+      // other channels' data — verified live: they must be discarded.
+      if (!u.includes("/mix/list") && !u.includes("/series/list")) return;
+      let uid = "";
+      try {
+        uid = new URL(u).searchParams.get("sec_user_id") || "";
+      } catch {
+        return;
+      }
+      if (!uid || (secUid && uid !== secUid)) return;
       try {
         const data = await resp.json();
-        // Collection list API returns `mix_infos`; older variants `mix_list`.
-        pushMixList(data?.mix_infos ?? data?.mix_list);
+        pushMixList(data?.mix_infos ?? data?.series_infos ?? data?.mix_list);
+        if (
+          !seedListUrl &&
+          (data?.mix_infos?.length ||
+            data?.series_infos?.length ||
+            data?.mix_list?.length)
+        ) {
+          seedListUrl = u;
+        }
       } catch {
         // non-JSON response, skip
       }
@@ -132,16 +172,66 @@ export async function POST(req: NextRequest) {
 
     await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
-    // Wait for a mix API to fire (up to 15s) — collections load lazily.
-    for (let i = 0; i < 30; i++) {
-      if (capturedMixLists.length > 0) break;
-      await new Promise((r) => setTimeout(r, 500));
+    // The 合集 tab loads the channel's collections on click. No such tab =
+    // the channel has no collections → return empty (fast, correct).
+    // Poll for the tabs first: they render after hydration, clicking too
+    // early misses and falls back to cover-less DOM links.
+    let hasMixTab = false;
+    for (let i = 0; i < 20; i++) {
+      hasMixTab = await page
+        .evaluate(() => {
+          const tabs = Array.from(document.querySelectorAll(".semi-tabs-tab"));
+          const hit = tabs.find((el) => (el.textContent || "").includes("合集"));
+          if (hit) {
+            (hit as HTMLElement).click();
+            return true;
+          }
+          return false;
+        })
+        .catch(() => false);
+      if (hasMixTab || capturedMixLists.length > 0) break;
+      await new Promise((r) => setTimeout(r, 1000));
     }
 
-    // One light scroll in case the mix tab content loads on scroll.
-    if (capturedMixLists.length === 0) {
-      await page.evaluate(() => window.scrollBy(0, 1200));
-      await new Promise((r) => setTimeout(r, 3000));
+    if (hasMixTab) {
+      // Wait for the tab's mix/list API (up to 15s).
+      for (let i = 0; i < 30; i++) {
+        if (capturedMixLists.length > 0) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // Cursor pagination for channels with many collections (same-session
+      // refetch proven to work for series-style list APIs).
+      if (seedListUrl) {
+        try {
+          for (let round = 0; round < 10; round++) {
+            const pageData = await page
+              .evaluate(async (base: string, skip: number) => {
+                const u = new URL(base);
+                u.searchParams.set("cursor", String(skip));
+                const r = await fetch(u.toString());
+                const d = await r.json();
+                return {
+                  list: (Array.isArray(d?.mix_infos)
+                    ? d.mix_infos
+                    : Array.isArray(d?.series_infos)
+                      ? d.series_infos
+                      : Array.isArray(d?.mix_list)
+                        ? d.mix_list
+                        : []) as any[],
+                  has_more: !!d?.has_more,
+                };
+              }, seedListUrl, capturedMixLists.flat().length)
+              .catch(() => null);
+            if (!pageData || pageData.list.length === 0) break;
+            const before = capturedMixLists.flat().length;
+            pushMixList(pageData.list);
+            if (capturedMixLists.flat().length <= before) break;
+            if (!pageData.has_more) break;
+          }
+        } catch {
+          // keep whatever the tab click captured
+        }
+      }
     }
 
     try {

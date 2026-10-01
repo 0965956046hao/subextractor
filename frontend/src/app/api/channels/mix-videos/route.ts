@@ -267,6 +267,7 @@ export async function POST(req: NextRequest) {
     scanned_at: nowSec,
     max_time: maxCreateTime(merged),
     videos: merged,
+    title: playlistTitle || prev?.title || mixId,
   };
   saveCache(cache);
 

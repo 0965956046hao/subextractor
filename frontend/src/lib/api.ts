@@ -1139,3 +1139,99 @@ export async function sendTelegramTest(): Promise<{
   const res = await api.post("/telegram/test");
   return res.data;
 }
+
+// ── Video concat ──
+
+export type ConcatArtifact = "raw" | "result";
+
+export interface ConcatStatus {
+  concat_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  url: string | null;
+  filename: string | null;
+  video_id: string | null;
+  error: string | null;
+  logs: LogEntry[];
+}
+
+export async function startConcat(
+  videoIds: string[],
+  artifact: ConcatArtifact,
+  name?: string,
+): Promise<{ concat_id: string }> {
+  const res = await api.post<{ concat_id: string }>("/video-concat", {
+    video_ids: videoIds,
+    artifact,
+    ...(name ? { name } : {}),
+  });
+  return res.data;
+}
+
+export async function getConcatStatus(id: string): Promise<ConcatStatus> {
+  const res = await api.get<ConcatStatus>(`/video-concat/${id}`);
+  return res.data;
+}
+
+export function getConcatDownloadUrl(id: string): string {
+  return `/api/video-concat/${id}/download`;
+}
+
+export async function cancelConcat(id: string): Promise<void> {
+  await api.delete(`/video-concat/${id}`);
+}
+
+export interface ConcatTick {
+  progress: number;
+  stage?: string;
+  logs?: LogEntry[];
+}
+
+function sleepConcat(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export async function pollConcatJob(id: string, onTick: (t: ConcatTick) => void) {
+  let fails = 0;
+  while (true) {
+    await sleepConcat(1500);
+    try {
+      const r = await fetch(`/api/video-concat/${id}`);
+      if (r.status === 404) {
+        return {
+          status: "error",
+          error: "Concat job không tồn tại (backend đã restart?)",
+        };
+      }
+      if (!r.ok) {
+        fails += 1;
+        if (fails >= 40) {
+          return {
+            status: "error",
+            error:
+              "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+          };
+        }
+        continue;
+      }
+      fails = 0;
+      const d = await r.json();
+      onTick({ progress: d.progress ?? 0, stage: d.stage, logs: d.logs });
+      if (d.status === "done") return d;
+      if (d.status === "cancelled") return d;
+      if (d.status === "error") return { status: "error", error: d.error };
+    } catch {
+      // Backend không phản hồi (đã tắt / treo) → sau 40 lần thất bại liên tiếp
+      // dừng polling và báo lỗi rõ ràng thay vì treo vô hạn.
+      fails += 1;
+      if (fails >= 40) {
+        return {
+          status: "error",
+          error:
+            "Backend không phản hồi / đã tắt. Vui lòng khởi động lại backend (uvicorn :8000).",
+        };
+      }
+    }
+  }
+}

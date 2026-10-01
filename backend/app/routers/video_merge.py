@@ -104,72 +104,163 @@ class ImportRequest(BaseModel):
     big_thumbs: list[str] = []
 
 
+_import_jobs: dict[str, dict] = {}
+
+
+def _run_import(
+    job_id: str,
+    video_id: str,
+    url: str,
+    filename: str,
+    thumbnail_url: str,
+    big_thumbs: list[str],
+) -> None:
+    """Background URL import: download can take many minutes (large files over
+    a slow CDN), far beyond proxy timeouts — never block the request on it."""
+    job = _import_jobs[job_id]
+    video_dir = settings.temp_dir / "videos" / video_id
+    video_path = video_dir / "video.mp4"
+
+    def _log(message: str, level: str = "info", progress: int | None = None):
+        job.setdefault("logs", []).append(
+            {"message": message, "ts": time.time(), "level": level}
+        )
+        if progress is not None:
+            job["progress"] = progress
+
+    try:
+        ctx_dst = settings.temp_dir / "context" / video_id
+        ctx_dst.mkdir(parents=True, exist_ok=True)
+        ctx_thread = None
+        if thumbnail_url or big_thumbs:
+            ctx_thread = threading.Thread(
+                target=_save_context_files,
+                args=(ctx_dst, thumbnail_url, big_thumbs),
+            )
+            ctx_thread.start()
+        try:
+            _download(
+                url,
+                video_path,
+                on_progress=lambda p: _log(f"Đang tải video... {p}%", "info", p),
+            )
+        finally:
+            if ctx_thread:
+                ctx_thread.join()
+        try:
+            meta = {"filename": filename or "douyin.mp4", "origin": "pipeline"}
+            (video_dir / "meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        job["status"] = "done"
+        job["progress"] = 100
+        _log("Tải video xong.", "success", 100)
+    except Exception as e:
+        shutil.rmtree(video_dir, ignore_errors=True)
+        job["status"] = "error"
+        job["error"] = f"Import failed: {e}"
+        _log(f"Import thất bại: {e}", "error")
+        logger.exception("import %s failed", job_id)
+
+
 @router.post("/api/import-video")
 def import_video(body: ImportRequest):
-    """Import a video (merged file or external URL) into the OCR pipeline."""
+    """Import a video (merged file or external URL) into the OCR pipeline.
+
+    merge_id (local copy, fast) completes synchronously and returns a done
+    job. URL downloads run in background — poll GET for completion.
+    Always returns {job_id}; GET /api/import-video/{job_id} → status.
+    """
     if not body.merge_id and not body.url.startswith(("http://", "https://")):
         raise HTTPException(400, "url or merge_id required")
 
     video_id = uuid.uuid4().hex[:12]
     video_dir = settings.temp_dir / "videos" / video_id
     video_dir.mkdir(parents=True, exist_ok=True)
-    video_path = video_dir / "video.mp4"
 
-    try:
-        if body.merge_id:
+    if body.merge_id:
+        job_id = uuid.uuid4().hex[:12]
+        try:
             src = settings.temp_dir / "merged" / f"{body.merge_id}_video.mp4"
             if not src.exists():
                 raise HTTPException(404, "Merged file not found")
-            shutil.copyfile(src, video_path)
-        else:
-            # Download thumbnail + big_thumbs in parallel with the video itself.
-            ctx_dst = settings.temp_dir / "context" / video_id
-            ctx_dst.mkdir(parents=True, exist_ok=True)
-            ctx_thread = None
-            if body.thumbnail_url or body.big_thumbs:
-                ctx_thread = threading.Thread(
-                    target=_save_context_files,
-                    args=(ctx_dst, body.thumbnail_url, body.big_thumbs),
-                )
-                ctx_thread.start()
-            try:
-                _download(body.url, video_path)
-            finally:
-                if ctx_thread:
-                    ctx_thread.join()
-    except HTTPException:
-        shutil.rmtree(video_dir, ignore_errors=True)
-        raise
-    except Exception as e:
-        shutil.rmtree(video_dir, ignore_errors=True)
-        raise HTTPException(500, f"Import failed: {e}")
+            shutil.copyfile(src, video_dir / "video.mp4")
+        except HTTPException:
+            shutil.rmtree(video_dir, ignore_errors=True)
+            raise
+        except Exception as e:
+            shutil.rmtree(video_dir, ignore_errors=True)
+            raise HTTPException(500, f"Import failed: {e}")
 
-    # Copy thumbnail vào context dir của video. Không copy context_images nữa:
-    # context_service._context_image_paths đọc trực tiếp từ merged/{merge_id}_context/context_images,
-    # nên bản copy là thừa (~vài MB/file x2 lần copy).
-    if body.merge_id:
-        ctx_src = settings.temp_dir / "merged" / f"{body.merge_id}_context"
-        if ctx_src.exists():
-            thumb_src = ctx_src / "thumbnail.jpg"
-            if thumb_src.exists():
-                ctx_dst = settings.temp_dir / "context" / video_id
-                ctx_dst.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(thumb_src, ctx_dst / "thumbnail.jpg")
-                logger.info("Copied thumbnail for %s from merge %s", video_id, body.merge_id)
+        # Copy thumbnail vào context dir của video (như luồng cũ).
+        if True:
+            ctx_src = settings.temp_dir / "merged" / f"{body.merge_id}_context"
+            if ctx_src.exists():
+                thumb_src = ctx_src / "thumbnail.jpg"
+                if thumb_src.exists():
+                    ctx_dst = settings.temp_dir / "context" / video_id
+                    ctx_dst.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(thumb_src, ctx_dst / "thumbnail.jpg")
+                    logger.info("Copied thumbnail for %s from merge %s", video_id, body.merge_id)
 
-    try:
-        meta = {"filename": body.filename or "douyin.mp4", "origin": "pipeline"}
-        if body.merge_id:
+        try:
+            meta = {"filename": body.filename or "douyin.mp4", "origin": "pipeline"}
             meta["source_merge_id"] = body.merge_id
-        (video_dir / "meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+            (video_dir / "meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
-    logger.info("imported video %s → %s", video_id, video_path)
-    return {"video_id": video_id}
+        _import_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "done",
+            "stage": "Hoàn tất",
+            "progress": 100,
+            "video_id": video_id,
+            "error": None,
+            "logs": [{"message": "Import xong.", "ts": time.time(), "level": "success"}],
+        }
+        logger.info("imported video %s (merge %s) → done job %s", video_id, body.merge_id, job_id)
+        return {"job_id": job_id}
+
+    job_id = uuid.uuid4().hex[:12]
+    _import_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "downloading",
+        "stage": "Đang tải video...",
+        "progress": 0,
+        "video_id": video_id,
+        "error": None,
+        "logs": [{"message": "Bắt đầu tải video...", "ts": time.time(), "level": "info"}],
+    }
+    threading.Thread(
+        target=_run_import,
+        args=(job_id, video_id, body.url, body.filename, body.thumbnail_url, body.big_thumbs or []),
+        daemon=True,
+    ).start()
+    logger.info("import job %s started → video %s", job_id, video_id)
+    return {"job_id": job_id}
+
+
+@router.get("/api/import-video/{job_id}")
+async def get_import_status(job_id: str):
+    job = _import_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "stage": job["stage"],
+        "progress": job["progress"],
+        "video_id": job["video_id"],
+        "error": job["error"],
+        "logs": job.get("logs", []),
+    }
 
 
 _READ_CHUNK = 4 * 1024 * 1024
