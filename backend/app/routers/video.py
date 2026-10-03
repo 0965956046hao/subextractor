@@ -64,6 +64,43 @@ def _srt_exists(video_id: str) -> bool:
     return (settings.temp_dir / "srt" / video_id / "subtitles.srt").exists()
 
 
+def _meta_settings(video_id: str) -> dict | None:
+    """Setting pipeline riêng của từng video (vùng OCR, voice, watermark...).
+
+    Lưu trong videos/{id}/meta.json key "pipeline_settings" để mở lại video
+    từ library (máy khác / sau F5) vẫn khôi phục đúng cấu hình từng clip."""
+    meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    ps = data.get("pipeline_settings")
+    return ps if isinstance(ps, dict) else None
+
+
+def _save_meta_settings(video_id: str, patch: dict) -> dict:
+    meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+    try:
+        data = (
+            json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta_path.exists()
+            else {}
+        )
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    cur = data.get("pipeline_settings")
+    merged = dict(cur) if isinstance(cur, dict) else {}
+    merged.update({k: v for k, v in patch.items() if v is not None})
+    data["pipeline_settings"] = merged
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return merged
+
+
 @router.get("/api/videos")
 async def list_videos(
     jobs: dict = Depends(get_jobs),
@@ -107,6 +144,7 @@ async def list_videos(
             "job_id": job_id,
             "error": job.get("error") if status == "error" else None,
             "logs": job.get("logs", []),
+            "pipeline_settings": _meta_settings(video_id),
         }
         ps = pipeline_states.get(video_id)
         if ps:
@@ -154,6 +192,7 @@ async def list_videos(
                     "error": None,
                     "logs": [],
                     "pipeline": ps,
+                    "pipeline_settings": _meta_settings(video_id),
                 })
                 continue
             try:
@@ -175,6 +214,7 @@ async def list_videos(
                 ).isoformat(),
                 "status": "done",
                 "origin": _meta_origin(video_id),
+                "pipeline_settings": _meta_settings(video_id),
             }
             if ps:
                 # AutoPipeline finished with an error → surface it as error so
@@ -210,9 +250,30 @@ async def list_videos(
                 ).isoformat(),
                 "status": "uploaded",
                 "origin": _meta_origin(video_id),
+                "pipeline_settings": _meta_settings(video_id),
             })
 
     return {"videos": videos}
+
+
+@router.put("/api/video/{video_id}/settings")
+async def save_video_settings(video_id: str, body: dict):
+    """Lưu setting pipeline riêng của từng video (vùng OCR, voice, watermark...).
+
+    Merge vào meta.json key "pipeline_settings" — mỗi video giữ cấu hình
+    riêng, mở lại từ library (máy khác / sau F5) vẫn khôi phục đúng."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Settings body must be a JSON object")
+    vdir = settings.temp_dir / "videos" / video_id
+    if not vdir.exists():
+        raise HTTPException(404, "Video not found")
+    try:
+        merged = _save_meta_settings(video_id, body)
+    except Exception as e:
+        raise HTTPException(500, f"Cannot save settings: {e}")
+    return {"saved": video_id, "pipeline_settings": merged}
 
 
 @router.post("/api/video/{video_id}/cleanup")
@@ -350,6 +411,90 @@ async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeli
     return {"deleted": video_id, "removed": removed}
 
 
+# Step pipeline (0-based, khớp STEPS ở frontend) → thư mục output của bước đó.
+# Reset từ bước N sẽ xóa output của các bước N..12 (cascade), giữ nguyên các
+# bước trước đó. meta.json (tên file + setting riêng) và video gốc không bao
+# giờ bị xóa ở đây.
+_RESET_STEP_DIRS: tuple[tuple[int, tuple[str, ...]], ...] = (
+    (4, ("srt",)),            # OCR trích phụ đề
+    (6, ("context",)),        # phân tích ngữ cảnh
+    (7, ("translated",)),     # bản dịch + voice_map + diarization
+    (8, ("tts",)),            # TTS/dub (mp3 từng dòng, full_audio, separated...)
+    (9, ("muxed", "hardcoded")),  # gộp SRT + burn video cuối
+    (10, ("meta",)),          # tiêu đề/mô tả/tags
+    (11, ("thumb",)),         # thumbnail
+)
+
+
+@router.post("/api/video/{video_id}/reset-from")
+async def reset_video_from_step(video_id: str, body: dict):
+    """Xóa output từ bước `from_step` đến hết để chạy lại (cascade).
+
+    Ví dụ chạy lại từ OCR (4) → xóa .srt, audio dub, video mux/hardcoded...
+    Chạy lại từ translate (7) → chỉ xóa bản dịch + dub + mux/hardcode...,
+    giữ nguyên .srt gốc và các bước 0..6. Không đụng video gốc, meta.json
+    (chỉ gỡ key region/style khi reset về bước chọn vùng/style), frames
+    (chọn vùng cần) và projects/ (sửa tay của user).
+    """
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Body must be a JSON object")
+    try:
+        from_step = int(body.get("from_step", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "from_step must be an integer")
+    from_step = max(0, min(12, from_step))
+    vdir = settings.temp_dir / "videos" / video_id
+    if not vdir.exists():
+        raise HTTPException(404, "Video not found")
+
+    removed: list[str] = []
+    for step_no, names in _RESET_STEP_DIRS:
+        if from_step > step_no:
+            continue
+        for name in names:
+            d = settings.temp_dir / name / video_id
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(name)
+
+    # Bước 5 (watermark): xóa bản delogo để tạo lại
+    if from_step <= 5:
+        delogo = vdir / "delogo.mp4"
+        if delogo.exists():
+            delogo.unlink(missing_ok=True)
+            removed.append("delogo")
+    # Bước 4 (OCR): xóa kết quả risk-check gắn với bản SRT cũ
+    if from_step <= 4:
+        risk_file = settings.temp_dir / "risk_check" / f"{video_id}.json"
+        if risk_file.exists():
+            risk_file.unlink(missing_ok=True)
+            removed.append("risk_check")
+    # Bước 0..3: không có file output, nhưng gỡ region/style đã lưu cho khớp
+    # với runPrep (đã null chúng trong memory khi chạy lại từ các bước này)
+    if from_step <= 3:
+        meta_path = vdir / "meta.json"
+        try:
+            if meta_path.exists():
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+                ps = data.get("pipeline_settings")
+                if isinstance(ps, dict):
+                    if from_step <= 2:
+                        ps.pop("region", None)
+                    ps.pop("subtitleStyle", None)
+                    data["pipeline_settings"] = ps
+                    meta_path.write_text(
+                        json.dumps(data, ensure_ascii=False), encoding="utf-8"
+                    )
+                    removed.append("saved-settings")
+        except Exception:
+            pass
+
+    logger.info("reset %s from step %d: removed %s", video_id, from_step, removed)
+    return {"reset": video_id, "from_step": from_step, "removed": removed}
+
+
 @router.post("/api/video/{video_id}/pause")
 async def pause_video(video_id: str, jobs: dict = Depends(get_jobs)):
     """Tạm dừng: hủy job đang chạy của video để nhường worker, KHÔNG xóa file.
@@ -365,7 +510,16 @@ async def pause_video(video_id: str, jobs: dict = Depends(get_jobs)):
             job["status"] = "cancelled"
             cancelled += 1
             logger.info("job %s: paused via video %s", job_id, video_id)
-    return {"paused": video_id, "jobs_cancelled": cancelled}
+    # Dừng cả encode delogo đang chạy (nếu có): delogo là SSE trực tiếp, không
+    # nằm trong job queue nên phải kill riêng — nếu không ffmpeg sẽ encode mồ
+    # côi hàng giờ sau khi user đã tạm dừng. KHÔNG xóa file (giữ .srt + video).
+    delogo_cancelled = False
+    try:
+        from app.routers.tools import kill_delogo
+        delogo_cancelled = kill_delogo(video_id)
+    except Exception:
+        pass
+    return {"paused": video_id, "jobs_cancelled": cancelled, "delogo_cancelled": delogo_cancelled}
 
 
 @router.post("/api/video/{video_id}/abort")
@@ -380,6 +534,11 @@ async def abort_video(video_id: str, jobs: dict = Depends(get_jobs), pipeline_st
             cancelled += 1
             logger.info("job %s: aborted via video %s", job_id, video_id)
     pipeline_states.pop(video_id, None)
+    try:
+        from app.routers.tools import kill_delogo
+        kill_delogo(video_id)
+    except Exception:
+        pass
     srt_dir = settings.temp_dir / "srt" / video_id
     video_dir = settings.temp_dir / "videos" / video_id
     frames_dir = settings.temp_dir / "frames" / video_id

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import shlex
+import threading
 import uuid
 from pathlib import Path
 
@@ -22,10 +23,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _get_video_encoder_candidates() -> list[list[str]]:
+def _get_video_encoder_candidates(target_br: str = "8M", bufsize: str = "16M") -> list[list[str]]:
     """
     Return a prioritized list of H.264 encoder argument lists for the current platform.
-    Each entry is a list of FFmpeg args (e.g., ["-c:v", "h264_nvenc", "-b:v", "8M"]).
+    Each entry is a list of FFmpeg args (e.g., ["-c:v", "h264_nvenc", ...]).
+    Bitrate is matched to the source (not a fixed 8M) so long/low-bitrate
+    videos don't explode in size; fastest presets are used because delogo
+    output quality is dominated by the blur filter, not encoder effort.
     """
     system = platform.system().lower()
     
@@ -40,30 +44,33 @@ def _get_video_encoder_candidates() -> list[list[str]]:
         encoders = ""
     
     candidates: list[list[str]] = []
-    
+
+    def _br_args(enc_args: list[str]) -> list[str]:
+        return [*enc_args, "-b:v", target_br, "-maxrate", target_br, "-bufsize", bufsize]
+
     if system == "windows":
         if "h264_nvenc" in encoders:
-            candidates.append(["-c:v", "h264_nvenc", "-b:v", "8M"])
+            candidates.append(_br_args(["-c:v", "h264_nvenc", "-preset", "p1"]))
         if "h264_qsv" in encoders:
-            candidates.append(["-c:v", "h264_qsv", "-b:v", "8M"])
+            candidates.append(_br_args(["-c:v", "h264_qsv", "-preset", "veryfast"]))
         if "h264_amf" in encoders:
-            candidates.append(["-c:v", "h264_amf", "-b:v", "8M"])
-        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
-    
+            candidates.append(_br_args(["-c:v", "h264_amf", "-quality", "speed"]))
+        candidates.append(["-c:v", "libx264", "-crf", "23", "-preset", "veryfast"])
+
     elif system == "darwin":
         if "h264_videotoolbox" in encoders:
-            candidates.append(["-c:v", "h264_videotoolbox", "-b:v", "8M"])
-        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
-    
+            candidates.append(_br_args(["-c:v", "h264_videotoolbox"]))
+        candidates.append(["-c:v", "libx264", "-crf", "23", "-preset", "veryfast"])
+
     else:  # Linux
         if "h264_nvenc" in encoders:
-            candidates.append(["-c:v", "h264_nvenc", "-b:v", "8M"])
+            candidates.append(_br_args(["-c:v", "h264_nvenc", "-preset", "p1"]))
         if "h264_qsv" in encoders:
-            candidates.append(["-c:v", "h264_qsv", "-b:v", "8M"])
+            candidates.append(_br_args(["-c:v", "h264_qsv", "-preset", "veryfast"]))
         if "h264_vaapi" in encoders:
-            candidates.append(["-c:v", "h264_vaapi", "-b:v", "8M"])
-        candidates.append(["-c:v", "libx264", "-crf", "18", "-preset", "medium"])
-    
+            candidates.append(_br_args(["-c:v", "h264_vaapi"]))
+        candidates.append(["-c:v", "libx264", "-crf", "23", "-preset", "veryfast"])
+
     return candidates
 
 
@@ -83,22 +90,80 @@ def _test_encoder(encoder_args: list[str]) -> bool:
         return False
 
 
-def _get_best_video_encoder() -> list[str]:
+# Running delogo FFmpeg processes, keyed by video_id. Lets pause/cancel and
+# client-disconnect handling kill the encode instead of leaving it running
+# for hours with nobody watching. Only the partial delogo.mp4 of the killed
+# run is ever removed here — .srt files are NEVER touched by delogo code.
+_DELOGO_PROCS: dict[str, "subprocess.Popen[bytes]"] = {}
+_DELOGO_LOCK = threading.Lock()
+
+
+def kill_delogo(video_id: str) -> bool:
+    """Terminate a running delogo encode for video_id.
+
+    Returns True if a live process was found (and signalled).
+    """
+    with _DELOGO_LOCK:
+        proc = _DELOGO_PROCS.get(video_id)
+    if proc is None:
+        return False
+    if proc.poll() is not None:
+        return False
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    logger.info("[delogo] killed running encode for %s", video_id)
+    return True
+
+
+def _delogo_target_bitrate(src_bps: float) -> str:
+    """Pick an output bitrate matched to the source instead of fixed 8M.
+
+    A 1 Mbps source re-encoded at a fixed 8 Mbps wastes hours of I/O and
+    disk (e.g. 2 GB -> 16 GB on a 4.5h video) with no visible gain for a
+    blur filter. Floor 1.5M, cap 8M, default 4M when unknown.
+    """
+    if src_bps and src_bps > 0:
+        bps = int(src_bps * 1.5)
+        bps = max(1_500_000, min(8_000_000, bps))
+    else:
+        bps = 4_000_000
+    return f"{bps // 1_000}K" if bps % 1_000_000 else f"{bps // 1_000_000}M"
+
+
+def _get_best_video_encoder(src_bitrate_bps: float = 0) -> list[str]:
     """
     Detect the best available H.264 encoder that actually works at runtime.
     Tries candidates in priority order and returns the first working one.
+    The target bitrate is matched to the source video so long videos don't
+    explode in size or encode time.
     """
-    candidates = _get_video_encoder_candidates()
-    
+    if src_bitrate_bps and src_bitrate_bps > 0:
+        bps = int(src_bitrate_bps * 1.5)
+        bps = max(1_500_000, min(8_000_000, bps))
+    else:
+        bps = 4_000_000
+    target_br = f"{bps // 1_000_000}M" if bps % 1_000_000 == 0 else f"{bps // 1_000}K"
+    bufsize = f"{(bps * 2) // 1_000_000}M" if (bps * 2) % 1_000_000 == 0 else f"{(bps * 2) // 1_000}K"
+    candidates = _get_video_encoder_candidates(target_br, bufsize)
+
     for enc in candidates:
         if _test_encoder(enc):
-            logger.info(f"[delogo] Selected working encoder: {enc[1]}")
+            logger.info(f"[delogo] Selected working encoder: {enc[1]} @ {target_br} (src ~{src_bitrate_bps / 1_000_000:.2f} Mbps)")
             return enc
         else:
             logger.warning(f"[delogo] Encoder {enc[1]} failed test, trying next...")
-    
+
     # Should never reach here since libx264 is always in candidates
-    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+    return ["-c:v", "libx264", "-crf", "23", "-preset", "veryfast"]
 
 
 def _original_download_name(video_id: str, suffix: str, ext: str = ".mp4") -> str:
@@ -729,6 +794,21 @@ async def delogo_status(video_id: str):
     return {"exists": exists, "valid": valid, "path": str(delogo_path) if exists else None}
 
 
+# ── DELETE /api/delogo/{video_id} ──
+
+@router.delete("/api/delogo/{video_id}")
+async def cancel_delogo(video_id: str):
+    """Cancel a running delogo encode (pause/cancel from the pipeline).
+
+    Only signals the FFmpeg process to stop. Cleanup of the partial
+    delogo.mp4 is done by the encode task itself — this endpoint never
+    deletes a finished valid file and never touches .srt files.
+    Returns cancelled=false when nothing was running.
+    """
+    killed = kill_delogo(video_id)
+    return {"cancelled": killed}
+
+
 # ── POST /api/telegram/web-app/{video_id} ──
 
 @router.post("/api/telegram/web-app/{video_id}")
@@ -1310,10 +1390,41 @@ async def delogo_video(
     )
 
     # ============================================================
-    # 8. FFmpeg command
+    # 8. Get total duration (progress tracking) + source bitrate
+    #    (encoder bitrate matched to source, not fixed 8M)
     # ============================================================
 
-    v_enc = _get_best_video_encoder()
+    total_duration_seconds = 0.0
+
+    try:
+        duration_probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                str(video_path),
+            ],
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+        duration_str = duration_probe.stdout.decode("utf-8", errors="replace").strip()
+        total_duration_seconds = float(duration_str)
+        logger.info(f"[delogo] Video duration: {total_duration_seconds:.2f}s")
+    except Exception as e:
+        logger.warning(f"[delogo] Cannot get duration: {e}")
+
+    src_bitrate_bps = 0.0
+    if total_duration_seconds > 0 and file_size > 0:
+        src_bitrate_bps = file_size * 8 / total_duration_seconds
+        logger.info(f"[delogo] Source bitrate: ~{src_bitrate_bps / 1_000_000:.2f} Mbps")
+
+    # ============================================================
+    # 9. FFmpeg command
+    # ============================================================
+
+    v_enc = _get_best_video_encoder(src_bitrate_bps)
 
     ffmpeg_cmd = [
         "ffmpeg",
@@ -1351,41 +1462,27 @@ async def delogo_video(
     )
 
     # ============================================================
-    # 9. Get total duration for progress tracking
-    # ============================================================
-
-    total_duration_seconds = 0.0
-
-    try:
-        duration_probe = subprocess.run(
-            [
-                "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "csv=p=0",
-                str(video_path),
-            ],
-            capture_output=True,
-            timeout=10,
-            check=True,
-        )
-        duration_str = duration_probe.stdout.decode("utf-8", errors="replace").strip()
-        total_duration_seconds = float(duration_str)
-        logger.info(f"[delogo] Video duration: {total_duration_seconds:.2f}s")
-    except Exception as e:
-        logger.warning(f"[delogo] Cannot get duration: {e}")
-
-    # ============================================================
     # 10. Run FFmpeg — SSE stream
     # ============================================================
 
+    # Refuse a second concurrent encode on the same output file: pause/resume
+    # or a double-click could otherwise launch two ffmpeg writers on one
+    # delogo.mp4, corrupting it and doubling the already-long encode time.
+    with _DELOGO_LOCK:
+        _already = _DELOGO_PROCS.get(video_id)
+        if _already is not None and _already.poll() is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Delogo encode already running for this video",
+            )
+
     import subprocess as _sp
     import re as _re
-    import threading
     import time as _time
 
-    def _run_delogo_sse():
+    async def _run_delogo_sse():
         start_time = _time.time()
+        loop = asyncio.get_running_loop()
         proc = _sp.Popen(
             ffmpeg_cmd,
             stdout=_sp.PIPE,
@@ -1394,6 +1491,9 @@ async def delogo_video(
 
         assert proc.stdout is not None
         assert proc.stderr is not None
+
+        with _DELOGO_LOCK:
+            _DELOGO_PROCS[video_id] = proc
 
         last_progress_pct = 0
 
@@ -1465,88 +1565,122 @@ async def delogo_video(
 
         # Real-time drain: đẩy log/progress ra ngay khi ffmpeg còn chạy (không
         # buffer tới cuối như trước — người dùng theo dõi được tiến trình live).
-        while True:
-            try:
-                item = stderr_queue.get(timeout=0.5)
-            except Empty:
+        # Async: mỗi 0.5s kiểm tra client còn nghe không — nếu tab đã đóng /
+        # pipeline đã pause-abort thì kill encode (encode delogo video dài có
+        # thể tốn hàng giờ, không được để chạy mồ côi).
+        cancelled = False
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                try:
+                    disconnected = await request.is_disconnected()
+                except Exception:
+                    disconnected = False
+                if disconnected:
+                    # kill_delogo chứa proc.wait() (blocking) -> chạy ở thread.
+                    await loop.run_in_executor(None, kill_delogo, video_id)
+                    cancelled = True
+                    break
+                while True:
+                    try:
+                        item = stderr_queue.get_nowait()
+                    except Empty:
+                        break
+                    if item[0] == "log":
+                        yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"
+                    elif item[0] == "progress":
+                        yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
                 if proc.poll() is not None:
                     break
-                continue
-            if item[0] == "log":
-                yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"
-            elif item[0] == "progress":
-                yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
 
-        # Process xong → chờ reader threads đọc nốt rồi drain phần còn lại.
-        t_stderr.join(timeout=5)
-        t_stdout.join(timeout=5)
-
-        while not stderr_queue.empty():
-            try:
-                item = stderr_queue.get_nowait()
-            except Empty:
-                break
-            if item[0] == "log":
-                yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"
-            elif item[0] == "progress":
-                yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
-
-        # Close streams
-        if proc.stderr:
-            proc.stderr.close()
-        if proc.stdout:
-            proc.stdout.close()
-
-        # Check result
-        if proc.returncode != 0:
-            try:
-                if output.exists():
-                    output.unlink()
-            except Exception:
-                pass
-            yield f"data: {json.dumps({'type': 'error', 'message': f'FFmpeg failed (code {proc.returncode})'})}\n\n"
-            return
-
-        # Verify output file exists
-        if not output.exists():
-            yield f"data: {json.dumps({'type': 'error', 'message': 'FFmpeg produced no output file'})}\n\n"
-            return
-
-        output_size = output.stat().st_size
-        if output_size <= 0:
-            try:
-                output.unlink()
-            except Exception:
-                pass
-            yield f"data: {json.dumps({'type': 'error', 'message': 'FFmpeg produced an empty output file'})}\n\n"
-            return
-
-        # Verify with ffprobe
-        try:
-            probe = _sp.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(output)],
-                capture_output=True,
-                timeout=10,
-                check=True,
+            # Process xong → chờ reader threads đọc nốt rồi drain phần còn lại.
+            # join() blocking -> chạy ở thread để không treo event loop.
+            await loop.run_in_executor(
+                None, lambda: (t_stderr.join(10), t_stdout.join(10))
             )
-            duration_str = probe.stdout.decode("utf-8", errors="replace").strip()
-            if not duration_str or float(duration_str) <= 0:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Output video has no duration'})}\n\n"
+
+            while not stderr_queue.empty():
+                try:
+                    item = stderr_queue.get_nowait()
+                except Empty:
+                    break
+                if item[0] == "log":
+                    yield f"data: {json.dumps({'type': 'log', 'message': item[1]})}\n\n"
+                elif item[0] == "progress":
+                    yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
+
+            # Close streams
+            if proc.stderr:
+                proc.stderr.close()
+            if proc.stdout:
+                proc.stdout.close()
+
+            # Client ngắt giữa chừng (pause-abort/tab đóng): proc đã bị kill ở
+            # trên -> output chỉ là bản dở dang -> xóa để lần chạy lại (ffmpeg -y)
+            # encode sạch từ đầu. CHỈ xóa delogo.mp4 dở, KHÔNG BAO GIỜ đụng .srt.
+            if cancelled:
+                try:
+                    if output.exists():
+                        output.unlink()
+                except Exception:
+                    pass
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Delogo cancelled (client disconnected)'})}\n\n"
                 return
-        except Exception as e:
-            logger.warning(f"[delogo] ffprobe output failed: {e}")
 
-        elapsed = _time.time() - start_time
+            # Check result
+            if proc.returncode != 0:
+                try:
+                    if output.exists():
+                        output.unlink()
+                except Exception:
+                    pass
+                yield f"data: {json.dumps({'type': 'error', 'message': f'FFmpeg failed (code {proc.returncode})'})}\n\n"
+                return
 
-        # Update pipeline state so frontend continues automatically
-        ps = pipeline_states.get(video_id) or {}
-        ps["watermark_confirm"] = {
-            "regions": raw_regions,
-            "confirmed": True,
-        }
-        pipeline_states[video_id] = ps
+            # Verify output file exists
+            if not output.exists():
+                yield f"data: {json.dumps({'type': 'error', 'message': 'FFmpeg produced no output file'})}\n\n"
+                return
 
-        yield f"data: {json.dumps({'type': 'done', 'video_id': video_id, 'path': str(output), 'width': width, 'height': height, 'regions': len(delogo_filters), 'filters': delogo_filters, 'output_size': output_size, 'elapsed': round(elapsed, 1)})}\n\n"
+            output_size = output.stat().st_size
+            if output_size <= 0:
+                try:
+                    output.unlink()
+                except Exception:
+                    pass
+                yield f"data: {json.dumps({'type': 'error', 'message': 'FFmpeg produced an empty output file'})}\n\n"
+                return
+
+            # Verify with ffprobe
+            try:
+                probe = _sp.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(output)],
+                    capture_output=True,
+                    timeout=10,
+                    check=True,
+                )
+                duration_str = probe.stdout.decode("utf-8", errors="replace").strip()
+                if not duration_str or float(duration_str) <= 0:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Output video has no duration'})}\n\n"
+                    return
+            except Exception as e:
+                logger.warning(f"[delogo] ffprobe output failed: {e}")
+
+            elapsed = _time.time() - start_time
+
+            # Update pipeline state so frontend continues automatically
+            ps = pipeline_states.get(video_id) or {}
+            ps["watermark_confirm"] = {
+                "regions": raw_regions,
+                "confirmed": True,
+            }
+            pipeline_states[video_id] = ps
+
+            yield f"data: {json.dumps({'type': 'done', 'video_id': video_id, 'path': str(output), 'width': width, 'height': height, 'regions': len(delogo_filters), 'filters': delogo_filters, 'output_size': output_size, 'elapsed': round(elapsed, 1)})}\n\n"
+        finally:
+            with _DELOGO_LOCK:
+                if _DELOGO_PROCS.get(video_id) is proc:
+                    del _DELOGO_PROCS[video_id]
 
     return StreamingResponse(
         _run_delogo_sse(),

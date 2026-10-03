@@ -108,6 +108,37 @@ export interface PipelineProgress {
   voice_check?: { waiting?: boolean; decision?: string | null } | null;
 }
 
+/** Setting pipeline riêng của từng video (vùng OCR, voice, watermark...).
+ *  Backend lưu trong videos/{id}/meta.json key "pipeline_settings". */
+export interface PipelineVideoSettings {
+  region?: Region | null;
+  regionMode?: "manual" | "auto";
+  subtitleStyle?: Record<string, unknown> | null;
+  dubEngine?: "google" | "capcut";
+  dubVoice?: string;
+  muteOriginal?: boolean;
+  originalGainDb?: number;
+  keepOriginalEnabled?: boolean;
+  multiVoice?: boolean;
+  srcLang?: string;
+  ocrLang?: string;
+  translateOn?: boolean;
+  translateTarget?: string;
+  dubOn?: boolean;
+  watermark?: boolean;
+  watermarkPreset?: string;
+  removeWatermarkEnabled?: boolean;
+  removeWatermarkRegions?: Region[];
+  autoFit?: boolean;
+  checkSubs?: boolean;
+  checkVoice?: boolean;
+  playbackSpeed?: number;
+  useFalThumbnail?: boolean;
+  useGptThumbnail?: boolean;
+  autoUploadYoutube?: boolean;
+  youtubeChannel?: string;
+}
+
 export interface VideoMeta {
   video_id: string;
   filename: string;
@@ -124,6 +155,28 @@ export interface VideoMeta {
   error?: string | null;
   logs?: LogEntry[];
   pipeline?: PipelineProgress;
+  pipeline_settings?: PipelineVideoSettings | null;
+}
+
+export async function saveVideoSettings(
+  videoId: string,
+  settings: PipelineVideoSettings,
+): Promise<void> {
+  // Fire-and-forget ở caller (.catch игнорировать) — không block pipeline.
+  await api.put(`/video/${videoId}/settings`, settings);
+}
+
+/** Xóa output từ bước `fromStep` (0-based) đến hết để chạy lại (cascade).
+ *  Trả về danh sách artifact đã xóa để log. */
+export async function resetVideoFromStep(
+  videoId: string,
+  fromStep: number,
+): Promise<{ removed: string[] }> {
+  const res = await api.post<{ removed: string[] }>(
+    `/video/${videoId}/reset-from`,
+    { from_step: fromStep },
+  );
+  return res.data;
 }
 
 export interface ContextImages {

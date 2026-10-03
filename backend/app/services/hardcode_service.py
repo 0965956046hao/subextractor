@@ -167,6 +167,7 @@ def srt_to_ass_blackbox(
     vw: int = 1920,
     vh: int = 1080,
     style: dict | None = None,
+    fixed_box_height: int | None = None,
 ) -> str:
     """Convert SRT → ASS sao cho khung hình CHÍNH XÁC như preview Pillow.
 
@@ -179,9 +180,9 @@ def srt_to_ass_blackbox(
     Không dùng BorderStyle=3 nữa vì libass không bo góc được, dùng nhầm
     OutlineColour làm màu nền và làm mất viền chữ khi bật nền.
 
-    Box height luôn bám theo text từng dòng (text metrics + padding), KHÔNG
-    fix theo region: region chỉ quyết định vị trí đặt box (margin_v), không
-    quyết định kích thước box.
+    ``fixed_box_height``: nếu cung cấp, dùng chiều cao cố định cho tất cả
+    các entry (thay vì tính theo từng dòng text), phù hợp với chế độ "thủ công"
+    where user đã chọn region rồi muốn box height cố định.
     """
     from PIL import ImageFont
 
@@ -249,16 +250,29 @@ Style: BoxBorder,Arial,{font_size_ref},{border_col},&H000000FF,{border_col},&H00
             continue
         t0, t1 = _ass_time(e.start), _ass_time(e.end)
 
-        # ── Shrink-to-fit bằng font thật, y hệt _render_subtitle ──
-        fs = font_size_ref
-        max_w = max(200, vw - 160)
-        bbox = _font(fs).getbbox(raw_text)
-        while fs > 16 and (bbox[2] - bbox[0]) > max_w:
-            fs -= 2
+        # ── Nếu có fixed_box_height → dùng chiều cao cố định, không tính th_px per-entry
+        if fixed_box_height is not None:
+            box_h = fixed_box_height
+            # Tính box_width dựa trên text width vẫn (để căn giữa ngang)
+            fs = font_size_ref
+            max_w = max(200, vw - 160)
             bbox = _font(fs).getbbox(raw_text)
-        tw_px, th_px = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        box_w = tw_px + pad_x * 2 + outline_w * 2
-        box_h = th_px + pad_y * 2 + outline_w * 2
+            while fs > 16 and (bbox[2] - bbox[0]) > max_w:
+                fs -= 2
+                bbox = _font(fs).getbbox(raw_text)
+            tw_px = bbox[2] - bbox[0]
+            box_w = tw_px + pad_x * 2 + outline_w * 2
+        else:
+            # ── Thật cốt lõi: Shrink-to-fit bằng font thật, y hệt _render_subtitle ──
+            fs = font_size_ref
+            max_w = max(200, vw - 160)
+            bbox = _font(fs).getbbox(raw_text)
+            while fs > 16 and (bbox[2] - bbox[0]) > max_w:
+                fs -= 2
+                bbox = _font(fs).getbbox(raw_text)
+            tw_px, th_px = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            box_w = tw_px + pad_x * 2 + outline_w * 2
+            box_h = th_px + pad_y * 2 + outline_w * 2
 
         bx = (vw - box_w) // 2 + margin_h
         by = vh - box_h - margin_v
@@ -290,7 +304,14 @@ Style: BoxBorder,Arial,{font_size_ref},{border_col},&H000000FF,{border_col},&H00
         # lệch vì libass đo width khác PIL). dy hiệu chỉnh tỉ lệ fs để tâm INK
         # trùng tâm hộp (chữ có dấu/đuôi descender làm line-box lệch tâm).
         box_cx = bx + box_w // 2
-        box_cy = by + box_h // 2 + round(_ASS_TEXT_DY_RATIO * fs)
+        # Đảm bảo text nằm giữa chiều cao box (khi fixed_box_height): căn giữa vertical
+        if fixed_box_height is not None:
+            # Khoảng trống trên/dưới text trong box cố định:
+            # (fixed_box_height - th_px_so_san) / 2, nhưng ta dùng dy ratio vẫn đúng
+            # vì fs vẫn được maintain từ font_size_ref
+            box_cy = by + box_h // 2 + round(_ASS_TEXT_DY_RATIO * fs)
+        else:
+            box_cy = by + box_h // 2 + round(_ASS_TEXT_DY_RATIO * fs)
         events.append(
             f"Dialogue: 2,{t0},{t1},SubStyle,,0,0,0,,"
             f"{{\\an5\\pos({box_cx},{box_cy})\\fs{fs}}}"
@@ -677,6 +698,7 @@ def run_hardcode_sync(
         srt_content = _scale_srt_speed(srt_content, playback_speed)
         _log(f"Đã scale {len(parse_srt(srt_content))} dòng phụ đề theo tốc độ {playback_speed:.2f}x.")
     style = get_subtitle_style()
+    fixed_box_height = None
     if job.get("auto_fit") and job.get("region"):
         style = auto_fit_style(style, job["region"], vh, vw, srt_content)
         logger.info(
@@ -684,18 +706,17 @@ def run_hardcode_sync(
             job_id, style.get("font_size"), style.get("margin_v"),
         )
     elif not job.get("auto_fit") and job.get("region"):
-        # Manual mode: region sets VERTICAL PLACEMENT only (box bottom aligns
-        # with the region bottom y2). Box height stays dynamic (text metrics +
-        # padding). The region is the OCR search area — it tells us WHERE the
-        # old subtitles were, not how tall the new box must be. Forcing the
-        # whole region height as a fixed box height produced tall boxes with
-        # huge top/bottom padding around small centered text.
-        # (style override from the annotator drag-flow still wins below.)
+        # Chế độ thủ công: tính box height từ region đã chọn, fix cho toàn bộ subtitle
+        # Dùng target height (th) thay vì original height (vh) để box height
+        # scale đúng khi video được upscale lên min 1080p.
+        y1 = max(0.0, min(1.0, float(job["region"].get("y1", 0.0))))
         y2 = max(0.0, min(1.0, float(job["region"].get("y2", 1.0))))
-        style["margin_v"] = max(0, int((1 - y2) * 1080))
+        rh = max(0.01, y2 - y1)
+        fixed_box_height = max(10, int(rh * th))
         logger.info(
-            "hardcode job %s: manual mode → margin_v=%s (from region y2=%s)",
-            job_id, style["margin_v"], job["region"].get("y2", 0),
+            "hardcode job %s: manual mode → fixed box height=%spx (from region y1=%s y2=%s, target_h=%s)",
+            job_id, fixed_box_height,
+            job["region"].get("y1", 0), job["region"].get("y2", 0), th,
         )
     if job.get("style"):
         style = apply_style_override(style, job["style"])
@@ -704,7 +725,7 @@ def run_hardcode_sync(
             job_id, style.get("font_size"), style.get("margin_v"),
         )
     # ASS PlayRes = target dims so libass renders text crisply at the final size.
-    ass_content = srt_to_ass_blackbox(srt_content, tw, th, style)
+    ass_content = srt_to_ass_blackbox(srt_content, tw, th, style, fixed_box_height=fixed_box_height)
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
     _log(f"Đã tạo file ASS phụ đề ({len(parse_srt(srt_content))} dòng) — chuẩn bị encode...")

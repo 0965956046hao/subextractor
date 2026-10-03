@@ -7,6 +7,7 @@ import type {
   SubtitleStyle,
   VideoMeta,
   TimelineIssue,
+  PipelineVideoSettings,
 } from "@/lib/api";
 import {
   listVideos,
@@ -14,6 +15,8 @@ import {
   getPipelineState,
   reportTimelineAction,
   getJobStatus,
+  saveVideoSettings,
+  resetVideoFromStep,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
 
@@ -215,6 +218,7 @@ export interface ImportedDone {
   videoId: string;
   title: string;
   hasDubbed: boolean;
+  settings?: PipelineVideoSettings | null;
 }
 
 const DEFAULT_DUB: DubOptions = {
@@ -225,6 +229,120 @@ const DEFAULT_DUB: DubOptions = {
   multiVoice: false,
   keepOriginalEnabled: false,
 };
+
+// ── Per-video settings (vùng OCR, voice, watermark...) ─────────────────────
+// Mỗi video giữ cấu hình riêng trong backend meta.json (key "pipeline_settings")
+// để mở lại từ library (máy khác / sau F5 hết localStorage) vẫn đúng setting.
+
+function settingsOf(p: Pipeline): PipelineVideoSettings {
+  return {
+    region: p.region,
+    regionMode: p.regionMode,
+    subtitleStyle: p.subtitleStyle
+      ? { ...(p.subtitleStyle as Record<string, unknown>) }
+      : null,
+    dubEngine: p.dubEngine,
+    dubVoice: p.dubVoice,
+    muteOriginal: p.muteOriginal,
+    originalGainDb: p.originalGainDb,
+    keepOriginalEnabled: p.keepOriginalEnabled,
+    multiVoice: p.multiVoice,
+    srcLang: p.srcLang,
+    ocrLang: p.ocrLang,
+    translateOn: p.translateOn,
+    translateTarget: p.translateTarget,
+    dubOn: p.dubOn,
+    watermark: p.watermark,
+    watermarkPreset: p.watermarkPreset,
+    removeWatermarkEnabled: p.removeWatermarkEnabled,
+    removeWatermarkRegions: [...p.removeWatermarkRegions],
+    autoFit: p.autoFit,
+    checkSubs: p.checkSubs,
+    checkVoice: p.checkVoice,
+    playbackSpeed: p.playbackSpeed,
+    useFalThumbnail: p.useFalThumbnail,
+    useGptThumbnail: p.useGptThumbnail,
+    autoUploadYoutube: p.autoUploadYoutube,
+    youtubeChannel: p.youtubeChannel,
+  };
+}
+
+/** Lưu setting của pipeline xuống backend (fire-and-forget, không block). */
+function persistVideoSettings(id: string) {
+  try {
+    const p = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    if (!p?.videoId) return;
+    saveVideoSettings(p.videoId, settingsOf(p)).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
+function isValidRegion(v: unknown): v is Region {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  return (
+    typeof r.x1 === "number" &&
+    typeof r.y1 === "number" &&
+    typeof r.x2 === "number" &&
+    typeof r.y2 === "number" &&
+    isFinite(r.x1) && isFinite(r.y1) && isFinite(r.x2) && isFinite(r.y2) &&
+    r.x1 >= 0 && r.y1 >= 0 && r.x2 <= 1 && r.y2 <= 1 &&
+    r.x2 - r.x1 >= 0.01 && r.y2 - r.y1 >= 0.01
+  );
+}
+
+function isValidRegions(v: unknown): v is Region[] {
+  return Array.isArray(v) && v.every(isValidRegion);
+}
+
+/** Áp setting đã lưu (backend) lên pipeline mới — field nào thiếu/sai thì giữ default. */
+function applyVideoSettings(
+  p: Pipeline,
+  s: PipelineVideoSettings | null | undefined,
+): Pipeline {
+  if (!s || typeof s !== "object") return p;
+  const num = (v: unknown, fb: number) =>
+    typeof v === "number" && isFinite(v) ? v : fb;
+  const str = (v: unknown, fb: string) =>
+    typeof v === "string" && v ? v : fb;
+  const bool = (v: unknown, fb: boolean) =>
+    typeof v === "boolean" ? v : fb;
+  return {
+    ...p,
+    region: isValidRegion(s.region) ? { ...(s.region as Region) } : p.region,
+    regionMode: s.regionMode === "auto" || s.regionMode === "manual" ? s.regionMode : p.regionMode,
+    subtitleStyle:
+      s.subtitleStyle && typeof s.subtitleStyle === "object"
+        ? { ...(s.subtitleStyle as Partial<SubtitleStyle>) }
+        : p.subtitleStyle,
+    dubEngine: s.dubEngine === "google" || s.dubEngine === "capcut" ? s.dubEngine : p.dubEngine,
+    dubVoice: str(s.dubVoice, p.dubVoice),
+    muteOriginal: bool(s.muteOriginal, p.muteOriginal),
+    originalGainDb: num(s.originalGainDb, p.originalGainDb),
+    keepOriginalEnabled: bool(s.keepOriginalEnabled, p.keepOriginalEnabled),
+    multiVoice: bool(s.multiVoice, p.multiVoice),
+    srcLang: str(s.srcLang, p.srcLang),
+    ocrLang: str(s.ocrLang, p.ocrLang),
+    translateOn: bool(s.translateOn, p.translateOn),
+    translateTarget: str(s.translateTarget, p.translateTarget),
+    dubOn: bool(s.dubOn, p.dubOn),
+    watermark: bool(s.watermark, p.watermark),
+    watermarkPreset: str(s.watermarkPreset, p.watermarkPreset),
+    removeWatermarkEnabled: bool(s.removeWatermarkEnabled, p.removeWatermarkEnabled),
+    removeWatermarkRegions: isValidRegions(s.removeWatermarkRegions)
+      ? (s.removeWatermarkRegions as Region[]).map((r) => ({ ...r }))
+      : p.removeWatermarkRegions,
+    autoFit: bool(s.autoFit, p.autoFit),
+    checkSubs: bool(s.checkSubs, p.checkSubs),
+    checkVoice: bool(s.checkVoice, p.checkVoice),
+    playbackSpeed: num(s.playbackSpeed, p.playbackSpeed),
+    useFalThumbnail: bool(s.useFalThumbnail, p.useFalThumbnail),
+    useGptThumbnail: bool(s.useGptThumbnail, p.useGptThumbnail),
+    autoUploadYoutube: bool(s.autoUploadYoutube, p.autoUploadYoutube),
+    youtubeChannel: typeof s.youtubeChannel === "string" ? s.youtubeChannel : p.youtubeChannel,
+  };
+}
 
 interface PipelineState {
   pipelines: Pipeline[];
@@ -276,7 +394,7 @@ interface PipelineState {
   updatePipeline: (id: string, patch: Partial<Pipeline>) => void;
   removePipeline: (id: string) => void;
   clearFinished: () => void;
-  rerunPipeline: (id: string, step: number) => void;
+  rerunPipeline: (id: string, step: number) => Promise<void>;
   confirmRegion: (id: string, region: Region) => void;
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
@@ -505,6 +623,8 @@ export const usePipelineStore = create<PipelineState>()(
             },
           ],
         }));
+        // Đã có videoId → lưu setting riêng của video xuống backend ngay.
+        persistVideoSettings(id);
         runPrep(id, 2);
         return id;
       },
@@ -535,8 +655,14 @@ export const usePipelineStore = create<PipelineState>()(
               : v.status === "queued" || ps?.status === "queued"
                 ? "queued"
                 : "running";
+        // Khôi phục setting riêng của video đã lưu ở backend (nếu có) —
+        // thay vì reset hết về default khi mở lại từ library/máy khác.
+        const base = applyVideoSettings(
+          newPipeline(id, "", "auto", {}, true),
+          v.pipeline_settings,
+        );
         const p: Pipeline = {
-          ...newPipeline(id, "", "auto", {}, true),
+          ...base,
           status,
           stage,
           progress,
@@ -584,7 +710,10 @@ export const usePipelineStore = create<PipelineState>()(
       importDone: (v) => {
         const id = Math.random().toString(36).slice(2, 10);
         const p: Pipeline = {
-          ...newPipeline(id, "", "manual", {}, true),
+          ...applyVideoSettings(
+            newPipeline(id, "", "manual", {}, true),
+            v.settings,
+          ),
           status: "done",
           stage: "done",
           progress: 100,
@@ -629,7 +758,7 @@ export const usePipelineStore = create<PipelineState>()(
         }));
         schedulePersist();
       },
-      rerunPipeline: (id, step) => {
+      rerunPipeline: async (id, step) => {
         // Vô hiệu runner cũ (nếu còn kẹt ở poll/waiter) để không chạy trùng
         bumpGen(id);
         const s = get().pipelines.find((p) => p.id === id);
@@ -668,6 +797,22 @@ export const usePipelineStore = create<PipelineState>()(
           id,
           `Chạy lại từ bước "${STEPS[step]?.label ?? `bước ${step + 1}`}"...`,
         );
+        // Xóa output từ bước này đến hết (cascade) để chạy lại thật sự:
+        // rerun OCR → xóa .srt + audio dub + video mux/hardcode...;
+        // rerun translate → giữ .srt gốc, chỉ xóa bản dịch trở đi.
+        if (s.videoId) {
+          const gen = runGen.get(id) ?? 0;
+          try {
+            const r = await resetVideoFromStep(s.videoId, step);
+            if (r.removed && r.removed.length > 0) {
+              appendLog(id, `Đã xóa output cũ: ${r.removed.join(", ")}.`);
+            }
+          } catch {
+            // ignore — backend chưa có video hoặc lỗi, vẫn thử chạy lại
+          }
+          // Trong lúc chờ reset mà user bấm pause/rerun khác → bỏ qua lần này
+          if (isStaleRun(id, gen)) return;
+        }
         if (step <= 3) {
           // When rerunning from early steps (especially step 2 region selection),
           // reset regionMode to "manual" and clear region so user can re-select.
@@ -698,6 +843,8 @@ export const usePipelineStore = create<PipelineState>()(
           regionWaiters.delete(id);
           resolve.resolve(region);
         }
+        // Vùng OCR là setting riêng từng video → lưu xuống backend.
+        persistVideoSettings(id);
         // Restored pipeline (page reload): no live runner → resume prep from where it waited.
         if (!liveRunners.has(id)) {
           runPrep(id, s.resumeStep ?? 3);
@@ -718,6 +865,8 @@ export const usePipelineStore = create<PipelineState>()(
           subtitleStyleWaiters.delete(id);
           resolve.resolve(style);
         }
+        // Style phụ đề là setting riêng từng video → lưu xuống backend.
+        persistVideoSettings(id);
         // Restored pipeline: resume heavy processing from step 4.
         if (!liveRunners.has(id)) {
           enqueue(id, s.resumeStep ?? 4);
@@ -737,10 +886,12 @@ export const usePipelineStore = create<PipelineState>()(
               : p,
           ),
         }));
+        persistVideoSettings(id);
         confirmWatermarkRegionAction(id, regions);
       },
       confirmKeepOriginal: (id, ranges) => {
         patch(id, { keepOriginalRanges: ranges });
+        persistVideoSettings(id);
         confirmKeepOriginalAction(id, ranges);
       },
       confirmThumbnailReview: (id, action, extraInstructions) => {
@@ -801,6 +952,9 @@ export const usePipelineStore = create<PipelineState>()(
         if (!s || s.paused || s.status === "done" || s.status === "error")
           return;
         bumpGen(id);
+        // Hủy fetch delogo SSE (nếu đang kẹt ở reader.read): runner cũ thoát
+        // êm qua isStaleRun, backend kill ffmpeg encode mồ côi.
+        abortDelogo(id);
         // Gỡ khỏi hàng đợi để clip tiếp theo được xử lý ngay
         queue = queue.filter((q) => q.id !== id);
         // Reset bước đang xử lý về trạng thái chờ, giữ nguyên stage để chạy tiếp
@@ -869,6 +1023,7 @@ export const usePipelineStore = create<PipelineState>()(
         if (!s) return;
         const videoId = s.videoId;
         bumpGen(id);
+        abortDelogo(id);
         abortedPipelines.add(id);
         set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
         rejectRegion(id);
@@ -1405,6 +1560,21 @@ const thumbnailFallbackWaiters = new Map<
   string,
   { resolve: (choice: "fal" | "skip") => void; reject: () => void }
 >();
+// Delogo SSE fetch đang chạy theo pipeline id. Pause/cancel abort fetch này
+// để (1) runner cũ thoát ngay khỏi reader.read() thay vì kẹt hàng giờ,
+// (2) backend phát hiện disconnect và kill ffmpeg encode mồ côi.
+const delogoAborters = new Map<string, AbortController>();
+function abortDelogo(id: string) {
+  const ctl = delogoAborters.get(id);
+  if (ctl) {
+    delogoAborters.delete(id);
+    try {
+      ctl.abort();
+    } catch {
+      // ignore
+    }
+  }
+}
 
 // Đánh thức mọi waiter đang treo của pipeline (khi pause/cancel) bằng giá trị
 // dummy. Caller ở các await-site PHẢI check isStaleRun() ngay sau await và
@@ -2136,6 +2306,8 @@ async function runPrep(id: string, startStep = 0) {
           videoId = is.video_id;
         }
         patch(id, { videoId });
+        // Đã có videoId → lưu setting riêng của video xuống backend ngay.
+        persistVideoSettings(id);
         appendLog(id, `Video ID: ${videoId}`);
         try {
           await fetch(`/api/context/${videoId}/share-text`, {
@@ -2557,14 +2729,56 @@ async function runPipeline(id: string, startStep = 4) {
             id,
             `[wm] Đang xoá ${wmRegionsNow.length} vùng watermark (FFmpeg delogo)...`,
           );
+          const delogoCtl = new AbortController();
+          delogoAborters.set(id, delogoCtl);
           try {
             const delogoRes = await fetch(`/api/delogo/${videoId}`, {
               method: "POST",
               headers: JSON_HEADERS,
               body: JSON.stringify({ regions: wmRegionsNow }),
+              signal: delogoCtl.signal,
             });
 
-            if (!delogoRes.ok) {
+            if (delogoRes.status === 409) {
+              // Một encode delogo khác đang chạy cho video này (vd runner cũ
+              // trước khi pause/cancel). Không encode chồng (sẽ hỏng file +
+              // chậm gấp đôi) — chờ encode kia xong rồi dùng kết quả của nó.
+              appendLog(
+                id,
+                "[wm] Đã có tiến trình xoá watermark đang chạy — chờ tiến trình đó xong...",
+              );
+              let waited = 0;
+              while (waited < 360) {
+                if (isStaleRun(id, gen)) return;
+                await new Promise((r) => setTimeout(r, 5000));
+                if (isStaleRun(id, gen)) return;
+                waited++;
+                try {
+                  const stRes = await fetch(`/api/delogo/${videoId}/status`);
+                  if (stRes.ok) {
+                    const st = await stRes.json();
+                    if (st.exists && st.valid) {
+                      appendLog(
+                        id,
+                        "[wm] Xoá watermark xong (từ tiến trình đang chạy).",
+                      );
+                      patch(id, {
+                        progress: 100,
+                        stepProgress: stepProgressFor("watermark_region", 100),
+                      });
+                      break;
+                    }
+                  }
+                } catch {
+                  // ignore — thử lại
+                }
+              }
+              if (waited >= 360 && isStaleRun(id, gen)) return;
+              if (waited >= 360) {
+                appendLog(id, "[wm] Chờ encode kia quá lâu — dừng pipeline.");
+                delogoFailed = true;
+              }
+            } else if (!delogoRes.ok) {
               // Non-streaming error response
               let errMsg = `HTTP ${delogoRes.status}`;
               try {
@@ -2585,6 +2799,16 @@ async function runPipeline(id: string, startStep = 4) {
 
               if (reader) {
                 while (!delogoDone) {
+                  // Pause/cancel/rerun trong lúc chờ SSE: thoát ngay, không
+                  // kẹt ở reader.read() hàng giờ, không ghi đè state mới.
+                  if (isStaleRun(id, gen)) {
+                    try {
+                      await reader.cancel();
+                    } catch {
+                      // ignore
+                    }
+                    return;
+                  }
                   const { done, value } = await reader.read();
                   if (done) break;
                   buffer += decoder.decode(value, { stream: true });
@@ -2631,13 +2855,23 @@ async function runPipeline(id: string, startStep = 4) {
               }
             }
           } catch (e) {
+            // Runner đã stale (pause/cancel/rerun/abort fetch): thoát êm,
+            // không đánh dấu pipeline lỗi, không ghi đè state tạm dừng.
+            if (isStaleRun(id, gen)) return;
             appendLog(
               id,
               `[wm] Xoá watermark lỗi: ${e instanceof Error ? e.message : e}`,
             );
             delogoFailed = true;
+          } finally {
+            if (delogoAborters.get(id) === delogoCtl)
+              delogoAborters.delete(id);
           }
         }
+
+        // Runner cũ (đã pause/cancel/rerun) thoát êm, không ghi đè state mới
+        // bằng error/done (vd backend trả "cancelled" sau khi pause kill ffmpeg).
+        if (isStaleRun(id, gen)) return;
 
         // Nếu delogo thất bại → dừng pipeline (OCR đã chạy xong).
         if (delogoFailed) {

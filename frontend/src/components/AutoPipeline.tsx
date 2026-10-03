@@ -494,6 +494,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           videoId: meta.video_id,
           title: meta.filename || meta.video_id,
           hasDubbed: meta.has_dubbed ?? false,
+          settings: meta.pipeline_settings ?? null,
         }),
       );
       return;
@@ -1899,6 +1900,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             videoId: v.video_id,
                             title: v.filename || v.video_id,
                             hasDubbed: v.has_dubbed ?? false,
+                            settings: v.pipeline_settings ?? null,
                           });
                           setSelectedId(id);
                           setTab("detail");
