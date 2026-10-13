@@ -1616,19 +1616,26 @@ async def run_telegram_auto_job(
             await _tg_send(chat_id, "✅ Đã tải và gộp video + audio xong.")
 
             imp_result = await loop.run_in_executor(
-                _executor, import_video, ImportRequest(merge_id=merge_id, filename=imp_name)
+                _executor,
+                lambda: import_video(
+                    ImportRequest(merge_id=merge_id, filename=imp_name), sync=True
+                ),
             )
         else:
             # Chỉ 1 file video (đã có audio) → import trực tiếp theo URL.
             job["phase"] = "merging"
             await _tg_send(chat_id, "⬇️ Đang tải video...")
             imp_result = await loop.run_in_executor(
-                _executor, import_video, ImportRequest(
-                    url=video_url,
-                    filename=imp_name,
-                    thumbnail_url=thumbnail or "",
-                    big_thumbs=big_thumbs,
-                )
+                _executor,
+                lambda: import_video(
+                    ImportRequest(
+                        url=video_url,
+                        filename=imp_name,
+                        thumbnail_url=thumbnail or "",
+                        big_thumbs=big_thumbs,
+                    ),
+                    sync=True,
+                ),
             )
 
         video_id = imp_result["video_id"]

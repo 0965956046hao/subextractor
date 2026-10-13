@@ -174,6 +174,8 @@ def generate_segments_to_dir(
 
     audio_files = job.get("audio_files") or []
     written: List[Path] = []
+    done = 0
+    expected = len(segments)
     for path_str in audio_files:
         filename = Path(path_str).name
         i = _index_from_filename(filename, prefix)
@@ -181,11 +183,15 @@ def generate_segments_to_dir(
         target = out_dir / (f"{prefix}_{orig_idx:04d}.mp3" if prefix else f"{orig_idx:04d}.mp3")
         try:
             download_audio(job_id, filename, target)
-            written.append(target)
+            if target.exists() and target.stat().st_size > 0:
+                written.append(target)
+            else:
+                logger.warning("capcut tts: downloaded empty %s", filename)
         except Exception as e:
             logger.warning("capcut tts: cannot download %s: %s", filename, e)
+        done += 1
         if progress_callback:
-            progress_callback(len(written), len(audio_files))
+            progress_callback(done, expected)
 
     return written
 

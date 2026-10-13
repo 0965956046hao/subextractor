@@ -102,15 +102,19 @@ class ImportRequest(BaseModel):
     filename: str = "douyin.mp4"
     thumbnail_url: str = ""
     big_thumbs: list[str] = []
+    # Khóa idempotency do frontend gửi (pipeline id). Retry cùng key
+    # sẽ trả về job cũ thay vì tạo video duplicate.
+    idempotency_key: str = ""
 
 
-@router.post("/api/import-video")
-def import_video(body: ImportRequest):
-    """Import a video (merged file or external URL) into the OCR pipeline."""
-    if not body.merge_id and not body.url.startswith(("http://", "https://")):
-        raise HTTPException(400, "url or merge_id required")
+_import_jobs: dict[str, dict] = {}
+_import_key_map: dict[str, str] = {}
 
-    video_id = uuid.uuid4().hex[:12]
+
+def _do_import_sync(
+    body: ImportRequest, video_id: str, on_progress=None
+) -> str:
+    """Phần import đồng bộ (copy/download). Trả về video_id khi xong."""
     video_dir = settings.temp_dir / "videos" / video_id
     video_dir.mkdir(parents=True, exist_ok=True)
     video_path = video_dir / "video.mp4"
@@ -120,7 +124,11 @@ def import_video(body: ImportRequest):
             src = settings.temp_dir / "merged" / f"{body.merge_id}_video.mp4"
             if not src.exists():
                 raise HTTPException(404, "Merged file not found")
+            if on_progress:
+                on_progress(10)
             shutil.copyfile(src, video_path)
+            if on_progress:
+                on_progress(90)
         else:
             # Download thumbnail + big_thumbs in parallel with the video itself.
             ctx_dst = settings.temp_dir / "context" / video_id
@@ -133,7 +141,15 @@ def import_video(body: ImportRequest):
                 )
                 ctx_thread.start()
             try:
-                _download(body.url, video_path)
+                _download(
+                    body.url,
+                    video_path,
+                    on_progress=(
+                        (lambda p: on_progress(int(p * 0.9)))
+                        if on_progress
+                        else None
+                    ),
+                )
             finally:
                 if ctx_thread:
                     ctx_thread.join()
@@ -142,7 +158,7 @@ def import_video(body: ImportRequest):
         raise
     except Exception as e:
         shutil.rmtree(video_dir, ignore_errors=True)
-        raise HTTPException(500, f"Import failed: {e}")
+        raise RuntimeError(f"Import failed: {e}")
 
     # Copy thumbnail vào context dir của video. Không copy context_images nữa:
     # context_service._context_image_paths đọc trực tiếp từ merged/{merge_id}_context/context_images,
@@ -168,8 +184,99 @@ def import_video(body: ImportRequest):
     except Exception:
         pass
 
+    if on_progress:
+        on_progress(100)
     logger.info("imported video %s → %s", video_id, video_path)
-    return {"video_id": video_id}
+    return video_id
+
+
+def _run_import(job_id: str, body: ImportRequest) -> None:
+    job = _import_jobs[job_id]
+    video_id = job["video_id"]
+
+    def _set(progress: int, stage: str):
+        job["progress"] = progress
+        job["stage"] = stage
+
+    try:
+        _set(5, "Đang tải video...")
+        _do_import_sync(
+            body, video_id, on_progress=lambda p: _set(min(99, p), "Đang tải video...")
+        )
+        job["status"] = "done"
+        job["stage"] = "Hoàn tất"
+        job["progress"] = 100
+    except HTTPException as e:
+        job["status"] = "error"
+        job["error"] = e.detail
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+        logger.exception("import %s failed", job_id)
+
+
+@router.post("/api/import-video")
+def import_video(body: ImportRequest, sync: bool = False):
+    """Import a video (merged file or external URL) into the OCR pipeline.
+
+    Mặc định chạy nền (trả `job_id` ngay, poll qua GET) để tránh
+    Next.js rewrites proxy `socket hang up` khi download 15-30s.
+    Truyền `?sync=1` để giữ hành vi cũ (đồng bộ, trả `video_id`).
+    """
+    if not body.merge_id and not body.url.startswith(("http://", "https://")):
+        raise HTTPException(400, "url or merge_id required")
+
+    # Idempotency: retry cùng key trả về job cũ, không tạo video duplicate.
+    if body.idempotency_key:
+        old_id = _import_key_map.get(body.idempotency_key)
+        if old_id and old_id in _import_jobs:
+            old = _import_jobs[old_id]
+            if old.get("status") in ("queued", "downloading"):
+                return {"job_id": old_id, "status": old["status"]}
+            if old.get("status") == "done":
+                return {
+                    "job_id": old_id,
+                    "status": "done",
+                    "video_id": old.get("video_id"),
+                }
+
+    if sync:
+        video_id = uuid.uuid4().hex[:12]
+        _do_import_sync(body, video_id)
+        return {"video_id": video_id}
+
+    job_id = uuid.uuid4().hex[:12]
+    video_id = uuid.uuid4().hex[:12]
+    _import_jobs[job_id] = {
+        "job_id": job_id,
+        "video_id": video_id,
+        "status": "downloading",
+        "stage": "Đang tải video...",
+        "progress": 0,
+        "error": None,
+    }
+    if body.idempotency_key:
+        _import_key_map[body.idempotency_key] = job_id
+
+    threading.Thread(
+        target=_run_import, args=(job_id, body), daemon=True
+    ).start()
+    return {"job_id": job_id, "status": "downloading"}
+
+
+@router.get("/api/import-video/{job_id}")
+async def get_import_status(job_id: str):
+    job = _import_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "stage": job.get("stage", ""),
+        "progress": job.get("progress", 0),
+        "video_id": job.get("video_id") if job["status"] == "done" else None,
+        "error": job.get("error"),
+    }
 
 
 _READ_CHUNK = 4 * 1024 * 1024

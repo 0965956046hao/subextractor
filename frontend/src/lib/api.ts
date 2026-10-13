@@ -26,17 +26,52 @@ export async function uploadVideo(
   const form = new FormData();
   form.append("file", file);
   form.append("origin", origin);
-  const res = await api.post<{ video_id: string }>("/upload", form, {
-    headers: { "Content-Type": "multipart/form-data" },
-    // File video lớn có thể mất hàng chục phút để upload → timeout 120 phút.
-    timeout: 120 * 60 * 1000,
-    onUploadProgress: (e) => {
-      if (onProgress && e.total)
-        onProgress(Math.round((e.loaded * 100) / e.total));
-    },
-    signal,
-  });
-  return res.data.video_id;
+  // File 2-3GB đi qua Next.js rewrite proxy (:3000 → :8002) sẽ bị proxy ôm
+  // hết body vào RAM rồi mới forward → OOM / socket hang up. Gọi thẳng
+  // backend để bypass proxy. Chỉ fallback về /api khi direct fail vì lý do
+  // cấu hình (không phải do user cancel).
+  const directBase = (
+    process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8002/api"
+  ).replace(/\/+$/, "");
+  try {
+    const res = await axios.post<{ video_id: string }>(
+      `${directBase}/upload`,
+      form,
+      {
+        // File video lớn có thể mất hàng chục phút để upload → timeout 120 phút.
+        timeout: 120 * 60 * 1000,
+        onUploadProgress: (e) => {
+          if (onProgress && e.total)
+            onProgress(Math.round((e.loaded * 100) / e.total));
+        },
+        signal,
+      },
+    );
+    return res.data.video_id;
+  } catch (err: unknown) {
+    if (axios.isCancel(err)) throw err;
+    if (signal?.aborted) throw err;
+    // 4xx từ backend (sai định dạng, thiếu filename...) → không retry qua proxy.
+    const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+    if (status && status >= 400 && status < 500) {
+      const msg =
+        (axios.isAxiosError(err) && err.response?.data?.detail) ||
+        (err instanceof Error ? err.message : "An unexpected error occurred");
+      throw new Error(msg);
+    }
+    // Direct không tới được backend (sai port/env, backend chưa chạy...) →
+    // fallback về proxy Next cũ để không break các môi trường khác.
+    const res = await api.post<{ video_id: string }>("/upload", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 120 * 60 * 1000,
+      onUploadProgress: (e) => {
+        if (onProgress && e.total)
+          onProgress(Math.round((e.loaded * 100) / e.total));
+      },
+      signal,
+    });
+    return res.data.video_id;
+  }
 }
 
 export function getVideoUrl(videoId: string): string {

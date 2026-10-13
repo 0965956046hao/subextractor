@@ -1022,6 +1022,41 @@ async function pollMerge(jobId: string, onTick: (t: JobTick) => void) {
   }
 }
 
+// Poll import-video async job (backend trả job_id ngay, download nền 15-30s).
+// Dùng route handler /api/import-video/[jobId] (bypass http-proxy) nên không
+// còn `socket hang up` như rewrites proxy cũ.
+async function pollImport(jobId: string, onTick: (t: JobTick) => void) {
+  let fails = 0;
+  while (true) {
+    await sleep(1000);
+    try {
+      const r = await fetch(`/api/import-video/${jobId}`);
+      if (r.status === 404) {
+        return {
+          status: "error",
+          error: "Import job không tồn tại (backend đã restart?).",
+        };
+      }
+      if (!r.ok) continue;
+      fails = 0;
+      const d = await r.json();
+      onTick({ progress: d.progress ?? 0 });
+      if (d.status === "done") return d;
+      if (d.status === "error") return { status: "error", error: d.error };
+    } catch {
+      fails += 1;
+      if (fails >= 60) {
+        return {
+          status: "error",
+          error:
+            "Backend không phản hồi khi import (60s). Kiểm tra backend :8002 rồi thử lại — " +
+            "không bấm retry liên tục để tránh tạo video trùng.",
+        };
+      }
+    }
+  }
+}
+
 // ── Remote job tracking ─────────────────────────────────────────────────────
 // Maps a backend job_type/phase to the nearest pipeline stage. Used to re-attach
 // in-flight jobs (e.g. from another device / after a page reload) to the UI.
@@ -1850,24 +1885,46 @@ async function runPrep(id: string, startStep = 0) {
               // bỏ qua thumbnail_url/big_thumbs (đã tải trong bước merge).
               merge_id: mergeId,
               filename: impName,
+              idempotency_key: id,
             }
           : {
               url: videoUrl,
               filename: impName,
               thumbnail_url: thumbUrl || "",
               big_thumbs: bigThumbsUrls,
+              idempotency_key: id,
             };
         const ir = await fetch("/api/import-video", {
           method: "POST",
           headers: JSON_HEADERS,
           body: JSON.stringify(impBody),
         });
-        const idata = await ir.json();
+        const idata = await ir.json().catch(() => ({}));
         if (!ir.ok) {
           appendLog(id, `Import HTTP ${ir.status}: ${idata.detail || "lỗi"}`);
-          throw new Error(idata.detail || "Import thất bại");
+          throw new Error(
+            (idata.detail || "Import thất bại") +
+              (ir.status === 502
+                ? " — backend có thể vừa restart; đợi vài giây rồi bấm chạy lại từ bước 1 (không tạo link mới)."
+                : ""),
+          );
         }
-        videoId = idata.video_id;
+        if (idata.video_id && !idata.job_id) {
+          // Fallback backend cũ (?sync=1): trả video_id đồng bộ.
+          videoId = idata.video_id;
+        } else if (idata.status === "done" && idata.video_id) {
+          // Idempotency hit: job cũ đã xong.
+          videoId = idata.video_id;
+          appendLog(id, "Import đã xong trước đó (idempotency) — dùng lại video cũ.");
+        } else {
+          const importJobId = idata.job_id;
+          if (!importJobId) throw new Error("Import thất bại (thiếu job_id)");
+          appendLog(id, `Import job: ${importJobId} — đang tải nền...`);
+          const is = await pollImport(importJobId, tick(1));
+          if (is.status !== "done")
+            throw new Error(is.error || "Import thất bại");
+          videoId = is.video_id;
+        }
         patch(id, { videoId });
         appendLog(id, `Video ID: ${videoId}`);
         try {

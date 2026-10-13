@@ -259,14 +259,24 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
         if not text:
             continue
         if out_path.exists() and out_path.stat().st_size > 0:
-            audio_files[i] = out_path
-            synth_ok += 1
-            reused += 1
-            if log_fn:
-                log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
+            if _read_silence_kind(out_path) == "fail":
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
+                _clear_silence_marker(out_path)
+                pending.append((idx, entry, out_path))
+                if log_fn:
+                    log_fn(f"  ↻ Dòng {idx}/{total}: file câm do lỗi lần trước — gen lại...")
+            else:
+                audio_files[i] = out_path
+                synth_ok += 1
+                reused += 1
+                if log_fn:
+                    log_fn(f"  ✓ Dòng {idx}/{total}: đã có (tái sử dụng)", level="success")
         elif prev_text and _texts_similar(prev_text, text):
             # Nội dung giống dòng trước ≥80% → không gọi API gen voice, chèn khoảng lặng.
-            _create_silence(out_path, max(entry.end - entry.start, 0.5))
+            _create_silence(out_path, max(entry.end - entry.start, 0.5), kind="dup")
             audio_files[i] = out_path
             silenced += 1
             if log_fn:
@@ -300,6 +310,7 @@ def synthesize_srt(video_id: str, progress_callback=None, use_custom_srt: bool =
                 return
             with lock:
                 audio_files[idx - 1] = path
+                _clear_silence_marker(path)
                 synth_ok += 1
                 done += 1
                 if log_fn and (idx % 50 == 0 or idx == total):
@@ -378,10 +389,25 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         if not entry.text.strip():
             continue
         if target.exists() and target.stat().st_size > 0:
-            prev_text = entry.text.strip()
-            continue
+            kind = _read_silence_kind(target)
+            if kind == "fail":
+                # Placeholder câm do lần trước gen lỗi → xóa, đưa vào
+                # danh sách gen lại (trước đây bị coi là "đã có" nên câm
+                # vĩnh viễn — đúng bug video 3365 dòng gặp phải).
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+                _clear_silence_marker(target)
+                if log_fn:
+                    log_fn(f"  ↻ Dòng {idx}/{total}: file câm do lỗi lần trước — gen lại...")
+            else:
+                if kind == "dup":
+                    silent_indices.add(idx)
+                prev_text = entry.text.strip()
+                continue
         if prev_text and _texts_similar(prev_text, entry.text.strip()):
-            _create_silence(target, max(entry.end - entry.start, 0.5))
+            _create_silence(target, max(entry.end - entry.start, 0.5), kind="dup")
             silent_indices.add(idx)
             prev_text = entry.text.strip()
             continue
@@ -394,10 +420,6 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         if log_fn:
             log_fn(f"  Còn {len(missing_texts)} dòng cần tổng hợp ({total - len(missing_texts)} dòng đã có sẵn)...")
 
-        def cb(done: int, total_: int):
-            if progress_callback:
-                progress_callback(done, total_)
-
         # Warm-up: sinh 1 đoạn demo để làm ấm SDK CapCut / health-check service,
         # tránh các dòng đầu batch chính bị fail do cold-start. Nếu warm-up lỗi
         # vẫn tiếp tục gen chính (chỉ ghi log cảnh báo).
@@ -408,55 +430,77 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
                 level="info" if warmed else "warning",
             )
 
-        try:
-            written = generate_segments_to_dir(
-                missing_texts,
-                out_dir,
-                voice=voice_name,
-                rate=rate,
-                prefix="segment",
-                progress_callback=cb,
-                log_fn=log_fn,
-                indices=missing_indices,
-            )
-            written_names = {p.name for p in written}
+        # Batch lớn (vd 3000+ dòng) gửi 1 job duy nhất rất dễ dính
+        # rate-limit/drop hàng loạt. Chia nhỏ + retry nhiều vòng tới khi hết
+        # fail (trước đây chỉ retry đúng 1 lần rồi chèn câm hàng loạt).
+        _CHUNK_SIZE = 150
+        _MAX_ROUNDS = 4
 
-            # Retry failed segments (job succeeded but some segments missing)
-            retry_indices, retry_texts = _find_failed_segments(
-                written_names, missing_indices, missing_texts, prefix="segment"
-            )
-            if retry_indices:
-                if log_fn:
-                    log_fn(f"  ⚠ {len(retry_indices)} segment thất bại, đang retry...", level="warning")
-                retry_written = generate_segments_to_dir(
-                    retry_texts,
-                    out_dir,
-                    voice=voice_name,
-                    rate=rate,
-                    prefix="segment",
-                    progress_callback=cb,
-                    log_fn=log_fn,
-                    indices=retry_indices,
-                )
-                written_names.update({p.name for p in retry_written})
-                # Check if retry still has failures
-                still_failed = _find_failed_segments(
-                    written_names, retry_indices, retry_texts, prefix="segment"
-                )[0]
-                if still_failed:
-                    logger.warning("CapCut TTS retry still failed for %d segments", len(still_failed))
-                    if log_fn:
-                        log_fn(f"  ⚠ Retry vẫn thất bại {len(still_failed)} segment, chèn khoảng lặng.", level="warning")
+        pending_indices: List[int] = list(missing_indices)
+        pending_texts: List[str] = list(missing_texts)
+        done_before_round = total - len(missing_texts)
+        done_in_round = 0
 
-        except Exception as _e:
-            # Lỗi service (vd file trả về khổng lồ bị xoá bởi download_audio) →
-            # chèn khoảng lặng cho các dòng thiếu thay vì phá toàn bộ job.
-            logger.warning("CapCut TTS lỗi (có thể do file khổng lồ): %s", _e)
+        def _cb_chunk(done: int, total_: int):
+            if progress_callback:
+                progress_callback(done_before_round + done_in_round + done, total)
+
+        fatal_error: Exception | None = None
+        for round_no in range(1, _MAX_ROUNDS + 1):
+            if not pending_indices:
+                break
             if log_fn:
-                log_fn(f"  ⚠ CapCut TTS lỗi: {_e}. Các dòng thiếu sẽ chèn khoảng lặng.", level="warning")
-            for idx in missing_indices:
-                sp = out_dir / f"{idx:04d}.mp3"
-                _create_silence(sp, max(entries[idx - 1].end - entries[idx - 1].start, 0.5))
+                log_fn(
+                    f"  Vòng {round_no}/{_MAX_ROUNDS}: {len(pending_indices)} dòng cần gen "
+                    f"(chia {(_CHUNK_SIZE - 1 + len(pending_indices)) // _CHUNK_SIZE} batch)...",
+                )
+            for c in range(0, len(pending_indices), _CHUNK_SIZE):
+                chunk_idx = pending_indices[c:c + _CHUNK_SIZE]
+                chunk_txt = pending_texts[c:c + _CHUNK_SIZE]
+                try:
+                    written = generate_segments_to_dir(
+                        chunk_txt,
+                        out_dir,
+                        voice=voice_name,
+                        rate=rate,
+                        prefix="segment",
+                        progress_callback=_cb_chunk,
+                        log_fn=log_fn,
+                        indices=chunk_idx,
+                    )
+                    new_names = {p.name for p in written} - written_names
+                    written_names.update(new_names)
+                    done_in_round += len(new_names)
+                except Exception as _e:
+                    # Lỗi service theo chunk (vd file khổng lồ) → giữ lại để
+                    # retry vòng sau, không phá toàn bộ job.
+                    logger.warning("CapCut TTS chunk lỗi (vòng %d): %s", round_no, _e)
+                    if fatal_error is None:
+                        fatal_error = _e
+            still_idx, still_txt = _find_failed_segments(
+                written_names, pending_indices, pending_texts, prefix="segment"
+            )
+            pending_indices, pending_texts = still_idx, still_txt
+            if pending_indices and log_fn:
+                log_fn(
+                    f"  ⚠ Vòng {round_no}: còn {len(pending_indices)} segment thất bại"
+                    + (" — retry tiếp..." if round_no < _MAX_ROUNDS else ", chèn khoảng lặng."),
+                    level="warning",
+                )
+            if pending_indices and round_no < _MAX_ROUNDS:
+                time.sleep(min(2.0 ** round_no, 8.0))
+
+        if pending_indices:
+            logger.warning(
+                "CapCut TTS vẫn thất bại %d segments sau %d vòng",
+                len(pending_indices), _MAX_ROUNDS,
+            )
+            if log_fn:
+                extra = f" (lỗi service: {fatal_error})" if fatal_error else ""
+                log_fn(
+                    f"  ⚠ Retry vẫn thất bại {len(pending_indices)} segment{extra}, chèn khoảng lặng.",
+                    level="warning",
+                )
     elif log_fn:
         log_fn(f"  Tất cả {total} dòng đã có sẵn — bỏ qua gen voice.", level="success")
 
@@ -472,6 +516,28 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
             if log_fn:
                 log_fn(f"  ⏭ Dòng {idx}/{total}: bỏ qua (phụ đề rỗng)")
             continue
+        # Segment mồ côi: lần chạy trước download được giọng thật
+        # (segment_{idx}.mp3) nhưng crash/fail trước khi rename, lần chạy sau
+        # lấp {idx}.mp3 bằng placeholder câm. Placeholder luôn dài đúng bằng
+        # entry (_create_silence), còn giọng thật có độ dài tự nhiên → dùng
+        # hiệu thời lượng để nhận diện và ưu tiên giọng thật, tránh câm vĩnh viễn.
+        _seg_orphan = out_dir / f"segment_{idx:04d}.mp3"
+        if (
+            _seg_orphan.exists() and _seg_orphan.stat().st_size > 0
+            and target.exists() and target.stat().st_size > 0
+        ):
+            try:
+                from app.services.media_utils import _get_audio_duration
+                _entry_dur = max(entry.end - entry.start, 0.5)
+                _seg_dur = _get_audio_duration(_seg_orphan)
+                _tgt_dur = _get_audio_duration(target)
+                if abs(_tgt_dur - _entry_dur) < 0.15 and abs(_seg_dur - _entry_dur) > 0.3:
+                    _seg_orphan.replace(target)
+                    _clear_silence_marker(target)
+                    if log_fn:
+                        log_fn(f"  ♻ Dòng {idx}/{total}: dùng lại segment giọng thật còn sót (thay placeholder câm)")
+            except Exception:
+                pass
         if target.exists() and target.stat().st_size > 0:
             audio_files.append(target)
             if idx in silent_indices:
@@ -487,6 +553,7 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
         seg = out_dir / f"segment_{idx:04d}.mp3"
         if seg.name in written_names and seg.exists():
             seg.rename(target)
+            _clear_silence_marker(target)
             audio_files.append(target)
             synth_ok += 1
             if log_fn and (idx % 50 == 0 or idx == total):
@@ -726,8 +793,37 @@ def _find_failed_segments(
     return failed_indices, failed_texts
 
 
-def _create_silence(out_path: Path, duration_sec: float):
-    """Create a silent MP3 placeholder using FFmpeg."""
+def _silence_marker_path(out_path: Path) -> Path:
+    """Sidecar marker ghi loại khoảng lặng: ``<name>.mp3.silence``."""
+    return out_path.with_name(out_path.name + ".silence")
+
+
+def _read_silence_kind(out_path: Path) -> str | None:
+    """Đọc marker khoảng lặng: ``"fail"`` | ``"dup"`` | None (giọng thật / legacy)."""
+    marker = _silence_marker_path(out_path)
+    try:
+        if marker.exists():
+            return (marker.read_text(encoding="utf-8") or "").strip() or "fail"
+    except Exception:
+        return "fail"
+    return None
+
+
+def _clear_silence_marker(out_path: Path) -> None:
+    try:
+        _silence_marker_path(out_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _create_silence(out_path: Path, duration_sec: float, kind: str = "fail"):
+    """Create a silent MP3 placeholder using FFmpeg.
+
+    ``kind`` = ``"fail"`` (gen lỗi → lần chạy sau gen lại) | ``"dup"``
+    (dòng giống dòng trước ≥80% → cố ý câm, tái sử dụng). Marker sidecar
+    giúp resume phân biệt 2 loại — trước đây resume coi cả 2 là "đã có"
+    nên file câm do lỗi không bao giờ được gen lại.
+    """
     try:
         subprocess.run(
             [
@@ -743,6 +839,10 @@ def _create_silence(out_path: Path, duration_sec: float):
         )
     except Exception:
         out_path.write_bytes(b"")
+    try:
+        _silence_marker_path(out_path).write_text(kind, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):

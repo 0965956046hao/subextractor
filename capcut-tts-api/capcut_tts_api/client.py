@@ -602,7 +602,8 @@ class CapCutClient:
             each segment is written.
         :param workers: number of concurrent segments to generate (each worker is
             one CapCut API call at a time). 1 = sequential.
-        :return: List of paths actually written (failures are skipped).
+        :return: List of paths actually written (failures are skipped after
+            per-segment retries are exhausted).
         """
         if isinstance(texts, str):
             text_list = [texts]
@@ -618,6 +619,11 @@ class CapCutClient:
         total = len(text_list)
         lock = threading.Lock()
 
+        # Retry từng segment: lỗi transient (rate-limit 429 / 5xx / timeout /
+        # rớt mạng / task failed) rất phổ biến khi chạy batch lớn nhiều luồng.
+        # Trước đây fail 1 lần là bỏ luôn → tỉ lệ khoảng câm cao.
+        _MAX_SEGMENT_ATTEMPTS = 3
+
         def _gen_one(i: int, text: str):
             if not text or not text.strip():
                 with lock:
@@ -625,39 +631,63 @@ class CapCutClient:
                         progress_callback(len(written), total)
                 return
             target = out / (f"{prefix}_{i + 1:04d}.{ext}" if prefix else f"{i + 1:04d}.{ext}")
-            try:
-                create_res = self.create_tts_task(text, voice_type, final_resource_id, rate)
-                tasks = (create_res.get("data") or {}).get("tasks") or []
-                if not tasks:
-                    raise CapCutTaskError(f"No task returned: {create_res}")
-                task_id = tasks[0]["id"]
-                token = tasks[0]["token"]
-
-                start_time = time.time()
-                query_res = None
-                while time.time() - start_time < timeout:
-                    query_res = self.query_tts_task(task_id, token)
-                    query_tasks = (query_res.get("data") or {}).get("tasks") or []
-                    if query_tasks:
-                        status = query_tasks[0].get("status")
-                        if status in _SUCCESS_STATUSES:
-                            break
-                        elif status == "failed":
-                            raise CapCutTaskError(f"TTS task failed: {query_res}")
-                    time.sleep(poll_interval)
-                else:
-                    raise CapCutTaskError(f"TTS task timed out after {timeout}s")
-
-                urls = self.extract_audio_urls(query_res or {})
-                if not urls:
-                    raise CapCutTaskError(
-                        f"No audio URL found in response for segment {i + 1}: {str(query_res)[:500]}"
-                    )
-                self.download_audio(urls[0], target)
+            if target.exists() and target.stat().st_size > 0:
                 with lock:
                     written.append(target)
-            except Exception as exc:
-                logger.warning("Segment %d failed: %s", i + 1, exc)
+                    if progress_callback:
+                        progress_callback(len(written), total)
+                return
+            last_err: Exception | None = None
+            for attempt in range(1, _MAX_SEGMENT_ATTEMPTS + 1):
+                try:
+                    create_res = self.create_tts_task(text, voice_type, final_resource_id, rate)
+                    tasks = (create_res.get("data") or {}).get("tasks") or []
+                    if not tasks:
+                        raise CapCutTaskError(f"No task returned: {create_res}")
+                    task_id = tasks[0]["id"]
+                    token = tasks[0]["token"]
+
+                    start_time = time.time()
+                    query_res = None
+                    while time.time() - start_time < timeout:
+                        query_res = self.query_tts_task(task_id, token)
+                        query_tasks = (query_res.get("data") or {}).get("tasks") or []
+                        if query_tasks:
+                            status = query_tasks[0].get("status")
+                            if status in _SUCCESS_STATUSES:
+                                break
+                            elif status == "failed":
+                                raise CapCutTaskError(f"TTS task failed: {query_res}")
+                        time.sleep(poll_interval)
+                    else:
+                        raise CapCutTaskError(f"TTS task timed out after {timeout}s")
+
+                    urls = self.extract_audio_urls(query_res or {})
+                    if not urls:
+                        raise CapCutTaskError(
+                            f"No audio URL found in response for segment {i + 1}: {str(query_res)[:500]}"
+                        )
+                    self.download_audio(urls[0], target)
+                    if not target.exists() or target.stat().st_size == 0:
+                        raise CapCutTaskError(f"Downloaded empty audio for segment {i + 1}")
+                    with lock:
+                        written.append(target)
+                        if progress_callback:
+                            progress_callback(len(written), total)
+                    return
+                except Exception as exc:
+                    last_err = exc
+                    if attempt < _MAX_SEGMENT_ATTEMPTS:
+                        backoff = min(2.0 ** attempt, 8.0)
+                        logger.info(
+                            "Segment %d attempt %d/%d failed (%s) — retry sau %.1fs",
+                            i + 1, attempt, _MAX_SEGMENT_ATTEMPTS, exc, backoff,
+                        )
+                        time.sleep(backoff)
+            logger.warning(
+                "Segment %d failed after %d attempts: %s",
+                i + 1, _MAX_SEGMENT_ATTEMPTS, last_err,
+            )
             with lock:
                 if progress_callback:
                     progress_callback(len(written), total)
