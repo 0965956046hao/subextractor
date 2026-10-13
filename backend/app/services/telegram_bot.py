@@ -44,7 +44,7 @@ class DouyinConfig:
     region_mode: str = "auto"       # auto | manual
     dub_on: bool = True
     dub_engine: str = "capcut"      # google | capcut
-    dub_voice: str = "BV421_vivn_streaming"
+    dub_voice: str = "BV074_streaming_dsp"
     voice_lang: str = "vi-VN"       # vi-VN | en-US
     original_voice: str = "mute"    # mute | keep
     original_gain_db: float = 0.0   # 0..30 (dB giảm, chỉ khi keep)
@@ -55,7 +55,7 @@ class DouyinConfig:
     auto_dub: bool = True
     watermark: str = "none"         # none | preset
     watermark_preset: str = ""
-    remove_watermark: bool = False
+    remove_watermark: bool = True
     check_subs: bool = True
     check_voice: bool = True
     thumbnail: str = "none"         # none | fal | gpt

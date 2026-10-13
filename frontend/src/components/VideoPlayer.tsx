@@ -59,6 +59,8 @@ export default function VideoPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [seeking, setSeeking] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+  const [videoKey, setVideoKey] = useState(0);
 
   const container = containerRef ?? containerEl;
   const video = videoRef ?? videoEl;
@@ -137,15 +139,34 @@ export default function VideoPlayer({
             onPointerCancel={onPointerUp}
           >
             <video
+              key={`${videoId}:${videoKey}`}
               ref={video}
               src={getVideoUrl(videoId)}
               className="absolute inset-0 w-full h-full object-contain"
               controls={false}
               playsInline
               preload="auto"
+              onError={() => setVideoError(true)}
+              onLoadedData={() => setVideoError(false)}
             />
             {overlay}
             {badge}
+            {videoError && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center">
+                <p className="text-[13px] text-white/80 leading-relaxed">
+                  {t("videoplayer.loadError")}
+                </p>
+                <button
+                  onClick={() => {
+                    setVideoError(false);
+                    setVideoKey((k) => k + 1);
+                  }}
+                  className="px-4 py-2 rounded-full text-[12px] font-medium bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/20 transition-colors cursor-pointer"
+                >
+                  {t("videoplayer.retry")}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

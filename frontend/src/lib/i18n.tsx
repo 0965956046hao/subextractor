@@ -345,6 +345,11 @@ const dictionaries = {
     // UploadPage
     "upload.selectVideo": "Select a video file",
     "upload.failed": "Upload failed",
+    "upload.backendDown":
+      "Cannot connect to backend. Your file is kept — retry when the backend is back.",
+    "upload.retry": "Retry",
+    "upload.pickDifferent": "Pick another file",
+    "upload.cancel": "Cancel",
     "upload.uploading": "Uploading to server...",
     "upload.release": "Release to upload",
     "upload.drop": "Drop video here",
@@ -411,6 +416,8 @@ const dictionaries = {
     // VideoPlayer
     "videoplayer.pause": "Pause",
     "videoplayer.play": "Play",
+    "videoplayer.loadError": "Cannot load video — backend may be down.",
+    "videoplayer.retry": "Retry",
 
     // TimelineCheckModal
     "timeline.loadError": "Failed to load subtitles",
@@ -609,6 +616,9 @@ const dictionaries = {
     "pipeline.step.detail.youtube": "Upload the video to YouTube with meta",
     "pipeline.status.queued": "Queued",
     "pipeline.status.running": "Running",
+    "pipeline.status.paused": "Paused",
+    "pipeline.pauseProcess": "Pause",
+    "pipeline.resumeProcess": "Resume",
     "pipeline.status.done": "Done",
     "pipeline.status.error": "Error",
     "pipeline.langZh": "Chinese",
@@ -652,7 +662,11 @@ const dictionaries = {
     "pipeline.health.profileChatgptOk": "ChatGPT profile OK",
     "pipeline.health.profileChatgptNo": "ChatGPT not configured",
     "pipeline.health.backendDown": "Cannot connect to backend.",
+    "pipeline.health.backendDownHint":
+      "You can still enter a link or pick a file — actions will be retried when the backend is back.",
     "pipeline.retry": "Retry",
+    "pipeline.retryUpload": "Retry upload",
+    "pipeline.pickDifferent": "Pick another file",
     "pipeline.sourceDouyin": "Douyin",
     "pipeline.sourceYoutube": "YouTube",
     "pipeline.sourceUpload": "Upload",
@@ -1222,6 +1236,11 @@ const dictionaries = {
     // UploadPage
     "upload.selectVideo": "Chọn file video",
     "upload.failed": "Upload thất bại",
+    "upload.backendDown":
+      "Không kết nối được backend. File của bạn vẫn được giữ — hãy thử lại khi backend hoạt động.",
+    "upload.retry": "Thử lại",
+    "upload.pickDifferent": "Chọn file khác",
+    "upload.cancel": "Huỷ",
     "upload.uploading": "Đang upload lên máy chủ...",
     "upload.release": "Thả để upload",
     "upload.drop": "Thả video vào đây",
@@ -1288,6 +1307,8 @@ const dictionaries = {
     // VideoPlayer
     "videoplayer.pause": "Tạm dừng",
     "videoplayer.play": "Phát",
+    "videoplayer.loadError": "Không tải được video — backend có thể đang tắt.",
+    "videoplayer.retry": "Thử lại",
 
     // TimelineCheckModal
     "timeline.loadError": "Không tải được phụ đề",
@@ -1483,6 +1504,9 @@ const dictionaries = {
     "pipeline.step.detail.youtube": "Đăng video lên YouTube kèm meta",
     "pipeline.status.queued": "Đang chờ",
     "pipeline.status.running": "Đang xử lý",
+    "pipeline.status.paused": "Tạm dừng",
+    "pipeline.pauseProcess": "Tạm dừng",
+    "pipeline.resumeProcess": "Tiếp tục",
     "pipeline.status.done": "Hoàn tất",
     "pipeline.status.error": "Lỗi",
     "pipeline.langZh": "Trung",
@@ -1523,7 +1547,11 @@ const dictionaries = {
     "pipeline.health.profileChatgptOk": "Đã có profile ChatGPT",
     "pipeline.health.profileChatgptNo": "ChatGPT chưa cấu hình",
     "pipeline.health.backendDown": "Không kết nối được backend.",
+    "pipeline.health.backendDownHint":
+      "Bạn vẫn có thể nhập link / chọn video — thao tác sẽ thử lại khi backend hoạt động.",
     "pipeline.retry": "Thử lại",
+    "pipeline.retryUpload": "Thử upload lại",
+    "pipeline.pickDifferent": "Chọn file khác",
     "pipeline.sourceDouyin": "Douyin",
     "pipeline.sourceYoutube": "YouTube",
     "pipeline.sourceUpload": "Upload",

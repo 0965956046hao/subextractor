@@ -13,7 +13,7 @@ from app.config import settings
 from app.services.paddle_ocr_engine import PaddleOCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
 from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation, profiles
-from app.worker import worker_loop
+from app.worker import supervise_workers
 
 import sys
 
@@ -67,20 +67,21 @@ async def lifespan(app: FastAPI):
     # it into rows so any other tab mirrors the exact same stage/%/steps.
     app.state.pipeline_states: dict = {}
 
-    # Spawn `job_workers` worker loops. A single loop consumes the queue
-    # sequentially, so multiple loops are what actually allow parallel jobs
-    # (the executor alone would not help). Default = 1 (unchanged behavior).
+    # Supervisor giữ đúng `job_workers` worker loop sống: worker chết lặng sẽ
+    # được tạo lại thay vì kẹt job queued vĩnh viễn (từng xảy ra, không traceback).
+    # A single loop consumes the queue sequentially, so multiple loops are what
+    # actually allow parallel jobs. Default = 1 (unchanged behavior).
     workers = [
         asyncio.create_task(
-            worker_loop(
+            supervise_workers(
                 app.state.jobs,
                 app.state.ws_clients,
                 ocr_engines,
                 app.state.job_queue,
                 app.state.pipeline_states,
+                max(1, settings.job_workers),
             )
         )
-        for _ in range(max(1, settings.job_workers))
     ]
 
     # Start Telegram polling if bot token is configured

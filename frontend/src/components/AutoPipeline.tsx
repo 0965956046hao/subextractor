@@ -167,6 +167,11 @@ const STATUS_META: Record<
     cls: "bg-danger-muted text-danger ring-danger/20",
     dot: "bg-danger",
   },
+  paused: {
+    labelKey: "pipeline.status.paused",
+    cls: "bg-white/[0.06] text-ink-muted ring-white/15",
+    dot: "bg-ink-light",
+  },
 };
 
 function fmtBytes(bytes: number): string {
@@ -288,13 +293,15 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     size: number;
   } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Giữ File gốc để retry khi backend rớt mạng mà không cần chọn lại file.
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
-  const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
+  const [dubVoice, setDubVoice] = useState("BV074_streaming_dsp");
   const [muteOriginal, setMuteOriginal] = useState(false);
   const [keepOriginalEnabled, setKeepOriginalEnabled] = useState(false);
-  const [originalGainDb, setOriginalGainDb] = useState(12);
+  const [originalGainDb, setOriginalGainDb] = useState(8);
   const [multiVoice, setMultiVoice] = useState(false);
   const [autoFitSubs, setAutoFitSubs] = useState(false);
   const [watermarkOn, setWatermarkOn] = useState(true);
@@ -304,7 +311,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [ytChannels, setYtChannels] = useState<YouTubeChannelInfo[]>([]);
   const [ytChannel, setYtChannel] = useState("");
   const [watermarkPreset, setWatermarkPreset] = useState("");
-  const [removeWmEnabled, setRemoveWmEnabled] = useState(false);
+  const [removeWmEnabled, setRemoveWmEnabled] = useState(true);
   const [removeWmRegions, setRemoveWmRegions] = useState<Region[]>([]);
   const [checkSubs, setCheckSubs] = useState(false);
   const [checkVoice, setCheckVoice] = useState(false);
@@ -325,6 +332,13 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Backend được coi là "down" khi health-check trả về service=server unhealthy.
+  // Dùng để hiển thị cảnh báo mềm — KHÔNG khóa input (người dùng vẫn nhập liệu được).
+  const isBackendDown =
+    !!health &&
+    !health.healthy &&
+    health.checks.some((c) => c.service === "server" && !c.healthy);
 
   const focusNewVideo = useCallback(() => {
     urlInputRef.current?.scrollIntoView({
@@ -631,10 +645,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const handleAdd = () => {
     const v = url.trim();
     if (!v) return;
-    if (!health?.healthy) {
-      checkHealth();
-      return;
-    }
+    // Không khóa UI khi backend down / thiếu config: vẫn cho tạo pipeline,
+    // job sẽ báo lỗi và retry được. Chỉ refresh health ngầm để banner cập nhật.
+    if (!health?.healthy) checkHealth();
     const id = addPipeline(
       v,
       regionMode,
@@ -668,19 +681,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     setTab("detail");
   };
 
-  const handleFile = async (file: File | null) => {
-    if (!file) return;
-    if (!health?.healthy) {
-      checkHealth();
-      return;
-    }
+  const doUpload = async (file: File) => {
     setUploading(true);
     setUploadProgress(0);
     setUploadError(null);
     try {
       const videoId = await uploadVideo(file, setUploadProgress, undefined, "pipeline");
       setUploaded({ videoId, name: file.name, size: file.size });
+      setPendingFile(null);
     } catch (e) {
+      // Giữ lại file để retry — không bắt chọn lại. Refresh health ngầm
+      // để banner backend-down cập nhật nếu nguyên nhân là mất kết nối.
+      checkHealth();
       setUploadError(
         e instanceof Error ? e.message : tr("pipeline.error.uploadFailed"),
       );
@@ -690,6 +702,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleFile = async (file: File | null) => {
+    if (!file) return;
+    // Không khóa upload khi backend down: vẫn cho chọn file và thử upload,
+    // lỗi sẽ hiển thị kèm nút retry (file được giữ lại).
+    setPendingFile(file);
+    await doUpload(file);
+  };
+
+  const handleRetryUpload = async () => {
+    if (pendingFile && !uploading) await doUpload(pendingFile);
   };
 
   const handleStartUpload = () => {
@@ -857,6 +881,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </li>
                     ))}
                   </ul>
+                  {isBackendDown && (
+                    <p className="mt-2 text-[11px] text-warn/70 leading-relaxed">
+                      {tr("pipeline.health.backendDownHint")}
+                    </p>
+                  )}
                 </div>
               ) : health?.healthy ? (
                 <div className="flex items-center gap-2 mb-4 rounded-xl bg-success-muted ring-1 ring-success/15 px-4 py-2.5">
@@ -915,21 +944,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                    disabled={!health?.healthy}
                     placeholder={
                       healthLoading
                         ? tr("pipeline.placeholder.checking")
-                        : health?.healthy
-                          ? sourceType === "youtube"
-                            ? tr("pipeline.placeholder.youtube")
-                            : tr("pipeline.placeholder.douyin")
-                          : tr("pipeline.placeholder.notConfigured")
+                        : sourceType === "youtube"
+                          ? tr("pipeline.placeholder.youtube")
+                          : tr("pipeline.placeholder.douyin")
                     }
-                    className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20"
                   />
                   <button
                     onClick={handleAdd}
-                    disabled={!url.trim() || !health?.healthy}
+                    disabled={!url.trim()}
                     className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <span className="tracking-tight">
@@ -994,21 +1020,36 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <p className="text-[13px] font-medium text-danger">
                         {tr("pipeline.error.uploadFailed")}
                       </p>
-                      <p className="text-[11px] text-danger/80 mt-1">
+                      <p className="text-[11px] text-danger/80 mt-1 break-words">
                         {uploadError}
                       </p>
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="mt-3 btn-ghost-danger bg-danger-muted"
-                      >
-                        {tr("pipeline.retry")}
-                      </button>
+                      {pendingFile && (
+                        <p className="text-[11px] text-danger/60 mt-1 truncate">
+                          {pendingFile.name} — {fmtBytes(pendingFile.size)}
+                        </p>
+                      )}
+                      <div className="mt-3 flex items-center gap-2 flex-wrap">
+                        {pendingFile && (
+                          <button
+                            onClick={handleRetryUpload}
+                            disabled={uploading}
+                            className="btn-island-primary text-[12px] !px-4 !py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {tr("pipeline.retryUpload")}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="btn-ghost-danger bg-danger-muted"
+                        >
+                          {tr("pipeline.pickDifferent")}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <button
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={!health?.healthy}
-                      className="w-full rounded-xl border border-dashed border-white/[0.14] bg-white/[0.03] px-4 py-6 text-[13px] text-ink-light hover:bg-white/[0.05] hover:text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center gap-2 cursor-pointer"
+                      className="w-full rounded-xl border border-dashed border-white/[0.14] bg-white/[0.03] px-4 py-6 text-[13px] text-ink-light hover:bg-white/[0.05] hover:text-ink transition-all flex flex-col items-center gap-2 cursor-pointer"
                     >
                       <svg
                         className="w-5 h-5"
@@ -1232,7 +1273,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             setPreviewUrl(null);
                             setPreviewError(false);
                             setDubVoice(
-                              l === "vi-VN" ? "BV421_vivn_streaming" : "",
+                              l === "vi-VN" ? "BV074_streaming_dsp" : "",
                             );
                           }}
                           className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${voiceLang === l
@@ -1957,7 +1998,7 @@ function PipelineRow({
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
-  const meta = STATUS_META[p.status] ?? STATUS_META.queued;
+  const meta = p.paused ? STATUS_META.paused : (STATUS_META[p.status] ?? STATUS_META.queued);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
     if (p.status === "error" && p.failedStep != null) {
@@ -2028,10 +2069,26 @@ function PipelineRow({
               {tr("pipeline.waiting")}
             </span>
           )}
-          {p.status === "running" && (
+          {p.status === "running" && !p.paused && (
             <span className="text-[10px] text-accent/80 flex items-center gap-1">
               <IconSpinner className="w-3 h-3" />
               {tr("pipeline.running")}
+            </span>
+          )}
+          {p.paused && (
+            <span className="text-[10px] text-ink-muted flex items-center gap-1">
+              <svg
+                className="w-3 h-3"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+              >
+                <rect x="6" y="4" width="4" height="16" rx="1" />
+                <rect x="14" y="4" width="4" height="16" rx="1" />
+              </svg>
+              {tr("pipeline.status.paused")}
             </span>
           )}
           <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
@@ -2080,6 +2137,50 @@ function PipelineRow({
       >
         {tr("pipeline.previewMediaBtn")}
       </button>
+      {(p.status === "running" || p.status === "queued") && !p.paused && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            usePipelineStore.getState().pausePipeline(p.id);
+          }}
+          title={tr("pipeline.pauseProcess")}
+          className="w-7 h-7 rounded-lg bg-white/[0.05] ring-1 ring-white/[0.09] text-ink-muted flex items-center justify-center hover:bg-white/[0.11] hover:text-ink transition-colors cursor-pointer flex-shrink-0"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          >
+            <rect x="6" y="4" width="4" height="16" rx="1" />
+            <rect x="14" y="4" width="4" height="16" rx="1" />
+          </svg>
+        </button>
+      )}
+      {p.paused && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            usePipelineStore.getState().resumePipeline(p.id);
+          }}
+          title={tr("pipeline.resumeProcess")}
+          className="w-7 h-7 rounded-lg bg-accent-muted text-accent flex items-center justify-center hover:bg-accent/20 transition-colors cursor-pointer flex-shrink-0"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polygon points="6 3 20 12 6 21 6 3" />
+          </svg>
+        </button>
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -2433,6 +2534,8 @@ function DetailView({
   const confirmThumbnailReview = usePipelineStore((s) => s.confirmThumbnailReview);
   const resolveThumbnailFallback = usePipelineStore((s) => s.resolveThumbnailFallback);
   const cancelPipeline = usePipelineStore((s) => s.cancelPipeline);
+  const pausePipeline = usePipelineStore((s) => s.pausePipeline);
+  const resumePipeline = usePipelineStore((s) => s.resumePipeline);
   const resolveTimelineCheck = usePipelineStore((s) => s.resolveTimelineCheck);
   const openTimelineCheck = usePipelineStore((s) => s.openTimelineCheck);
   const closeTimelineCheck = usePipelineStore((s) => s.closeTimelineCheck);
@@ -2517,6 +2620,22 @@ function DetailView({
             >
               {tr("pipeline.previewMediaBtn")}
             </button>
+            {(p.status === "running" || p.status === "queued") && !p.paused && (
+              <button
+                onClick={() => pausePipeline(p.id)}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
+              >
+                {tr("pipeline.pauseProcess")}
+              </button>
+            )}
+            {p.paused && (
+              <button
+                onClick={() => resumePipeline(p.id)}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
+              >
+                {tr("pipeline.resumeProcess")}
+              </button>
+            )}
             {(p.status === "running" || p.status === "queued") && (
               <button
                 onClick={() => setConfirmingCancel(true)}
