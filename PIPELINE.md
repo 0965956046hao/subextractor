@@ -106,7 +106,7 @@ Các bước 4-11 chạy tuần tự qua frontend sequential queue — chỉ 1 v
 | **Flow** | 1. Upload big_thumbs (ảnh ngữ cảnh) lên Gemini File Store |
 | | 2. Gọi Gemini Vision phân tích: thể loại, nhân vật, giọng nói, bối cảnh |
 | | 3. Lưu `context/{videoId}/context.txt` |
-| **Skip** | Nếu `translateOn=false` hoặc `sourceLang === translateTarget` |
+| **Skip** | Chỉ khi `context.txt` đã tồn tại (resume/rerun dùng lại, không tốn Gemini) |
 | **Output** | `context/{videoId}/context.txt` — mô tả video bằng text |
 
 ---

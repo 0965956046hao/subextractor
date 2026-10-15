@@ -20,7 +20,7 @@ from app.services.media_utils import (
     _get_duration,
     _merge_audio_path,
 )
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
 from app.services.translation_service import load_voice_map, generate_voice_map
 
@@ -495,6 +495,7 @@ def build_full_audio(
     progress_callback=None,
     log_fn=None,
     keep_ranges=None,
+    cancelled_cb=None,
 ) -> Path:
     """Gộp mp3 (theo SRT) + nhạc nền → 1 file full audio m4a.
 
@@ -614,6 +615,9 @@ def build_full_audio(
         background = instrumental
     cb(40)
 
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
+
     if tts_engine == "capcut":
         if multi_voice:
             voice_map = load_voice_map(video_id)
@@ -728,6 +732,8 @@ def build_full_audio(
                 log_fn=log_fn,
             )
         cb(75)
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
         _ensure_free_space(8.0, "gộp giọng (dub)")
         if log_fn:
             log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
@@ -739,6 +745,8 @@ def build_full_audio(
         if log_fn:
             log_fn("Đã gộp giọng nói hoàn chỉnh (full_voice.mp3).")
     cb(85)
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
 
     # Guard: the full voice track MUST exist before we mix it with the
     # background and mux into the video (auto-dub contract).
@@ -795,6 +803,7 @@ def dub_audio_only(
     progress_callback=None,
     log_fn=None,
     keep_ranges=None,
+    cancelled_cb=None,
 ) -> Path:
     """Separate vocals → synthesize Vietnamese TTS → mix into dubbed audio (no video merge)."""
     # Không tạo dubbed_video.mp4 nữa: bước hardcode đọc trực tiếp video gốc +
@@ -812,6 +821,7 @@ def dub_audio_only(
         progress_callback=progress_callback,
         log_fn=log_fn,
         keep_ranges=keep_ranges,
+        cancelled_cb=cancelled_cb,
     )
 
 
@@ -839,6 +849,9 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         def _log(msg: str, level: str = "info"):
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
+        def _cancelled() -> bool:
+            return bool(jobs.get(job_id, {}).get("cancelled"))
+
         out = dub_audio_only(
             video_id,
             voice_name=job.get("tts_voice", "vi-VN-Standard-B"),
@@ -849,7 +862,13 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             progress_callback=progress,
             log_fn=_log,
             keep_ranges=job.get("keep_ranges"),
+            cancelled_cb=_cancelled,
         )
+
+        # Pause có thể đến đúng lúc thread vừa xong việc nhưng chưa kịp ghi
+        # done — không ghi đè cancelled thành done.
+        if _cancelled():
+            raise JobCancelled()
 
         job["status"] = "done"
         job["progress"] = 100
@@ -858,6 +877,13 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "done", "progress": 100, "video_id": video_id,
         })
+    except JobCancelled:
+        logger.info("dub job %s: cancelled mid-pipeline", job_id)
+        job["status"] = "cancelled"
+        job["phase"] = ""
+        job_log_sync(loop, jobs, ws_clients, job_id, "Đã hủy lồng tiếng.", level="warn")
+        notify_ws_sync(loop, ws_clients, job_id, {"type": "cancelled"})
+        raise
     except Exception as e:
         logger.exception("dub failed")
         job["status"] = "error"

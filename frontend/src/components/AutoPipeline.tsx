@@ -2548,6 +2548,7 @@ function DetailView({
   const clearRemoveWmRegion = (id: string) => updatePipeline(id, { removeWatermarkRegions: [] });
   const logRef = useRef<HTMLDivElement>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [confirmingOcr, setConfirmingOcr] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
@@ -2555,7 +2556,10 @@ function DetailView({
     if (el) el.scrollTop = el.scrollHeight;
   }, [p.logs.length]);
 
-  const canRerun = p.status === "done" || p.status === "error";
+  // Cho chạy lại cả khi tạm dừng (vd dừng ở bước Dịch để quay về
+  // chạy lại bước Ngữ cảnh) — rerunPipeline đã tự vô hiệu runner cũ
+  // (bumpGen), gỡ pause và reset cascade nên an toàn từ trạng thái này.
+  const canRerun = p.status === "done" || p.status === "error" || p.paused;
 
   const previewUrl = p.resultUrl.replace("/api/download/", "/api/preview/");
 
@@ -2636,6 +2640,15 @@ function DetailView({
                 className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
               >
                 {tr("pipeline.resumeProcess")}
+              </button>
+            )}
+            {(p.status === "running" || p.status === "queued") && p.videoId && (
+              <button
+                onClick={() => setConfirmingOcr(true)}
+                title={tr("pipeline.forceOcrBody")}
+                className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-accent-muted text-accent ring-1 ring-accent/15 hover:bg-accent/15 transition-colors cursor-pointer"
+              >
+                {tr("pipeline.forceOcr")}
               </button>
             )}
             {(p.status === "running" || p.status === "queued") && (
@@ -3234,6 +3247,47 @@ function DetailView({
           </div>
         )}
       </div>
+
+      {confirmingOcr && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          onClick={() => setConfirmingOcr(false)}
+        >
+          <div
+            className="double-bezel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              animation: "scale-in 0.35s cubic-bezier(0.32,0.72,0,1) forwards",
+            }}
+          >
+            <div className="double-bezel-inner p-5 sm:p-6">
+              <p className="text-sm font-semibold text-ink mb-1">
+                {tr("pipeline.forceOcrTitle")}
+              </p>
+              <p className="text-[12px] text-ink-muted leading-relaxed mb-5">
+                {tr("pipeline.forceOcrBody")}
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setConfirmingOcr(false)}
+                  className="btn-island-secondary btn-sm"
+                >
+                  {tr("pipeline.noContinue2")}
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmingOcr(false);
+                    rerunPipeline(p.id, 4);
+                  }}
+                  className="btn-island-primary btn-sm"
+                >
+                  {tr("pipeline.confirmForceOcr")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmingCancel && (
         <div

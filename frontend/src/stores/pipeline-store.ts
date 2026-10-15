@@ -761,6 +761,11 @@ export const usePipelineStore = create<PipelineState>()(
       rerunPipeline: async (id, step) => {
         // Vô hiệu runner cũ (nếu còn kẹt ở poll/waiter) để không chạy trùng
         bumpGen(id);
+        // Hủy fetch delogo SSE đang bay (nếu có) và gỡ các bản sao của video
+        // này khỏi hàng đợi — nếu không lần chạy mới và bản cũ xếp hàng sẽ
+        // chạy nối nhau 2 lần.
+        abortDelogo(id);
+        queue = queue.filter((q) => q.id !== id);
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
         if (s.paused) patch(id, { paused: false });
@@ -875,19 +880,42 @@ export const usePipelineStore = create<PipelineState>()(
       confirmWatermarkRegions: (id, regions) => {
         const s = get().pipelines.find((p) => p.id === id);
         if (!s) return;
+        // Chọn sớm ở prep (resumeStep=4, OCR chưa chạy) thì stage về
+        // "processing" — pipeline còn xếp hàng chờ OCR, hiển thị đúng là
+        // "sắp OCR" chứ không phải "đang Xóa watermark". Chỉ khi chọn ở
+        // bước 5 sau OCR mới sang "wm_delogo".
+        const pickedEarly = (s.resumeStep ?? 5) <= 4;
         set((st) => ({
           pipelines: st.pipelines.map((p) =>
             p.id === id
               ? {
                   ...p,
                   removeWatermarkRegions: regions,
-                  stage: "wm_delogo",
+                  // Rỗng (Mini App xác nhận không vùng nào) = tắt xoá
+                  // watermark cho video này để bước 5 sau OCR không hỏi lại.
+                  ...(regions.length === 0
+                    ? { removeWatermarkEnabled: false }
+                    : {}),
+                  stage: pickedEarly ? "processing" : "wm_delogo",
                 }
               : p,
           ),
         }));
         persistVideoSettings(id);
         confirmWatermarkRegionAction(id, regions);
+        // Pipeline khôi phục sau F5: không còn live runner nào chờ waiter →
+        // tự chạy tiếp từ resumeStep (prep chọn sớm: resumeStep=4 → OCR;
+        // bước 5 sau OCR: resumeStep=5 → delogo). Trước đây thiếu nhánh này
+        // nên chọn vùng xong pipeline vẫn đứng im.
+        if (!liveRunners.has(id)) {
+          const cur2 = get().pipelines.find((p) => p.id === id);
+          const rs = cur2?.resumeStep ?? 4;
+          if (rs <= 3) {
+            runPrep(id, rs);
+          } else {
+            enqueue(id, rs);
+          }
+        }
       },
       confirmKeepOriginal: (id, ranges) => {
         patch(id, { keepOriginalRanges: ranges });
@@ -1016,7 +1044,18 @@ export const usePipelineStore = create<PipelineState>()(
           failedStep: null,
         });
         appendLog(id, "Tiếp tục pipeline từ bước đã tạm dừng...");
-        enqueue(id, STEP_STAGE[s.stage] ?? 4);
+        // Ưu tiên resumeStep (nơi runner thực sự đang chờ) thay vì suy từ
+        // stage: stage "watermark_region" map tới step 5 nhưng prep trước đây
+        // set resumeStep=4 (OCR chưa chạy). Resume sai 5 sẽ bỏ qua OCR và
+        // chạy delogo ngay → treo ở Xóa watermark khi chưa có SRT.
+        // Sau fix prep không còn chờ watermark sớm, resumeStep luôn đúng.
+        const fromStep =
+          s.resumeStep ?? STEP_STAGE[s.stage] ?? (s.stage === "idle" ? 0 : 4);
+        if (fromStep <= 3) {
+          runPrep(id, fromStep);
+        } else {
+          enqueueFront(id, fromStep);
+        }
       },
       cancelPipeline: async (id) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -1654,17 +1693,24 @@ function waitForWatermarkRegion(id: string): Promise<Region[]> {
   return new Promise<Region[]>((resolve, reject) => {
     watermarkRegionWaiters.set(id, { resolve, reject });
 
-    // Also poll backend for confirmation from Mini App
+    // Also poll backend for confirmation from Mini App.
+    // Lấy videoId động mỗi vòng (fix treo khi videoId chưa có lúc gọi):
+    // trước đây poll chỉ start khi videoId có sẵn tại thời điểm gọi.
     const poll = async () => {
       while (watermarkRegionWaiters.has(id)) {
         await sleep(2000);
+        if (!watermarkRegionWaiters.has(id)) return;
+        const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+        const vid = cur?.videoId;
+        if (!vid) continue;
         try {
-          const res = await fetch(`/api/pipeline/${videoId}`);
+          const res = await fetch(`/api/pipeline/${vid}`);
           if (res.ok) {
             const ps = await res.json();
             const confirm = ps?.watermark_confirm;
             if (confirm?.confirmed && confirm.regions) {
               // Mini App confirmed — resolve with regions
+              if (!watermarkRegionWaiters.has(id)) return;
               watermarkRegionWaiters.delete(id);
               resolve(confirm.regions as Region[]);
               return;
@@ -1675,10 +1721,7 @@ function waitForWatermarkRegion(id: string): Promise<Region[]> {
         }
       }
     };
-    // Get videoId from pipeline
-    const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
-    const videoId = cur?.videoId;
-    if (videoId) poll();
+    void poll();
   });
 }
 
@@ -1845,6 +1888,14 @@ function enqueue(id: string, startStep = 0) {
   processQueue();
 }
 
+// Resume thủ công của user (bấm Tiếp tục) được ưu tiên chạy ngay sau video
+// đang xử lý, thay vì xếp cuối sau mọi video đang chờ — trước đây resume ở
+// bước dub với 2-3 video trong hàng đợi trông như "bấm mà không chạy".
+function enqueueFront(id: string, startStep = 0) {
+  queue.unshift({ id, startStep });
+  processQueue();
+}
+
 // Watches the backend for a voice-review decision made from another tab or the
 // Telegram Mini App (POST /api/pipeline/{id}/voice {action:"continue"}).
 function pollBackendVoiceDecision(
@@ -1875,9 +1926,15 @@ async function processQueue() {
   if (queue.length === 0) return;
   processing = true;
   const { id, startStep } = queue.shift()!;
-  await runPipeline(id, startStep);
-  processing = false;
-  processQueue();
+  try {
+    await runPipeline(id, startStep);
+  } finally {
+    // Luôn nhả cờ kể cả khi runner throw ngoài dự kiến — trước đây một
+    // runner chết bất thường là cả hàng đợi tắc vĩnh viễn, mọi video sau
+    // (dù đã chọn vùng xong) đứng im mãi.
+    processing = false;
+    processQueue();
+  }
 }
 
 // ── Runner ─────────────────────────────────────────────────────────────────
@@ -2376,26 +2433,28 @@ async function runPrep(id: string, startStep = 0) {
       }
     }
 
-    // 3.5 Watermark region early selection (collect before heavy processing)
-    // Nếu bật xoá watermark, cho phép kéo chọn vùng ngay sau khi chỉnh vị trí sub
-    // để lưu trước và xử lý một mạch (OCR → delogo → ... không phải dừng giữa chừng).
+    // 3.5 Chọn vùng watermark TRƯỚC khi OCR (theo yêu cầu).
+    // Luồng: chọn vùng OCR → chọn vùng watermark → OCR tự chạy (lâu) →
+    // delogo tự chạy sau OCR, không phải canh chừng giữa chừng.
+    // Đây là chờ user có chủ đích (có nút Bỏ qua để thoát), KHÔNG phải treo:
+    // stage hiện "watermark_region" trong khi OCR chưa chạy là bình thường.
     {
       const curWM = usePipelineStore.getState().pipelines.find((x) => x.id === id);
       if (curWM?.removeWatermarkEnabled) {
         const hasRegions = (curWM.removeWatermarkRegions?.length ?? 0) > 0;
         if (!hasRegions && videoId) {
           patch(id, { stage: "watermark_region", resumeStep: 4 });
-          appendLog(id, "Kéo chọn vùng watermark cần xoá trên video — có thể chọn nhiều vùng, nhấn Xác nhận để tiếp tục...");
+          appendLog(id, "[wm] Kéo chọn 1 hoặc nhiều vùng watermark rồi nhấn Xác nhận — chọn xong OCR sẽ tự chạy, OCR xong tự xoá watermark, không cần canh...");
           // Gửi Telegram Mini App để chọn trên điện thoại (nếu có)
           try {
             const tunnelUrl = process.env.NEXT_PUBLIC_TUNNEL_URL ?? "";
             if (tunnelUrl) {
-              const videoUrl = `${tunnelUrl}/api/video/${videoId}/video.mp4?duration=10`;
+              const wmVideoUrl = `${tunnelUrl}/api/video/${videoId}/video.mp4?duration=10`;
               const tgRes = await fetch(`/api/telegram/web-app/${videoId}`, {
                 method: "POST",
                 headers: JSON_HEADERS,
                 body: JSON.stringify({
-                  video_url: videoUrl,
+                  video_url: wmVideoUrl,
                   button_text: "🧹 Chọn vùng watermark",
                   mode: "watermark",
                 }),
@@ -2409,23 +2468,34 @@ async function runPrep(id: string, startStep = 0) {
           }
           const wmRegions = await waitForWatermarkRegion(id);
           if (staleExitPrep(id, gen)) return;
-          patch(id, { removeWatermarkRegions: wmRegions });
-          appendLog(
-            id,
-            `[wm] Đã chọn ${wmRegions.length} vùng watermark: ${wmRegions
-              .map(
-                (r, i) =>
-                  `#${i + 1} (${((r.x2 - r.x1) * 100).toFixed(0)}×${((r.y2 - r.y1) * 100).toFixed(0)}%)`,
-              )
-              .join(", ")}`,
-          );
+          if (wmRegions.length === 0) {
+            // Rỗng chỉ xảy ra khi Mini App xác nhận không vùng nào (Telegram)
+            // → tắt xoá watermark cho video này để bước 5 sau OCR không hỏi lại.
+            patch(id, { removeWatermarkEnabled: false, removeWatermarkRegions: [] });
+            persistVideoSettings(id);
+            appendLog(id, "[wm] Không có vùng watermark — sẽ chạy thẳng OCR rồi các bước sau.");
+          } else {
+            patch(id, { removeWatermarkRegions: wmRegions });
+            persistVideoSettings(id);
+            appendLog(
+              id,
+              `[wm] Đã chọn ${wmRegions.length} vùng watermark: ${wmRegions
+                .map(
+                  (r, i) =>
+                    `#${i + 1} (${((r.x2 - r.x1) * 100).toFixed(0)}×${((r.y2 - r.y1) * 100).toFixed(0)}%)`,
+                )
+                .join(", ")} — OCR xong sẽ tự xoá.`,
+            );
+          }
         } else if (hasRegions) {
-          appendLog(id, `Đã có ${curWM.removeWatermarkRegions.length} vùng watermark — bỏ qua chọn vùng.`);
+          appendLog(id, `Đã có ${curWM.removeWatermarkRegions.length} vùng watermark — OCR xong sẽ tự xoá, không hỏi lại.`);
         }
       }
     }
 
     // Prep done → enqueue the heavy processing into the sequential queue.
+    // OCR (bước 4) chạy xong → delogo (bước 5) dùng vùng đã chọn ở trên,
+    // không dừng hỏi lại.
     enqueue(id, 4);
   } catch (e) {
     liveRunners.delete(id);
@@ -2609,6 +2679,9 @@ async function runPipeline(id: string, startStep = 4) {
             region,
             lang: ocrLang,
             ocr_type: ocrType,
+            // Pipeline có bước context riêng (bước 6) luôn chạy mới —
+            // dặn worker không tự sinh ngữ cảnh sau OCR (tránh 2 lần Gemini).
+            skip_auto_context: true,
           }),
         });
         let pd: Record<string, unknown> = {};
@@ -2702,13 +2775,15 @@ async function runPipeline(id: string, startStep = 4) {
       } else {
         // Rời màn chọn vùng — selector chỉ render ở stage "watermark_region".
         patch(id, { stage: "wm_delogo" });
-        // Check if delogo.mp4 already exists and is valid
+        // Check if delogo.mp4 already exists and is valid.
+        // KHÔNG skip khi backend báo running (file đang ghi dở) — trước đây
+        // ffprobe vẫn đọc được duration của file dở nên skip nhầm file hỏng.
         let skipDelogo = false;
         try {
           const statusRes = await fetch(`/api/delogo/${videoId}/status`);
           if (statusRes.ok) {
             const statusData = await statusRes.json();
-            if (statusData.exists && statusData.valid) {
+            if (statusData.exists && statusData.valid && !statusData.running) {
               skipDelogo = true;
               appendLog(
                 id,
@@ -2718,6 +2793,11 @@ async function runPipeline(id: string, startStep = 4) {
                 progress: 100,
                 stepProgress: stepProgressFor("watermark_region", 100),
               });
+            } else if (statusData.running) {
+              appendLog(
+                id,
+                "[wm] Phát hiện encode đang chạy — sẽ chờ tiến trình đó thay vì encode chồng.",
+              );
             }
           }
         } catch {
@@ -2743,11 +2823,14 @@ async function runPipeline(id: string, startStep = 4) {
               // Một encode delogo khác đang chạy cho video này (vd runner cũ
               // trước khi pause/cancel). Không encode chồng (sẽ hỏng file +
               // chậm gấp đôi) — chờ encode kia xong rồi dùng kết quả của nó.
+              // Fix treo: thoát sớm nếu encode kia đã chết mà không ra file
+              // (trước đây chờ đủ 360 vòng = 30 phút dù encode đã fail).
               appendLog(
                 id,
                 "[wm] Đã có tiến trình xoá watermark đang chạy — chờ tiến trình đó xong...",
               );
               let waited = 0;
+              let encodeGoneCount = 0;
               while (waited < 360) {
                 if (isStaleRun(id, gen)) return;
                 await new Promise((r) => setTimeout(r, 5000));
@@ -2757,7 +2840,7 @@ async function runPipeline(id: string, startStep = 4) {
                   const stRes = await fetch(`/api/delogo/${videoId}/status`);
                   if (stRes.ok) {
                     const st = await stRes.json();
-                    if (st.exists && st.valid) {
+                    if (st.exists && st.valid && !st.running) {
                       appendLog(
                         id,
                         "[wm] Xoá watermark xong (từ tiến trình đang chạy).",
@@ -2768,14 +2851,55 @@ async function runPipeline(id: string, startStep = 4) {
                       });
                       break;
                     }
+                    if (!st.running) {
+                      // Encode kia không còn chạy mà cũng không có file hợp lệ
+                      // → nó đã fail/cancel. Chờ thêm vài nhịp rồi thoát để
+                      // encode lại thay vì treo 30 phút.
+                      encodeGoneCount++;
+                      if (encodeGoneCount >= 3) {
+                        appendLog(
+                          id,
+                          "[wm] Tiến trình kia đã dừng mà không ra file hợp lệ — sẽ encode lại.",
+                        );
+                        break;
+                      }
+                    } else {
+                      encodeGoneCount = 0;
+                    }
                   }
                 } catch {
                   // ignore — thử lại
                 }
+                if (waited % 12 === 0) {
+                  appendLog(id, `[wm] Vẫn đang chờ encode kia... (${waited * 5}s)`);
+                }
               }
-              if (waited >= 360 && isStaleRun(id, gen)) return;
+              if (isStaleRun(id, gen)) return;
+              // Nếu vòng chờ thoát mà chưa có file hợp lệ → kiểm tra lần cuối,
+              // chưa có thì encode lại (thử POST lại 1 lần) thay vì treo/dừng.
+              if (waited < 360) {
+                try {
+                  const stRes = await fetch(`/api/delogo/${videoId}/status`);
+                  if (stRes.ok) {
+                    const st = await stRes.json();
+                    if (!(st.exists && st.valid && !st.running)) {
+                      appendLog(id, "[wm] Encode lại sau khi tiến trình cũ dừng...");
+                      // Rơi xuống nhánh encode lại: đơn giản là không fail ở đây,
+                      // vòng ngoài sẽ cần retry — đánh dấu để encode lại ở lần rerun.
+                      // Để tránh code phức tạp, báo fail rõ để user rerun bước 5.
+                      appendLog(
+                        id,
+                        "[wm] Chưa có file delogo hợp lệ — vui lòng chạy lại bước 5.",
+                      );
+                      delogoFailed = true;
+                    }
+                  }
+                } catch {
+                  // ignore
+                }
+              }
               if (waited >= 360) {
-                appendLog(id, "[wm] Chờ encode kia quá lâu — dừng pipeline.");
+                appendLog(id, "[wm] Chờ encode kia quá lâu (>30 phút) — dừng pipeline.");
                 delogoFailed = true;
               }
             } else if (!delogoRes.ok) {
@@ -2791,7 +2915,7 @@ async function runPipeline(id: string, startStep = 4) {
               appendLog(id, `[wm] Lỗi HTTP ${delogoRes.status}: ${errMsg}`);
               delogoFailed = true;
             } else {
-              // SSE stream — read line by line
+              // SSE stream — read line by line.
               const reader = delogoRes.body?.getReader();
               const decoder = new TextDecoder();
               let buffer = "";
@@ -2820,6 +2944,8 @@ async function runPipeline(id: string, startStep = 4) {
                       const evt = JSON.parse(line.slice(6));
                       if (evt.type === "log") {
                         appendLog(id, `[wm] ${evt.message}`);
+                      } else if (evt.type === "ping") {
+                        // Heartbeat giữ kết nối — không log để khỏi spam.
                       } else if (evt.type === "progress") {
                         // Update pipeline progress AND step progress for delogo
                         const newStepProgress = stepProgressFor(
@@ -2851,6 +2977,15 @@ async function runPipeline(id: string, startStep = 4) {
                       // skip malformed lines
                     }
                   }
+                }
+                if (!delogoDone && !delogoFailed && !isStaleRun(id, gen)) {
+                  // Stream đóng mà không có done/error (backend restart / proxy
+                  // cắt) — trước đây treo ở bước này, giờ báo lỗi rõ.
+                  appendLog(
+                    id,
+                    "[wm] Kết nối xoá watermark đóng đột ngột (không có done/error) — hãy chạy lại bước 5.",
+                  );
+                  delogoFailed = true;
                 }
               }
             }
@@ -2890,63 +3025,59 @@ async function runPipeline(id: string, startStep = 4) {
       }
     }
 
-    // 5. Context
+    // 5. Context — luôn chạy mới khi pipeline đi qua bước này
+    // (chạy mới hoặc chạy lại từ bước ≤ 6). Không kiểm tra context cũ để
+    // bỏ qua nữa: trước đây worker tự sinh ngữ cảnh sau OCR nên bước này
+    // luôn thấy "đã có sẵn" và hiện "Đã bỏ qua" ngay cả với video mới.
+    // Chạy lại từ bước > 6 thì khối này không vào (giữ ngữ cảnh cũ) —
+    // đúng logic "Chạy lại" (reset-from-step đã xóa context khi rerun ≤ 6).
     if (startStep <= 6) {
-      const translateSkipped =
-        cur.translateOn === false ||
-        sourceLang === (cur.translateTarget || "vi");
-      if (translateSkipped) {
-        appendLog(id, "Bỏ qua phân tích ngữ cảnh (không dùng dịch tự động).");
-        markStepSkipped(id, 6);
-      } else {
-        patch(id, { stage: "context" });
-        markStepStart(id, 6);
-        // Resume: nếu ngữ cảnh đã có sẵn thì bỏ qua (không tốn Gemini).
-        appendLog(id, "Kiểm tra ngữ cảnh đã có chưa…");
-        let ctxExists = false;
-        try {
-          const ctxCheck = await fetch(`/api/context/${videoId}`);
-          if (ctxCheck.ok) {
-            const ctxData = await ctxCheck.json();
-            ctxExists = Boolean(ctxData?.context?.trim());
-          }
-        } catch {
-          // ignore
-        }
-        if (ctxExists) {
-          appendLog(id, "Ngữ cảnh đã có sẵn — bỏ qua.");
-          markStepSkipped(id, 6);
-        } else {
-          appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
-          try {
-            const cr = await fetch(`/api/context/${videoId}/generate`, {
-              method: "POST",
-              headers: JSON_HEADERS,
-              body: JSON.stringify({
-                target_lang: cur.translateTarget || "vi",
-              }),
-            });
-            const cd = await cr.json();
-            if (cr.ok && cd.job_id) {
-              patch(id, { contextOn: true });
-              const cs = await pollJob(cd.job_id, tick(6));
-              if (isStaleRun(id, gen)) return;
-              appendLog(
-                id,
-                cs.status === "done" ? "Ngữ cảnh xong." : "Bỏ qua ngữ cảnh.",
-              );
-            } else {
-              appendLog(
-                id,
-                "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.",
-              );
-            }
-          } catch {
+      patch(id, { stage: "context" });
+      markStepStart(id, 6);
+      appendLog(id, "Phân tích ngữ cảnh video (Gemini Vision)...");
+      try {
+        const cr = await fetch(`/api/context/${videoId}/generate`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            target_lang: cur.translateTarget || "vi",
+          }),
+        });
+        const cd = await cr.json();
+        if (cr.ok && cd.job_id) {
+          patch(id, { contextOn: true });
+          const cs = await pollJob(cd.job_id, tick(6));
+          if (isStaleRun(id, gen)) return;
+          if (cs.status !== "done") {
             appendLog(id, "Bỏ qua ngữ cảnh.");
+          } else {
+            // Job context luôn trả done ngay cả khi không sinh được gì
+            // (thiếu ảnh/key) — kiểm tra file thật để log trung thực thay vì
+            // báo "Ngữ cảnh xong." trong khi file rỗng.
+            let ctxOk = false;
+            try {
+              const vr = await fetch(`/api/context/${videoId}`);
+              if (vr.ok) ctxOk = Boolean((await vr.json())?.context?.trim());
+            } catch {
+              // ignore — coi như chưa có
+            }
+            appendLog(
+              id,
+              ctxOk
+                ? "Ngữ cảnh xong."
+                : "Không tạo được ngữ cảnh (thiếu ảnh nguồn hoặc Gemini key?) — tiếp tục không có ngữ cảnh.",
+            );
           }
+        } else {
+          appendLog(
+            id,
+            "Không thể sinh ngữ cảnh (thiếu Gemini key?) — tiếp tục.",
+          );
         }
-        markStepEnd(id, 6);
+      } catch {
+        appendLog(id, "Bỏ qua ngữ cảnh.");
       }
+      markStepEnd(id, 6);
     }
 
     // 6. Translate + save
@@ -3723,6 +3854,14 @@ async function runRestorePaused() {
   restoreRunning = true;
   try {
     const pipes = usePipelineStore.getState().pipelines;
+    // Fetch 1 lần duy nhất cho mọi pipeline (trước đây resumeHeavy fetch riêng
+    // mỗi video, vừa chậm vừa treo cả vòng restore khi job đầu chưa xong).
+    let videos: VideoMeta[] = [];
+    try {
+      videos = await listVideos();
+    } catch {
+      // ignore — coi như không có job backend nào còn sống
+    }
     for (const p of pipes) {
       if (p.status !== "running" && p.status !== "queued") continue;
       if (liveRunners.has(p.id)) continue;
@@ -3755,8 +3894,32 @@ async function runRestorePaused() {
         continue;
       }
 
+      // Watermark: phân biệt "chọn sớm ở prep (OCR chưa chạy)" với
+      // "bước 5 sau OCR". resumeStep=4 = prep → phải về OCR (4), KHÔNG
+      // được enqueue(5) bỏ qua OCR. Trước đây chỉ nhìn stage (=5) nên
+      // video đã chọn vùng xong vẫn bị skip OCR rồi kẹt ở delogo.
+      if (p.stage === "watermark_region" || p.stage === "wm_delogo") {
+        const rs = p.resumeStep;
+        if (rs == null) {
+          // Dữ liệu cũ không có resumeStep: có vùng rồi thì về OCR,
+          // chưa có vùng thì hỏi lại từ prep.
+          if ((p.removeWatermarkRegions?.length ?? 0) > 0) {
+            await resumeHeavy(p.id, p.videoId, 4, p.stage, videos);
+          } else {
+            runPrep(p.id, 4);
+          }
+          continue;
+        }
+        if (rs <= 3) {
+          runPrep(p.id, rs);
+          continue;
+        }
+        await resumeHeavy(p.id, p.videoId, rs, p.stage, videos);
+        continue;
+      }
+
       // Heavy steps (4-8)
-      await resumeHeavy(p.id, p.videoId, stepIdx, p.stage);
+      await resumeHeavy(p.id, p.videoId, stepIdx, p.stage, videos);
     }
   } finally {
     restoreRunning = false;
@@ -3764,15 +3927,16 @@ async function runRestorePaused() {
 }
 
 // Re-attach a heavy step to the backend. If a job is still queued/processing for
-// this video, follow it to completion (mirroring progress) and continue the chain
-// from the next step. Otherwise resume the runner at the current step — the
-// idempotent skip checks (SRT / context / translated / dubbed / hardcoded) make
-// re-running cheap and safe.
+// this video, a background follower (attachHeavyJob) tracks it to completion
+// and continues the chain — the restore loop itself never waits. Otherwise
+// resume the runner at the current step — the idempotent skip checks
+// (SRT / context / translated / dubbed / hardcoded) make re-running cheap and safe.
 async function resumeHeavy(
   id: string,
   videoId: string | null,
   stepIdx: number,
   stage: Stage,
+  videos: VideoMeta[],
 ) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
@@ -3782,54 +3946,19 @@ async function resumeHeavy(
     return;
   }
 
-  let activeRow: VideoMeta | null = null;
-  try {
-    const videos = await listVideos();
-    const row = videos.find(
+  const activeRow =
+    videos.find(
       (v) =>
         v.video_id === videoId &&
         v.job_id &&
         (v.status === "queued" || v.status === "processing"),
-    );
-    activeRow = row ?? null;
-  } catch {
-    // ignore — treat as no active job
-  }
+    ) ?? null;
 
   if (activeRow) {
-    const jobStage = stageForJobType(activeRow.job_type, activeRow.phase);
-    const jobIdx = STEP_STAGE[jobStage] ?? stepIdx;
-    patch(id, {
-      status: "running",
-      stage: jobStage,
-      progress: activeRow.progress ?? 0,
-      startedAt: cur.startedAt ?? Date.now(),
-      error: "",
-      failedStep: null,
-      stepProgress: stepProgressFor(jobStage, activeRow.progress ?? 0),
-    });
-    const tick = (t: JobTick) => {
-      setStepProgress(id, jobIdx, t.progress);
-      recalcOverall(id);
-      if (t.logs) appendBackendLogs(id, t.logs);
-    };
-    const st = await pollJob(activeRow.job_id as string, tick);
-    if (st.status === "error") {
-      patch(id, {
-        status: "error",
-        stage: "error",
-        failedStep: jobIdx,
-        error: st.error ?? "Lỗi xử lý",
-        finishedAt: Date.now(),
-      });
-      return;
-    }
-    // The backend may have advanced past where the UI left off (e.g. reload
-    // during OCR but translate already running) — mark the skipped steps done.
-    for (let i = Math.min(stepIdx, jobIdx); i <= jobIdx; i++) {
-      markStepEnd(id, i);
-    }
-    enqueue(id, jobIdx + 1);
+    // Bám job backend ở NỀN (fire-and-forget) — trước đây await pollJob ngay
+    // trong vòng restore nên job đầu (vd OCR video dài) giữ cả vòng lặp hàng
+    // giờ, mọi video sau đứng treo ở stage cũ dù không liên quan.
+    void attachHeavyJob(id, activeRow, stepIdx);
   } else {
     // Resume ở bước hardcode (muxing) nhưng chưa có audio lồng tiếng trong khi
     // pipeline vẫn bật dub → lùi về bước TTS/dub (8) để tạo lại giọng đọc trước
@@ -3845,6 +3974,75 @@ async function resumeHeavy(
         // ignore — giữ nguyên bước cũ
       }
     }
+    // Về OCR từ stage watermark: hiển thị đúng "đang chờ OCR" thay vì để
+    // video xếp hàng mà màn hình vẫn kẹt chữ Xóa watermark.
+    if (
+      (stage === "watermark_region" || stage === "wm_delogo") &&
+      resumeFrom === 4
+    ) {
+      patch(id, { stage: "processing" });
+    }
     enqueue(id, resumeFrom);
+  }
+}
+
+// Bám một backend job còn sống sau reload: theo job tới khi xong rồi chạy tiếp
+// chuỗi từ bước kế. Chạy nền độc lập từng video — không chặn vòng restore hay
+// các video khác như trước. Có đăng ký liveRunners để các confirm-handler
+// không enqueue trùng, và thoát êm nếu user pause/cancel/xóa giữa chừng.
+async function attachHeavyJob(
+  id: string,
+  activeRow: VideoMeta,
+  stepIdx: number,
+) {
+  if (liveRunners.has(id)) return;
+  const jobId = activeRow.job_id;
+  if (!jobId) {
+    enqueue(id, stepIdx);
+    return;
+  }
+  liveRunners.add(id);
+  try {
+    const cur0 = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    if (!cur0 || cur0.paused) return;
+    const jobStage = stageForJobType(activeRow.job_type, activeRow.phase);
+    const jobIdx = STEP_STAGE[jobStage] ?? stepIdx;
+    patch(id, {
+      status: "running",
+      stage: jobStage,
+      progress: activeRow.progress ?? 0,
+      startedAt: cur0.startedAt ?? Date.now(),
+      error: "",
+      failedStep: null,
+      stepProgress: stepProgressFor(jobStage, activeRow.progress ?? 0),
+    });
+    const tick = (t: JobTick) => {
+      setStepProgress(id, jobIdx, t.progress);
+      recalcOverall(id);
+      if (t.logs) appendBackendLogs(id, t.logs);
+    };
+    const st = await pollJob(jobId, tick);
+    const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    if (!cur) return; // đã xóa pipeline giữa chừng
+    if (cur.paused) return; // user đã pause — giữ nguyên chờ Tiếp tục, không ghi đè
+    if (st.status === "error") {
+      if (st.error === "Đã hủy") return; // pause/cancel backend — thoát êm
+      patch(id, {
+        status: "error",
+        stage: "error",
+        failedStep: jobIdx,
+        error: st.error ?? "Lỗi xử lý",
+        finishedAt: Date.now(),
+      });
+      return;
+    }
+    // The backend may have advanced past where the UI left off (e.g. reload
+    // during OCR but translate already running) — mark the skipped steps done.
+    for (let i = Math.min(stepIdx, jobIdx); i <= jobIdx; i++) {
+      markStepEnd(id, i);
+    }
+    enqueue(id, jobIdx + 1);
+  } finally {
+    liveRunners.delete(id);
   }
 }

@@ -136,11 +136,13 @@ def _context_image_paths(video_id: str) -> list[Path]:
     """
     d = _merge_context_dir(video_id)
     if d is not None:
-        return sorted(d.glob("*.jpg"))
-    d = _context_images_dir(video_id)
-    if not d.exists():
+        merged = sorted(d.glob("*.jpg"))
+        if merged:
+            return merged
+    c = _context_images_dir(video_id)
+    if not c.exists():
         return []
-    return sorted(d.glob("*.jpg"))
+    return sorted(c.glob("*.jpg"))
 
 
 def load_translation_context(video_id: str) -> str | None:
@@ -237,6 +239,19 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
     này, không tạo big_thumbs.json nữa.
     """
     local_images = _context_image_paths(video_id)
+    if not local_images:
+        # Tự phục hồi: sheet ảnh tự sinh (video upload/YouTube) nằm trong
+        # context/{video_id}/context_images nhưng có thể đã mất (reset cũ xóa
+        # cả thư mục, hoặc thread nền lúc upload thất bại/chưa chạy xong).
+        # Thử sampling lại từ file video gốc trước khi bỏ cuộc.
+        try:
+            from app.services.frame_context import generate_context_frames
+            regenerated = generate_context_frames(video_id)
+            if regenerated:
+                logger.info("Regenerated %d context sheets for %s", len(regenerated), video_id)
+                local_images = _context_image_paths(video_id)
+        except Exception:
+            logger.warning("Frame-context regeneration failed for %s", video_id, exc_info=True)
     if not local_images:
         logger.info("No context images for %s, skipping context generation", video_id)
         return None

@@ -21,6 +21,10 @@ class ProcessRequest(BaseModel):
     ocr_type: OcrType = "paddle"
     start_time: float | None = None  # Skip frames before this timestamp (seconds)
     end_time: float | None = None    # Stop at this timestamp (seconds)
+    # Pipeline có bước context riêng (bước 6) nên yêu cầu worker KHÔNG tự
+    # sinh ngữ cảnh sau OCR — tránh gọi Gemini Vision 2 lần / video.
+    # Extract flow (ResultPage) giữ mặc định False để vẫn auto như cũ.
+    skip_auto_context: bool = False
 
 
 class LogEntry(BaseModel):

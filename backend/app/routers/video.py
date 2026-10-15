@@ -455,9 +455,32 @@ async def reset_video_from_step(video_id: str, body: dict):
             continue
         for name in names:
             d = settings.temp_dir / name / video_id
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
-                removed.append(name)
+            if not d.exists():
+                continue
+            if name == "context":
+                # context/ chứa cả nguyên liệu nguồn (context_images sample từ
+                # video, thumbnail, share_text) lẫn output (context.txt,
+                # gemini_files.json, translation_context). Chỉ xóa output để
+                # sinh mới; giữ nguyên liệu — xóa cả thư mục sẽ làm video
+                # upload/YouTube mất sheet ảnh và lần sinh sau luôn rỗng
+                # ("Không tìm thấy ảnh ngữ cảnh để phân tích").
+                from app.services.context_service import (
+                    CONTEXT_FILE_NAME,
+                    FILES_INDEX_NAME,
+                    TRANSLATION_CONTEXT_NAME,
+                )
+                for fname in (CONTEXT_FILE_NAME, FILES_INDEX_NAME, TRANSLATION_CONTEXT_NAME):
+                    f = d / fname
+                    if f.exists():
+                        try:
+                            f.unlink()
+                            if "context" not in removed:
+                                removed.append("context")
+                        except Exception:
+                            pass
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            removed.append(name)
 
     # Bước 5 (watermark): xóa bản delogo để tạo lại
     if from_step <= 5:

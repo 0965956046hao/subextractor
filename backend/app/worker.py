@@ -266,6 +266,7 @@ def enqueue_job(
     ocr_type: str = "paddle",
     start_time: float | None = None,
     end_time: float | None = None,
+    skip_auto_context: bool = False,
 ) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -278,6 +279,7 @@ def enqueue_job(
         "ocr_type": ocr_type,
         "start_time": start_time,
         "end_time": end_time,
+        "skip_auto_context": skip_auto_context,
         "job_type": "ocr",
         "status": "queued",
         "phase": "",
@@ -759,7 +761,12 @@ async def run_job(
         from app.services.context_service import generate_video_context
         from app.routers.config_router import _read_config
         cfg = _read_config()
-        if cfg.get("auto_context_enabled", True):
+        if job.get("skip_auto_context"):
+            # Pipeline gọi OCR với skip_auto_context=True vì đã có bước
+            # context riêng (bước 6) luôn chạy mới — bỏ auto để tránh gọi
+            # Gemini Vision 2 lần / video.
+            logger.info("Auto context skipped for %s (pipeline owns step 6)", video_id)
+        elif cfg.get("auto_context_enabled", True):
             target_lang = job.get("target_lang", "vi")
             asyncio.create_task(_auto_context(video_id, generate_video_context, loop, target_lang))
         else:

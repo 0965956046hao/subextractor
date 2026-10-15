@@ -775,11 +775,19 @@ def _render_preview_image(
 
 @router.get("/api/delogo/{video_id}/status")
 async def delogo_status(video_id: str):
-    """Check if delogo.mp4 exists and is valid."""
+    """Check if delogo.mp4 exists and is valid.
+
+    Trả thêm `running: true` khi đang có encode chạy cho video này — file
+    delogo.mp4 lúc đó chỉ là bản dở dang (đang ghi), frontend KHÔNG được
+    skipDelogo dùng nó, nếu không sẽ dùng nhầm file hỏng và treo pipeline.
+    """
+    with _DELOGO_LOCK:
+        _running_proc = _DELOGO_PROCS.get(video_id)
+        running = _running_proc is not None and _running_proc.poll() is None
     delogo_path = _delogo_video_path(video_id)
     exists = delogo_path.exists() and delogo_path.stat().st_size > 0
     valid = False
-    if exists:
+    if exists and not running:
         try:
             probe = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(delogo_path)],
@@ -788,10 +796,39 @@ async def delogo_status(video_id: str):
                 check=True,
             )
             duration_str = probe.stdout.decode("utf-8", errors="replace").strip()
-            valid = bool(duration_str) and float(duration_str) > 0
+            delogo_dur = float(duration_str) if duration_str else 0
+            valid = delogo_dur > 0
+            # File dở dang (kill giữa chừng / backend restart) vẫn có duration
+            # >0 nhưng ngắn hơn video gốc → phải coi là invalid để encode lại,
+            # nếu không pipeline skip nhầm file hỏng và treo ở bước sau.
+            if valid:
+                try:
+                    from app.config import settings as _settings
+                    vdir = _settings.temp_dir / "videos" / video_id
+                    src_candidates = sorted(
+                        [f for f in vdir.iterdir() if f.is_file() and f.stem.startswith("video")],
+                        key=lambda f: f.stat().st_size,
+                        reverse=True,
+                    )
+                    if src_candidates:
+                        src_probe = subprocess.run(
+                            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(src_candidates[0])],
+                            capture_output=True,
+                            timeout=10,
+                            check=True,
+                        )
+                        src_dur = float(src_probe.stdout.decode("utf-8", errors="replace").strip() or 0)
+                        if src_dur > 0 and delogo_dur < src_dur - 5:
+                            logger.warning(
+                                "[delogo] status %s: delogo %.1fs < source %.1fs → coi là file dở, encode lại",
+                                video_id, delogo_dur, src_dur,
+                            )
+                            valid = False
+                except Exception:
+                    pass
         except Exception:
             valid = False
-    return {"exists": exists, "valid": valid, "path": str(delogo_path) if exists else None}
+    return {"exists": exists, "valid": valid, "running": running, "path": str(delogo_path) if exists else None}
 
 
 # ── DELETE /api/delogo/{video_id} ──
@@ -1338,6 +1375,39 @@ async def delogo_video(
             )
 
         # ========================================================
+        # Inset 1px from any frame edge the box touches
+        # ========================================================
+        # FFmpeg delogo expands the box by 1px on every side (band
+        # used for interpolation) and then REJECTS boxes touching
+        # the frame edge with "Logo area is outside of the frame"
+        # (fatal at filter-graph init). So a valid box must keep a
+        # >= 1px margin on all 4 sides:
+        # x >= 1, y >= 1, x+w <= width-1, y+h <= height-1.
+        # Pull in only the sides that touch an edge, so boxes fully
+        # inside the frame are left untouched.
+
+        if x < 1:
+            region_width -= 1 - x
+            x = 1
+
+        if y < 1:
+            region_height -= 1 - y
+            y = 1
+
+        if x + region_width > width - 1:
+            region_width = (width - 1) - x
+
+        if y + region_height > height - 1:
+            region_height = (height - 1) - y
+
+        if region_width < 1 or region_height < 1:
+            logger.warning(
+                f"[delogo] Region {index + 1} collapses after the 1px "
+                f"edge inset (box too small) — skipping"
+            )
+            continue
+
+        # ========================================================
         # Build FFmpeg delogo filter
         # ========================================================
 
@@ -1364,6 +1434,16 @@ async def delogo_video(
             f"w={region_width},"
             f"h={region_height} "
             f"filter={filter_str}"
+        )
+
+    if not delogo_filters:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "All regions are too small: they collapse after the 1px "
+                "edge inset that FFmpeg delogo requires. Draw a larger "
+                "region inside the video frame."
+            )
         )
 
     # ============================================================
@@ -1568,7 +1648,10 @@ async def delogo_video(
         # Async: mỗi 0.5s kiểm tra client còn nghe không — nếu tab đã đóng /
         # pipeline đã pause-abort thì kill encode (encode delogo video dài có
         # thể tốn hàng giờ, không được để chạy mồ côi).
+        # Heartbeat mỗi 30s để proxy/browser không cắt SSE khi ffmpeg lâu
+        # không ra output (chỉ giữ kết nối, không giới hạn thời gian encode).
         cancelled = False
+        last_ping = _time.time()
         try:
             while True:
                 await asyncio.sleep(0.5)
@@ -1592,6 +1675,10 @@ async def delogo_video(
                         yield f"data: {json.dumps({'type': 'progress', 'pct': item[1], 'current': item[2], 'total': total_duration_seconds})}\n\n"
                 if proc.poll() is not None:
                     break
+                now = _time.time()
+                if now - last_ping >= 30:
+                    last_ping = now
+                    yield f"data: {json.dumps({'type': 'ping', 'elapsed': round(now - start_time, 1)})}\n\n"
 
             # Process xong → chờ reader threads đọc nốt rồi drain phần còn lại.
             # join() blocking -> chạy ở thread để không treo event loop.

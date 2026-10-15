@@ -854,6 +854,11 @@ const dictionaries = {
     "pipeline.cancelTitle": "Cancel processing?",
     "pipeline.cancelBody":
       "Cancel this job? In-progress work will be stopped and unsaved data will be lost.",
+    "pipeline.forceOcr": "Run from OCR",
+    "pipeline.forceOcrTitle": "Rerun from the OCR step?",
+    "pipeline.forceOcrBody":
+      "This video will rerun from OCR (keeps the selected regions), deleting old OCR/translation/dub results from that step onward. Use when a video is stuck with no progress.",
+    "pipeline.confirmForceOcr": "Run from OCR",
     "pipeline.noContinue2": "No, continue",
     "pipeline.confirmCancelDelete": "Cancel & delete",
     "pipeline.timelineCheckTitle": "Subtitle timeline check",
@@ -1734,6 +1739,11 @@ const dictionaries = {
     "pipeline.cancelTitle": "Huỷ xử lý?",
     "pipeline.cancelBody":
       "Huỷ job này? Quá trình đang chạy sẽ dừng lại và dữ liệu chưa lưu sẽ bị mất.",
+    "pipeline.forceOcr": "Chạy từ OCR",
+    "pipeline.forceOcrTitle": "Chạy lại từ bước OCR?",
+    "pipeline.forceOcrBody":
+      "Video sẽ chạy lại từ bước OCR (giữ nguyên vùng đã chọn), xóa kết quả OCR/dịch/dub cũ từ bước này trở đi. Dùng khi video kẹt không tiến triển.",
+    "pipeline.confirmForceOcr": "Chạy từ OCR",
     "pipeline.noContinue2": "Không, tiếp tục",
     "pipeline.confirmCancelDelete": "Huỷ và xóa",
     "pipeline.timelineCheckTitle": "Kiểm tra timeline phụ đề",
