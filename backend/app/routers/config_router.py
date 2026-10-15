@@ -648,6 +648,184 @@ async def get_youtube_channel_detail(channel_id: str):
     }
 
 
+# ── YouTube OAuth connect (lấy lại request.token khi hết hạn/thu hồi) ──
+
+YT_OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtubepartner",
+    "https://www.googleapis.com/auth/youtube",
+]
+
+
+def _yt_oauth_app_cfg(channel_id: str) -> tuple[dict, str]:
+    """Parse client_secrets của kênh → (app_cfg, redirect_uri).
+
+    Raises HTTPException khi thiếu/sai định dạng credentials.
+    """
+    cfg = _read_config()
+    ch = _yt_channel(channel_id, cfg)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+    raw = (ch.get("client_secrets") or "").strip()
+    if not raw:
+        raise HTTPException(400, "Kênh chưa có client_secrets.json. Hãy dán credentials trước.")
+    try:
+        secrets = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "client_secrets.json không phải JSON hợp lệ.")
+    app_cfg = secrets.get("web") or secrets.get("installed") or {}
+    if not app_cfg.get("client_id"):
+        raise HTTPException(400, "client_secrets.json thiếu client_id.")
+    redirect_uris = app_cfg.get("redirect_uris") or []
+    redirect_uri = redirect_uris[0] if redirect_uris else "http://localhost:8080/oauth2callback"
+    return app_cfg, redirect_uri
+
+
+class YouTubeConnectRequest(BaseModel):
+    code: str = ""
+    redirect_uri: str = ""
+
+
+@router.get("/api/config/youtube-channels/{channel_id}/auth-url")
+async def youtube_channel_auth_url(channel_id: str):
+    """Trả về Google OAuth URL để user mở tab mới và cấp quyền.
+
+    Luồng thủ công: mở auth_url → đăng nhập/chọn kênh → Google redirect về
+    localhost (không có server nghe nên browser báo lỗi kết nối — bình thường) →
+    copy `code=...` trên thanh địa chỉ → dán vào ô Connect ở frontend.
+    """
+    import secrets
+    import urllib.parse
+
+    app_cfg, redirect_uri = _yt_oauth_app_cfg(channel_id)
+    auth_uri = app_cfg.get("auth_uri") or "https://accounts.google.com/o/oauth2/auth"
+    state = secrets.token_urlsafe(16)
+    params = {
+        "client_id": app_cfg.get("client_id", ""),
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(YT_OAUTH_SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    auth_url = f"{auth_uri}?{urllib.parse.urlencode(params)}"
+    return {"auth_url": auth_url, "redirect_uri": redirect_uri, "state": state}
+
+
+@router.post("/api/config/youtube-channels/{channel_id}/connect")
+async def youtube_channel_connect(channel_id: str, body: YouTubeConnectRequest):
+    """Đổi authorization `code` lấy refresh_token mới, ghi đè request.token."""
+    import datetime
+
+    import httpx
+
+    code = (body.code or "").strip()
+    if not code:
+        raise HTTPException(400, "Thiếu mã code từ Google.")
+    # User có thể dán nhầm cả URL redirect (?code=...&...) — bóc lấy code.
+    if "code=" in code:
+        import urllib.parse
+
+        try:
+            qs = urllib.parse.urlparse(code)
+            q = urllib.parse.parse_qs(qs.query)
+            if q.get("code"):
+                code = q["code"][0]
+            else:
+                # Có thể user dán nguyên query string
+                frag = urllib.parse.parse_qs(code)
+                if frag.get("code"):
+                    code = frag["code"][0]
+        except Exception:
+            pass
+    # Bóc tiếp nếu vẫn còn lẫn '&' (dán cả "...code=xxx&scope=...")
+    if "code=" in code:
+        import urllib.parse
+
+        m = urllib.parse.parse_qs(code.split("?", 1)[-1])
+        if m.get("code"):
+            code = m["code"][0]
+    code = code.split("&")[0].split()[0].strip()
+
+    app_cfg, default_redirect = _yt_oauth_app_cfg(channel_id)
+    redirect_uri = (body.redirect_uri or "").strip() or default_redirect
+    token_uri = app_cfg.get("token_uri") or "https://oauth2.googleapis.com/token"
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(token_uri, data={
+                "code": code,
+                "client_id": app_cfg.get("client_id", ""),
+                "client_secret": app_cfg.get("client_secret", ""),
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            })
+            if r.status_code != 200:
+                detail = r.text[:300]
+                logger.warning("YouTube OAuth exchange failed (%s): %s", r.status_code, detail)
+                raise HTTPException(
+                    400,
+                    "Google từ chối mã code (có thể hết hạn hoặc sai redirect_uri). "
+                    "Hãy bấm Connect YT để lấy code mới.",
+                )
+            new = r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Không đổi được code với Google: {e}")
+
+    if not new.get("access_token"):
+        raise HTTPException(400, "Google không trả access_token. Hãy thử lấy code mới.")
+
+    token_path = _yt_channel_token_path(channel_id)
+    # Giữ refresh_token cũ nếu Google không trả mới (luồng re-auth đôi khi thiếu).
+    old_refresh = ""
+    if token_path.exists():
+        try:
+            old_refresh = (json.loads(token_path.read_text(encoding="utf-8")) or {}).get("refresh_token", "") or ""
+        except Exception:
+            old_refresh = ""
+    refresh_token = new.get("refresh_token") or old_refresh
+    expires_in = int(new.get("expires_in") or 3600)
+    exp = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=expires_in)
+    token_data = {
+        "access_token": new.get("access_token", ""),
+        "token_type": new.get("token_type") or "Bearer",
+        "refresh_token": refresh_token,
+        "expiry": exp.isoformat().replace("+00:00", "Z"),
+        "expires_in": expires_in,
+    }
+    try:
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        # Backup token cũ để cứu khi code sai.
+        if token_path.exists():
+            try:
+                token_path.with_suffix(".token.bak").write_bytes(token_path.read_bytes())
+            except Exception:
+                pass
+        token_path.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
+        try:
+            token_path.chmod(0o600)
+        except Exception:
+            pass
+    except Exception as e:
+        raise HTTPException(500, f"Không lưu được request.token: {e}")
+
+    logger.info("YouTube channel %s reconnected (token refreshed)", channel_id)
+    return {"status": "ok", "has_request_token": True}
+
+
+@router.delete("/api/config/youtube-channels/{channel_id}/token")
+async def youtube_channel_disconnect(channel_id: str):
+    """Xoá request.token của kênh (ngắt kết nối OAuth, giữ client_secrets)."""
+    cfg = _read_config()
+    if not _yt_channel(channel_id, cfg):
+        raise HTTPException(404, "Channel not found")
+    _yt_channel_token_path(channel_id).unlink(missing_ok=True)
+    return {"status": "ok", "has_request_token": False}
+
+
 def get_active_youtube_channel() -> str | None:
     """Return the active YouTube channel ID, or None."""
     cfg = _read_config()

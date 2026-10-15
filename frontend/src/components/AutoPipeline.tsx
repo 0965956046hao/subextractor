@@ -29,10 +29,13 @@ import {
   getPipelinePresets,
   getProfilesCheck,
   googleTtsPreview,
+  getPipelineMergeDownloadUrl,
+  getPipelineMergeStatus,
   listVideos,
   listYoutubeChannels,
   listYoutubePlaylists,
   setActiveWatermarkPreset,
+  startPipelineMerge,
   uploadVideo,
   type CapCutVoice,
   type ContextImages,
@@ -56,7 +59,7 @@ import {
   usePipelineStore,
   type Pipeline,
 } from "@/stores/pipeline-store";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type TFunc = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -260,6 +263,19 @@ function pipelineElapsed(p: Pipeline, now: number): string {
   return fmtElapsed(end - p.startedAt);
 }
 
+// Tách mọi link trong đoạn text dán vào (mỗi dòng 1 link, hoặc cách nhau
+// bằng khoảng trắng) — dùng chung regex với extractUrl của pipeline-store.
+function extractUrls(text: string): string[] {
+  const out: string[] = [];
+  const re = /https?:\/\/[^\s\u4e00-\u9fff]+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const u = m[0].replace(/[，。！？,;.!?]+$/, "");
+    if (u && !out.includes(u)) out.push(u);
+  }
+  return out;
+}
+
 export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -356,7 +372,18 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [healthLoading, setHealthLoading] = useState(true);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
-  const urlInputRef = useRef<HTMLInputElement | null>(null);
+  // Merge các video đã subtitle xong (tab done): chọn theo thứ tự → merge.
+  const [mergeSel, setMergeSel] = useState<string[]>([]);
+  const [mergeName, setMergeName] = useState("");
+  const [mergeJob, setMergeJob] = useState<{
+    id: string;
+    status: string;
+    stage: string;
+    progress: number;
+    error: string | null;
+  } | null>(null);
+  const [mergeStarting, setMergeStarting] = useState(false);
+  const urlInputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const focusNewVideo = useCallback(() => {
@@ -860,9 +887,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     }
   };
 
+  // Số link phát hiện được trong ô nhập (paste nhiều link → chạy hàng loạt).
+  const pastedUrls = useMemo(() => extractUrls(url), [url]);
+
   const handleAdd = () => {
-    const v = url.trim();
-    if (!v) return;
+    const urls = extractUrls(url);
+    if (urls.length === 0) return;
     if (!health?.healthy) {
       checkHealth();
       return;
@@ -870,6 +900,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     // eslint-disable-next-line no-console
     console.log("[PRESET-DEBUG] handleAdd", {
       presetId,
+      count: urls.length,
       hasPresetSeed: !!presetSeed,
       seedRegion: !!presetSeed?.region,
       seedSubtitleStyle: !!presetSeed?.subtitleStyle,
@@ -878,43 +909,46 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       autoFitSubs,
     });
     void persistPresetIfSelected();
-    const id = addPipeline(
-      v,
-      regionMode,
-      {
-        engine: dubEngine,
-        voice: dubVoice,
-        muteOriginal,
-        originalGainDb,
-        keepOriginalEnabled,
-        multiVoice: multiVoice && dubEngine === "capcut",
-      },
-      autoFitSubs,
-      watermarkOn,
-      watermarkOn ? watermarkPreset : "",
-      presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
-      presetSeed?.removeWatermarkRegions ?? removeWmRegions,
-      presetSeed?.region ?? null,
-      presetSeed?.subtitleStyle ?? null,
-      checkSubs,
-      checkVoice,
-      autoUploadYoutube,
-      ytChannel,
-      ytPlaylist,
-      useFalThumbnail,
-      useGptThumbnail,
-      srcLang,
-      translateOn,
-      translateTarget,
-      dubOn,
-      voiceLang,
-      presetSeed?.colorFilter ?? null,
-      playbackSpeed,
-      useGeminiThumbnail,
-      fillGaps,
-    );
+    // Mỗi link 1 pipeline với cùng cấu hình — hàng đợi chạy tuần tự.
+    const createOne = (link: string) =>
+      addPipeline(
+        link,
+        regionMode,
+        {
+          engine: dubEngine,
+          voice: dubVoice,
+          muteOriginal,
+          originalGainDb,
+          keepOriginalEnabled,
+          multiVoice: multiVoice && dubEngine === "capcut",
+        },
+        autoFitSubs,
+        watermarkOn,
+        watermarkOn ? watermarkPreset : "",
+        presetSeed?.removeWatermarkEnabled ?? removeWmEnabled,
+        presetSeed?.removeWatermarkRegions ?? removeWmRegions,
+        presetSeed?.region ?? null,
+        presetSeed?.subtitleStyle ?? null,
+        checkSubs,
+        checkVoice,
+        autoUploadYoutube,
+        ytChannel,
+        ytPlaylist,
+        useFalThumbnail,
+        useGptThumbnail,
+        srcLang,
+        translateOn,
+        translateTarget,
+        dubOn,
+        voiceLang,
+        presetSeed?.colorFilter ?? null,
+        playbackSpeed,
+        useGeminiThumbnail,
+        fillGaps,
+      );
+    const ids = urls.map(createOne);
     setUrl("");
-    setSelectedId(id);
+    setSelectedId(ids[0]);
     setTab("detail");
   };
 
@@ -1037,6 +1071,57 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       setHistoryVideos((prev) => prev.filter((v) => v.video_id !== p.videoId));
     }
   };
+
+  // Merge: tick chọn video đã xong (giữ đúng thứ tự tick) rồi ghép.
+  const toggleMergeSelect = useCallback((videoId: string) => {
+    setMergeSel((prev) =>
+      prev.includes(videoId)
+        ? prev.filter((v) => v !== videoId)
+        : [...prev, videoId],
+    );
+  }, []);
+
+  const handleStartMerge = useCallback(async () => {
+    if (mergeSel.length < 2 || mergeStarting) return;
+    setMergeStarting(true);
+    try {
+      const { job_id } = await startPipelineMerge(mergeSel, mergeName.trim());
+      setMergeJob({ id: job_id, status: "running", stage: "", progress: 0, error: null });
+    } catch (e) {
+      setMergeJob({
+        id: "",
+        status: "error",
+        stage: "",
+        progress: 0,
+        error: e instanceof Error ? e.message : "Merge thất bại.",
+      });
+    } finally {
+      setMergeStarting(false);
+    }
+  }, [mergeSel, mergeName, mergeStarting]);
+
+  // Poll tiến trình merge đang chạy.
+  useEffect(() => {
+    if (!mergeJob || mergeJob.status !== "running" || !mergeJob.id) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const s = await getPipelineMergeStatus(mergeJob.id);
+        if (cancelled) return;
+        setMergeJob((prev) =>
+          prev && prev.id === mergeJob.id
+            ? { ...prev, status: s.status, stage: s.stage, progress: s.progress, error: s.error }
+            : prev,
+        );
+      } catch {
+        // ignore transient
+      }
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [mergeJob?.id, mergeJob?.status]);
 
   // "Xoá job đã xong": same as removePipelineEntry, but for every finished
   // pipeline (and matching history rows) so nothing lingers on the backend.
@@ -1173,36 +1258,50 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                 ))}
               </div>
               {sourceType !== "upload" ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={urlInputRef}
-                    type="text"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                    disabled={!health?.healthy}
-                    placeholder={
-                      healthLoading
-                        ? tr("pipeline.placeholder.checking")
-                        : health?.healthy
-                          ? sourceType === "youtube"
-                            ? tr("pipeline.placeholder.youtube")
-                            : tr("pipeline.placeholder.douyin")
-                          : tr("pipeline.placeholder.notConfigured")
-                    }
-                    className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                  <button
-                    onClick={handleAdd}
-                    disabled={!url.trim() || !health?.healthy}
-                    className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <span className="tracking-tight">
-                      {sourceType === "youtube"
-                        ? tr("pipeline.btnDownloadProcess")
-                        : tr("pipeline.btnStart")}
-                    </span>
-                  </button>
+                <div>
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      ref={urlInputRef}
+                      value={url}
+                      rows={3}
+                      onChange={(e) => setUrl(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAdd();
+                      }}
+                      disabled={!health?.healthy}
+                      placeholder={
+                        healthLoading
+                          ? tr("pipeline.placeholder.checking")
+                          : health?.healthy
+                            ? sourceType === "youtube"
+                              ? tr("pipeline.placeholder.youtube")
+                              : tr("pipeline.placeholder.douyin")
+                            : tr("pipeline.placeholder.notConfigured")
+                      }
+                      className="flex-1 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2.5 text-[13px] text-ink font-mono focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50 disabled:cursor-not-allowed resize-y min-h-[76px]"
+                    />
+                    <button
+                      onClick={handleAdd}
+                      disabled={pastedUrls.length === 0 || !health?.healthy}
+                      className="btn-island-primary group text-sm !px-5 !py-2.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <span className="tracking-tight">
+                        {pastedUrls.length > 1
+                          ? tr("pipeline.btnStartBatch", { count: pastedUrls.length })
+                          : sourceType === "youtube"
+                            ? tr("pipeline.btnDownloadProcess")
+                            : tr("pipeline.btnStart")}
+                      </span>
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-ink-light">
+                    {tr("pipeline.multiLinkHint")}
+                    {pastedUrls.length > 1 && (
+                      <span className="ml-1.5 tag bg-accent-muted text-accent ring-accent/15">
+                        {tr("pipeline.multiLinkCount", { count: pastedUrls.length })}
+                      </span>
+                    )}
+                  </p>
                 </div>
               ) : (
                 <div>
@@ -2241,47 +2340,134 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     {tr("pipeline.emptyDone")}
                   </p>
                 ) : (
-                  <div className="space-y-2">
-                    {donePipelines.map((p) => (
-                      <PipelineRow
-                        key={p.id}
-                        p={p}
-                        now={now}
-                        onOpen={() => {
-                          setSelectedId(p.id);
-                          setTab("detail");
-                        }}
-                        onRemove={() => {
-                          removePipelineEntry(p);
-                        }}
-                      />
-                    ))}
-                    {historyVideosDone.map((v) => (
-                      <HistoryRow
-                        key={v.video_id}
-                        v={v}
-                        onOpen={() => {
-                          const id = importDone({
-                            videoId: v.video_id,
-                            title: v.filename || v.video_id,
-                            hasDubbed: v.has_dubbed ?? false,
-                          });
-                          setSelectedId(id);
-                          setTab("detail");
-                        }}
-                        onDelete={async () => {
-                          try {
-                            await deleteVideo(v.video_id);
-                          } catch {
-                            // ignore
+                  <>
+                    {/* Merge các video đã subtitle xong (tick theo đúng thứ tự ghép) */}
+                    <div className="mb-3 rounded-xl ring-1 ring-white/[0.09] bg-white/[0.03] p-3.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-[12px] font-semibold text-ink">
+                          {tr("pipeline.mergeTitle")}
+                        </p>
+                        {mergeSel.length > 0 && (
+                          <span className="tag bg-accent-muted text-accent ring-accent/15">
+                            {tr("pipeline.mergeSelected", { count: mergeSel.length })}
+                          </span>
+                        )}
+                        <span className="ml-auto" />
+                        {mergeSel.length > 0 && (
+                          <button
+                            onClick={() => setMergeSel([])}
+                            className="text-[11px] text-ink-light hover:text-ink cursor-pointer"
+                          >
+                            {tr("pipeline.mergeClear")}
+                          </button>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[11px] text-ink-light">
+                        {tr("pipeline.mergeHint")}
+                      </p>
+                      <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                        <input
+                          type="text"
+                          value={mergeName}
+                          onChange={(e) => setMergeName(e.target.value)}
+                          placeholder={tr("pipeline.mergeNamePh")}
+                          className="flex-1 min-w-40 rounded-xl border border-white/[0.09] bg-black/25 px-3 py-2 text-[12px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/20"
+                        />
+                        <button
+                          onClick={handleStartMerge}
+                          disabled={mergeSel.length < 2 || mergeStarting || mergeJob?.status === "running"}
+                          className="btn-island-primary text-[12px] !px-4 !py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {mergeStarting
+                            ? tr("pipeline.mergeStarting")
+                            : tr("pipeline.mergeBtn", { count: mergeSel.length })}
+                        </button>
+                      </div>
+                      {mergeJob?.status === "running" && (
+                        <div className="mt-2.5">
+                          <div className="h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-accent transition-all duration-500"
+                              style={{ width: `${mergeJob.progress}%` }}
+                            />
+                          </div>
+                          <p className="mt-1 text-[11px] text-ink-light font-mono">
+                            {mergeJob.stage || tr("pipeline.merging")} · {mergeJob.progress}%
+                          </p>
+                        </div>
+                      )}
+                      {mergeJob?.status === "done" && mergeJob.id && (
+                        <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                          <span className="tag bg-success-muted text-success ring-success/20">
+                            {tr("pipeline.mergeDone")}
+                          </span>
+                          <a
+                            href={getPipelineMergeDownloadUrl(mergeJob.id)}
+                            download
+                            className="btn-island-secondary text-[11px] !px-3 !py-1.5"
+                          >
+                            {tr("pipeline.mergeDownload")}
+                          </a>
+                        </div>
+                      )}
+                      {mergeJob?.status === "error" && (
+                        <p className="mt-2 text-[12px] text-danger">
+                          {mergeJob.error || tr("pipeline.mergeFailed")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {donePipelines.map((p) => (
+                        <PipelineRow
+                          key={p.id}
+                          p={p}
+                          now={now}
+                          onOpen={() => {
+                            setSelectedId(p.id);
+                            setTab("detail");
+                          }}
+                          onRemove={() => {
+                            removePipelineEntry(p);
+                          }}
+                          selectable={p.status === "done" && !!p.videoId}
+                          selected={p.videoId ? mergeSel.includes(p.videoId) : false}
+                          selectionOrder={p.videoId ? mergeSel.indexOf(p.videoId) + 1 : 0}
+                          onToggleSelect={
+                            p.videoId ? () => toggleMergeSelect(p.videoId!) : undefined
                           }
-                          setHistoryVideos((prev) =>
-                            prev.filter((x) => x.video_id !== v.video_id),
-                          );
-                        }}
-                      />
-                    ))}
-                  </div>
+                        />
+                      ))}
+                      {historyVideosDone.map((v) => (
+                        <HistoryRow
+                          key={v.video_id}
+                          v={v}
+                          onOpen={() => {
+                            const id = importDone({
+                              videoId: v.video_id,
+                              title: v.filename || v.video_id,
+                              hasDubbed: v.has_dubbed ?? false,
+                            });
+                            setSelectedId(id);
+                            setTab("detail");
+                          }}
+                          onDelete={async () => {
+                            try {
+                              await deleteVideo(v.video_id);
+                            } catch {
+                              // ignore
+                            }
+                            setHistoryVideos((prev) =>
+                              prev.filter((x) => x.video_id !== v.video_id),
+                            );
+                          }}
+                          selectable
+                          selected={mergeSel.includes(v.video_id)}
+                          selectionOrder={mergeSel.indexOf(v.video_id) + 1}
+                          onToggleSelect={() => toggleMergeSelect(v.video_id)}
+                        />
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -2361,11 +2547,19 @@ function PipelineRow({
   now,
   onOpen,
   onRemove,
+  selectable,
+  selected,
+  selectionOrder,
+  onToggleSelect,
 }: {
   p: Pipeline;
   now: number;
   onOpen: () => void;
   onRemove: () => void;
+  selectable?: boolean;
+  selected?: boolean;
+  selectionOrder?: number;
+  onToggleSelect?: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2389,8 +2583,26 @@ function PipelineRow({
   return (
     <div
       onClick={onOpen}
-      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05] transition-colors cursor-pointer"
+      className={`flex items-center gap-3 rounded-xl p-3 ring-1 transition-colors cursor-pointer ${selected
+        ? "ring-accent/40 bg-accent-muted"
+        : "ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]"
+        }`}
     >
+      {selectable && onToggleSelect && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect();
+          }}
+          title={selected ? `#${selectionOrder}` : ""}
+          className={`w-6 h-6 rounded-lg ring-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors ${selected
+            ? "bg-accent text-white ring-accent text-[11px] font-semibold"
+            : "bg-white/[0.04] ring-white/[0.12] text-transparent hover:ring-accent/50"
+            }`}
+        >
+          {selected ? selectionOrder : "✓"}
+        </button>
+      )}
       <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-white/[0.11]">
         {p.videoId ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -2614,10 +2826,18 @@ function HistoryRow({
   v,
   onOpen,
   onDelete,
+  selectable,
+  selected,
+  selectionOrder,
+  onToggleSelect,
 }: {
   v: VideoMeta;
   onOpen: () => void;
   onDelete: () => void;
+  selectable?: boolean;
+  selected?: boolean;
+  selectionOrder?: number;
+  onToggleSelect?: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2625,8 +2845,26 @@ function HistoryRow({
   return (
     <div
       onClick={onOpen}
-      className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05] transition-colors cursor-pointer"
+      className={`flex items-center gap-3 rounded-xl p-3 ring-1 transition-colors cursor-pointer ${selected
+        ? "ring-accent/40 bg-accent-muted"
+        : "ring-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]"
+        }`}
     >
+      {selectable && onToggleSelect && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect();
+          }}
+          title={selected ? `#${selectionOrder}` : ""}
+          className={`w-6 h-6 rounded-lg ring-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-colors ${selected
+            ? "bg-accent text-white ring-accent text-[11px] font-semibold"
+            : "bg-white/[0.04] ring-white/[0.12] text-transparent hover:ring-accent/50"
+            }`}
+        >
+          {selected ? selectionOrder : "✓"}
+        </button>
+      )}
       <div className="w-[104px] h-[58px] rounded-lg overflow-hidden bg-black flex-shrink-0 ring-1 ring-white/[0.11]">
         {v.has_video ? (
           // eslint-disable-next-line @next/next/no-img-element

@@ -513,6 +513,11 @@ export default function TimelineCheckModal({
     [risks, entries, overlapIndexes],
   );
   const riskIndexes = useMemo(() => new Set(activeRisks.map((r) => r.index)), [activeRisks]);
+  // Số dòng đang bị gắn cờ trùng lặp với dòng liền trước (ADJACENT_SIMILAR).
+  const similarCount = useMemo(
+    () => activeRisks.filter((r) => r.problems.includes("ADJACENT_SIMILAR")).length,
+    [activeRisks],
+  );
   const riskByIndex = useMemo(() => {
     const m = new Map<number, SubtitleRisk>();
     for (const r of activeRisks) m.set(r.index, r);
@@ -955,6 +960,66 @@ export default function TimelineCheckModal({
       setDupFixing(false);
     }
   }, [dupFixing, saving, checking, entries, videoId, normalizeOrder, recomputeTimelineIssues]);
+
+  // Nút "Xoá trùng": xoá 1 lần mọi dòng đang bị gắn cờ ADJACENT_SIMILAR
+  // ("Dòng liền kề giống nhau"). Mỗi verdict chỉ gắn cờ dòng SAU nên xoá
+  // flagged là giữ lại dòng đầu mỗi cặp — nội dung không mất. Thời lượng
+  // của dòng bị xoá được cộng dồn vào end của dòng giữ lại (vd dòng gốc
+  // 1s + dòng trùng 2s → dòng gốc thành 3s). Xoá local (như xoá từng
+  // dòng), nhấn Lưu để ghi nhận xuống file.
+  const deleteAllSimilar = useCallback(() => {
+    const flagged = new Set(
+      activeRisks.filter((r) => r.problems.includes("ADJACENT_SIMILAR")).map((r) => r.index),
+    );
+    if (flagged.size === 0) return;
+    const kept = entries.filter((e) => !flagged.has(e.index));
+    // Verdict đã hết hiệu lực (dòng đổi/sửa sau khi check) → không xoá gì.
+    if (kept.length === entries.length) return;
+    if (!window.confirm(t("timeline.deleteDupConfirm" as string, { count: String(entries.length - kept.length) }))) return;
+    // Cộng dồn thời lượng dòng bị xoá vào dòng giữ lại gần nhất đứng trước
+    // nó (chuỗi trùng liên tiếp dồn hết về dòng đầu còn sống).
+    const extra = new Map<number, number>();
+    let survivor: number | null = null;
+    for (const e of entries) {
+      if (flagged.has(e.index)) {
+        if (survivor != null) {
+          extra.set(survivor, (extra.get(survivor) ?? 0) + Math.max(0, e.end - e.start));
+        }
+      } else {
+        survivor = e.index;
+      }
+    }
+    const oldToNew = new Map(kept.map((e, i) => [e.index, i + 1] as const));
+    const remap = (idx: number) => oldToNew.get(idx) ?? idx;
+    const next = kept.map((e, i) => {
+      const add = extra.get(e.index) ?? 0;
+      const end = add > 0 ? e.end + add : e.end;
+      return { ...e, index: i + 1, end, startLabel: secToSrt(e.start), endLabel: secToSrt(end) };
+    });
+    setDirty(true);
+    setEntries(next);
+    setTimelineIssues((prev) =>
+      prev
+        .filter((it) => !flagged.has(it.index))
+        .map((it) => ({
+          ...it,
+          index: remap(it.index),
+          prev_index: it.prev_index != null ? remap(it.prev_index) : it.prev_index,
+        })),
+    );
+    setRisks((prev) =>
+      prev
+        .filter((r) => !flagged.has(r.index))
+        .map((r) => ({ ...r, index: remap(r.index) })),
+    );
+    // Cache "xem gốc" key theo index → xoá cho khỏi trỏ nhầm sau khi đánh lại số.
+    setOriginalTexts({});
+    setOriginalOpen({});
+    setEditingIndex(-1);
+    setActiveIndex(-1);
+    scheduleRecompute(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRisks, entries, scheduleRecompute]);
 
   const deleteEntry = useCallback((index: number) => {
     setDirty(true);
@@ -1456,6 +1521,16 @@ export default function TimelineCheckModal({
                     {fixingAll && fixProgress
                       ? t("timeline.fixing" as string, { progress: fixProgress })
                       : t("timeline.fixAll" as string)}
+                  </button>
+                )}
+                {similarCount > 0 && (
+                  <button
+                    onClick={deleteAllSimilar}
+                    disabled={fixingAll || checking || saving}
+                    className="text-[10px] font-medium px-2.5 py-1 rounded-md bg-rose-600 text-white hover:bg-rose-500 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait inline-flex items-center gap-1 flex-shrink-0"
+                    title={t("timeline.deleteDupTitle" as string)}
+                  >
+                    {t("timeline.deleteDup" as string, { count: String(similarCount) })}
                   </button>
                 )}
               </div>

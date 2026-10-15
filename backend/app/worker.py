@@ -1722,56 +1722,7 @@ async def run_telegram_auto_job(
             else:
                 await _tg_send(chat_id, f"⚠️ Dịch thất bại: {jobs[tr_job_id].get('error', 'unknown')}")
 
-        # ── Step 5: Check subs (timeline review) via Mini App — chạy SAU khi dịch, ──
-        # ── kiểm tra file SRT đã dịch (nếu có), fallback bản gốc. ──
-        if job.get("check_subs"):
-            job["phase"] = "timeline_check"
-            await _tg_send(chat_id, "📝 Đang kiểm tra timeline phụ đề...")
-
-            # Ưu tiên file đã dịch (translated/{id}/subtitles_{lang}.srt), fallback bản gốc.
-            best_srt = _srt_best_path(video_id, job.get("translate_target", "vi"))
-            best_srt_text = best_srt.read_text(encoding="utf-8")
-
-            issues: list = []
-            try:
-                from app.services.srt_utils import parse_srt, validate_timeline
-                issues = validate_timeline(parse_srt(best_srt_text))
-            except Exception:
-                issues = []
-
-            _init_pipeline_wait(pipeline_states, video_id, "timeline_check", issues)
-
-            web_app_base = settings.annotation_web_app_url.rstrip("/")
-            video_url = await _tg_web_app_video_url(video_id)
-            await _tg_send_web_app_with_skip(
-                chat_id,
-                "📝 <b>Kiểm tra phụ đề</b> — bấm Mini App để rà soát thời gian từng dòng, "
-                "hoặc Bỏ qua để giữ nguyên.",
-                f"{web_app_base}/?url={video_url}&videoid={video_id}&mode=timeline",
-                "📝 Kiểm tra phụ đề",
-                f"tgcp:{video_id}:skip_timeline",
-            )
-            if issues:
-                await _tg_send(chat_id, f"⚠️ Phát hiện {len(issues)} lỗi timeline — chờ bạn duyệt.")
-
-            decision = await _tg_wait_pipeline_decision(pipeline_states, video_id, "timeline_check", f"{video_id}:skip_timeline")
-            if decision == "fix":
-                await _tg_send(chat_id, "🔧 Đang tự sửa timeline phụ đề...")
-                try:
-                    from app.services.srt_utils import parse_srt, fix_timeline, entries_to_srt
-                    fixed, _ = fix_timeline(parse_srt(best_srt_text))
-                    best_srt.write_text(entries_to_srt(fixed), encoding="utf-8")
-                    await _tg_send(chat_id, "✅ Đã sửa timeline phụ đề.")
-                except Exception:
-                    await _tg_send(chat_id, "⚠️ Sửa timeline thất bại — giữ nguyên.")
-            elif decision == "skip":
-                await _tg_send(chat_id, "⏭️ Bỏ qua kiểm tra phụ đề.")
-                await _tg_next_step(chat_id)
-            else:
-                await _tg_send(chat_id, "✅ Đã xác nhận phụ đề.")
-                await _tg_next_step(chat_id)
-
-        # ── Step 6: Dub ──
+        # ── Step 5: Dub ──
         if job.get("dub_on") and job.get("auto_dub"):
             job["phase"] = "dub"
             await _tg_send(chat_id, "🎤 Đang lồng tiếng...")
@@ -1845,7 +1796,7 @@ async def run_telegram_auto_job(
                     await _tg_send(chat_id, "⚠️ Không nhận được xác nhận — tiếp tục.")
                     await _tg_next_step(chat_id)
 
-        # ── Step 7: Hardcode SRT into video ──
+        # ── Step 6: Hardcode SRT into video ──
         job["phase"] = "muxing"
         await _tg_send(chat_id, "🎬 Đang nhúng phụ đề vào video...")
         hc_job_id = uuid.uuid4().hex[:12]
@@ -1868,7 +1819,7 @@ async def run_telegram_auto_job(
         else:
             await _tg_send(chat_id, f"⚠️ Nhúng phụ đề thất bại: {jobs[hc_job_id].get('error', 'unknown')}")
 
-        # ── Step 8: Thumbnail (FAL / ChatGPT) ──
+        # ── Step 7: Thumbnail (FAL / ChatGPT) ──
         thumb_mode = job.get("thumbnail") or "none"
         if thumb_mode != "none":
             job["phase"] = "thumbnail"
@@ -1918,7 +1869,7 @@ async def run_telegram_auto_job(
             except Exception as e:
                 await _tg_send(chat_id, f"⚠️ Tạo thumbnail thất bại: {str(e)[:150]}")
 
-        # ── Step 9: Upload YouTube ──
+        # ── Step 8: Upload YouTube ──
         if job.get("auto_upload_youtube"):
             job["phase"] = "youtube"
             await _tg_send(chat_id, "⬆️ Đang tạo meta + đăng YouTube...")

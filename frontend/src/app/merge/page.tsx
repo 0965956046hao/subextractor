@@ -8,6 +8,8 @@ import { useI18n } from "@/lib/i18n";
 import {
   listYoutubeChannels,
   listYoutubePlaylists,
+  getYoutubeChannelAuthUrl,
+  connectYoutubeChannel,
   listYTMergeItems,
   listYTProjects,
   getYTProject,
@@ -576,6 +578,16 @@ function MergeEditor({ projectId }: { projectId: string | null }) {
   const [videos, setVideos] = useState<YTMergeItem[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  // Lỗi + trạng thái tải danh sách phát (trước đây bị nuốt lặng → dropdown rỗng).
+  const [playlistError, setPlaylistError] = useState<string | null>(null);
+  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
+  // Kết nối lại YouTube (OAuth) ngay tại trang merge khi token hết hạn.
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [authUrl, setAuthUrl] = useState("");
+  const [authRedirect, setAuthRedirect] = useState("");
+  const [authCode, setAuthCode] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   // Video upload local (merge chung với video YouTube).
   const [uploads, setUploads] = useState<YTMergeItem[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -815,18 +827,79 @@ function MergeEditor({ projectId }: { projectId: string | null }) {
     uploadDone,
   ]);
 
+  // Tải lại danh sách kênh (dùng sau khi Connect YT để cập nhật ✓).
+  const reloadChannels = useCallback(async () => {
+    try {
+      const d = await listYoutubeChannels();
+      setChannels(d.channels || []);
+      return d.channels || [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  // Tải danh sách phát của kênh — hiện lỗi rõ thay vì nuốt lặng.
+  const reloadPlaylists = useCallback(async (cid: string) => {
+    if (!cid) return;
+    setLoadingPlaylists(true);
+    setPlaylistError(null);
+    try {
+      const ps = await listYoutubePlaylists(cid);
+      setPlaylists(ps);
+    } catch (e) {
+      setPlaylists([]);
+      setPlaylistError(e instanceof Error ? e.message : "Không tải được danh sách phát.");
+    } finally {
+      setLoadingPlaylists(false);
+    }
+  }, []);
+
   // Load kênh YT đã cấu hình.
   useEffect(() => {
-    listYoutubeChannels()
-      .then((d) => {
-        setChannels(d.channels || []);
-        if (d.channels?.length === 1) {
-          setChannelId(d.channels[0].id);
-          setPushChannelId(d.channels[0].id);
-        }
-      })
-      .catch(() => {});
-  }, []);
+    reloadChannels().then((chs) => {
+      if (chs?.length === 1) {
+        setChannelId(chs[0].id);
+        setPushChannelId(chs[0].id);
+      }
+    });
+  }, [reloadChannels]);
+
+  // Mở dialog Connect YT: lấy auth URL → mở tab Google → user dán code.
+  const handleOpenConnect = useCallback(async () => {
+    if (!channelId) return;
+    setConnectOpen(true);
+    setConnectError(null);
+    setAuthCode("");
+    setConnecting(true);
+    try {
+      const d = await getYoutubeChannelAuthUrl(channelId);
+      setAuthUrl(d.auth_url);
+      setAuthRedirect(d.redirect_uri);
+      window.open(d.auth_url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setConnectError(e instanceof Error ? e.message : "Không tạo được link kết nối.");
+    } finally {
+      setConnecting(false);
+    }
+  }, [channelId]);
+
+  // Xác nhận code → đổi token mới → tải lại kênh + playlists.
+  const handleConfirmConnect = useCallback(async () => {
+    if (!channelId || !authCode.trim() || connecting) return;
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      await connectYoutubeChannel(channelId, authCode.trim(), authRedirect);
+      setConnectOpen(false);
+      setAuthCode("");
+      await reloadChannels();
+      await reloadPlaylists(channelId);
+    } catch (e) {
+      setConnectError(e instanceof Error ? e.message : "Kết nối thất bại. Hãy lấy code mới.");
+    } finally {
+      setConnecting(false);
+    }
+  }, [channelId, authCode, authRedirect, connecting, reloadChannels, reloadPlaylists]);
 
   // Đổi kênh → load playlists. Bỏ qua lần xoá khi đang khôi phục phiên
   // (giữ danh sách đã lưu để render ngay, refresh ngầm bên dưới).
@@ -838,9 +911,7 @@ function MergeEditor({ projectId }: { projectId: string | null }) {
       if (!pushTouchedRef.current) setPushChannelId(channelId);
       // Đã có cache playlists → khỏi fetch ngầm (bấm Tải lại khi cần).
       if (playlists.length === 0) {
-        listYoutubePlaylists(channelId)
-          .then(setPlaylists)
-          .catch(() => {});
+        reloadPlaylists(channelId);
       }
       return;
     }
@@ -848,12 +919,12 @@ function MergeEditor({ projectId }: { projectId: string | null }) {
     setPlaylistId("");
     setVideos([]);
     setOrder([]);
+    setPlaylistError(null);
     if (!channelId) return;
     // Kênh push mặc định theo kênh đang duyệt (cho tới khi user đổi tay).
     if (!pushTouchedRef.current) setPushChannelId(channelId);
-    listYoutubePlaylists(channelId)
-      .then(setPlaylists)
-      .catch(() => setPlaylists([]));
+    reloadPlaylists(channelId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId]);
 
   // Đổi kênh push → load playlists đích; mặc định playlist đích theo
@@ -1553,8 +1624,94 @@ function MergeEditor({ projectId }: { projectId: string | null }) {
                 </select>
               </label>
             </div>
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => reloadChannels()}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+              >
+                {t("merge.reloadChannels")}
+              </button>
+              <button
+                onClick={() => channelId && reloadPlaylists(channelId)}
+                disabled={!channelId || loadingPlaylists}
+                className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+              >
+                {loadingPlaylists && <IconSpinner className="w-3.5 h-3.5" />}
+                {t("merge.reloadPlaylists")}
+              </button>
+              <button
+                onClick={handleOpenConnect}
+                disabled={!channelId}
+                className="btn-island-primary text-[11px] !px-3 !py-1.5 cursor-pointer disabled:opacity-40"
+                title={t("merge.connectHint")}
+              >
+                {t("merge.connectYT")}
+              </button>
+              {(() => {
+                const ch = channels.find((c) => c.id === channelId);
+                if (!channelId || !ch) return null;
+                return ch.has_request_token ? (
+                  <span className="tag bg-success-muted text-success ring-success/20">{t("merge.connected")}</span>
+                ) : (
+                  <span className="tag bg-warn-muted text-warn ring-warn/20">{t("merge.notConnected")}</span>
+                );
+              })()}
+            </div>
             {channels.length === 0 && (
               <p className="mt-2 text-[12px] text-warn">{t("merge.noChannel")}</p>
+            )}
+            {playlistError && (
+              <div className="mt-2 rounded-xl bg-danger-muted ring-1 ring-danger/15 px-3 py-2">
+                <p className="text-[12px] text-danger">{playlistError}</p>
+                <p className="mt-1 text-[11px] text-ink-muted">{t("merge.playlistErrorHint")}</p>
+              </div>
+            )}
+            {connectOpen && (
+              <div className="mt-3 rounded-xl ring-1 ring-accent/25 bg-accent-muted p-4">
+                <p className="text-[12px] font-medium text-ink mb-1">{t("merge.connectTitle")}</p>
+                <p className="text-[11px] text-ink-muted mb-3">{t("merge.connectSteps")}</p>
+                <div className="flex items-center gap-2 flex-wrap mb-3">
+                  {authUrl && (
+                    <a
+                      href={authUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-island-secondary text-[11px] !px-3 !py-1.5"
+                    >
+                      {t("merge.openGoogle")}
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setConnectOpen(false)}
+                    className="btn-island-secondary text-[11px] !px-3 !py-1.5 cursor-pointer"
+                  >
+                    {t("merge.close")}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input
+                    type="text"
+                    value={authCode}
+                    onChange={(e) => setAuthCode(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleConfirmConnect();
+                    }}
+                    placeholder={t("merge.codePh")}
+                    className="input-field flex-1 min-w-52 font-mono !text-[12px]"
+                  />
+                  <button
+                    onClick={handleConfirmConnect}
+                    disabled={!authCode.trim() || connecting}
+                    className="btn-island-primary text-[11px] !px-4 !py-2 cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+                  >
+                    {connecting && <IconSpinner className="w-3.5 h-3.5" />}
+                    {t("merge.confirmConnect")}
+                  </button>
+                </div>
+                {connectError && (
+                  <p className="mt-2 text-[12px] text-danger">{connectError}</p>
+                )}
+              </div>
             )}
           </div>
         </div>

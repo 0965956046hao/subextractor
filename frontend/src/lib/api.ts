@@ -1100,6 +1100,32 @@ export async function activateYoutubeChannel(
   return res.data;
 }
 
+export async function getYoutubeChannelAuthUrl(
+  id: string,
+): Promise<{ auth_url: string; redirect_uri: string; state: string }> {
+  const res = await api.get(`/config/youtube-channels/${id}/auth-url`);
+  return res.data;
+}
+
+export async function connectYoutubeChannel(
+  id: string,
+  code: string,
+  redirect_uri?: string,
+): Promise<{ status: string; has_request_token: boolean }> {
+  const res = await api.post(`/config/youtube-channels/${id}/connect`, {
+    code,
+    redirect_uri: redirect_uri || "",
+  });
+  return res.data;
+}
+
+export async function disconnectYoutubeChannel(
+  id: string,
+): Promise<{ status: string }> {
+  const res = await api.delete(`/config/youtube-channels/${id}/token`);
+  return res.data;
+}
+
 export interface YouTubePlaylistInfo {
   id: string;
   title: string;
@@ -1337,6 +1363,41 @@ export async function getYoutubeUploadStatus(jobId: string): Promise<{
 }> {
   const res = await api.get(`/youtube/upload/${jobId}`);
   return res.data;
+}
+
+// ── Merge các video pipeline đã subtitle xong ──
+
+export interface PipelineMergeStatus {
+  job_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  output_size: number;
+  error: string | null;
+  logs: { message: string; ts: number; level: string }[];
+}
+
+export async function startPipelineMerge(
+  videoIds: string[],
+  outputName = "",
+): Promise<{ job_id: string }> {
+  const res = await api.post<{ job_id: string }>(
+    "/pipeline-merge",
+    { video_ids: videoIds, output_name: outputName },
+    { timeout: 60000 },
+  );
+  return res.data;
+}
+
+export async function getPipelineMergeStatus(
+  jobId: string,
+): Promise<PipelineMergeStatus> {
+  const res = await api.get<PipelineMergeStatus>(`/pipeline-merge/${jobId}`);
+  return res.data;
+}
+
+export function getPipelineMergeDownloadUrl(jobId: string): string {
+  return `/api/pipeline-merge/${jobId}/download`;
 }
 
 // ── Telegram notifications ──
