@@ -17,7 +17,7 @@ class TTSRequest(BaseModel):
     """Body for submitting a voice-generation job."""
 
     segments: List[VoiceSegment] = Field(default_factory=list, min_length=1)
-    voice: str = "BV074_streaming"
+    voice: str = "BV421_vivn_streaming"
     rate: str = "1.0"
     filename_prefix: str = "segment"
 

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8100
 
-    default_voice: str = "BV074_streaming"
+    default_voice: str = "BV421_vivn_streaming"
     default_rate: str = "1.0"
     poll_interval: float = 1.0
     job_timeout: int = 1800

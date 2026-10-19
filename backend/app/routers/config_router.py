@@ -76,6 +76,7 @@ def get_subtitle_style() -> dict:
 class SaveConfigRequest(BaseModel):
     gemini_api_key: str = ""
     gemini_api_keys: list[str] | None = None
+    clear_gemini_keys: bool = False
     google_tts_json: str = ""
     fal_key: str = ""
     auto_context_enabled: bool | None = None
@@ -234,15 +235,17 @@ async def save_config(body: SaveConfigRequest):
     """Save Gemini API key, Google TTS credentials and/or subtitle style."""
     cfg = _read_config()
 
-    if body.gemini_api_keys is not None:
+    if body.gemini_api_keys:
         keys = [k.strip() for k in body.gemini_api_keys if isinstance(k, str) and k.strip()]
         if keys:
             cfg["gemini_api_keys"] = keys
             cfg["gemini_api_key"] = keys[0]
-        else:
-            # Clear all keys.
-            cfg["gemini_api_keys"] = []
-            cfg["gemini_api_key"] = ""
+    elif body.clear_gemini_keys:
+        # Wiping the key list is explicit-only: an empty (or absent) list means
+        # "no change", so a client that failed to load the current keys can't
+        # erase them by saving an unrelated setting (e.g. subtitle style).
+        cfg["gemini_api_keys"] = []
+        cfg["gemini_api_key"] = ""
     elif body.gemini_api_key:
         keys = _gemini_keys(cfg)
         cfg["gemini_api_key"] = body.gemini_api_key

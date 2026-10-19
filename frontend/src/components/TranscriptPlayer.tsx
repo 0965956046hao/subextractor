@@ -333,20 +333,22 @@ export default function TranscriptPlayer({ videoId }: { videoId: string }) {
   const saveSettings = async () => {
     setSettingsStatus(t("transcript.settings.saving" as string));
     try {
+      // Only send fields the user actually typed: sending "" back wipes the
+      // stored value, and the masked placeholder "••••••••" means "unchanged".
+      const body: Record<string, string> = {};
+      if (settingsGeminiKey && settingsGeminiKey !== "••••••••") {
+        body.gemini_api_key = settingsGeminiKey;
+      }
+      if (settingsTtsJson.trim()) {
+        body.google_tts_json = settingsTtsJson;
+      }
+      if (settingsFalKey && settingsFalKey !== "••••••••") {
+        body.fal_key = settingsFalKey;
+      }
       const res = await fetch("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gemini_api_key:
-            settingsGeminiKey && settingsGeminiKey !== "••••••••"
-              ? settingsGeminiKey
-              : "",
-          google_tts_json: settingsTtsJson || "",
-          fal_key:
-            settingsFalKey && settingsFalKey !== "••••••••"
-              ? settingsFalKey
-              : "",
-        }),
+        body: JSON.stringify(body),
       });
       const d = await res.json();
       if (d.error) {

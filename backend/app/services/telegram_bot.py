@@ -44,7 +44,7 @@ class DouyinConfig:
     region_mode: str = "auto"       # auto | manual
     dub_on: bool = True
     dub_engine: str = "capcut"      # google | capcut
-    dub_voice: str = "BV074_streaming_dsp"
+    dub_voice: str = "BV421_vivn_streaming"
     voice_lang: str = "vi-VN"       # vi-VN | en-US
     original_voice: str = "mute"    # mute | keep
     original_gain_db: float = 0.0   # 0..30 (dB giảm, chỉ khi keep)

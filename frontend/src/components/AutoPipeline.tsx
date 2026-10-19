@@ -298,7 +298,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
-  const [dubVoice, setDubVoice] = useState("BV074_streaming_dsp");
+  const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
   const [muteOriginal, setMuteOriginal] = useState(false);
   const [keepOriginalEnabled, setKeepOriginalEnabled] = useState(false);
   const [originalGainDb, setOriginalGainDb] = useState(8);
@@ -1274,7 +1274,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             setPreviewUrl(null);
                             setPreviewError(false);
                             setDubVoice(
-                              l === "vi-VN" ? "BV074_streaming_dsp" : "",
+                              l === "vi-VN" ? "BV421_vivn_streaming" : "",
                             );
                           }}
                           className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${voiceLang === l

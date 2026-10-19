@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     fal_key: str = ""
     # CapCut TTS gen-voice service (capcut-tts-api, FastAPI :8100)
     capcut_tts_url: str = "http://127.0.0.1:8100"
-    capcut_tts_default_voice: str = "BV074_streaming_dsp"
+    capcut_tts_default_voice: str = "BV421_vivn_streaming"
     capcut_tts_default_rate: str = "1.0"
     capcut_tts_timeout: int = 600
 

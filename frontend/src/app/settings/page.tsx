@@ -270,6 +270,8 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [health, setHealth] = useState<PipelineHealth | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cfgLoaded, setCfgLoaded] = useState(false);
+  const [geminiKeysDirty, setGeminiKeysDirty] = useState(false);
   const [ttsInfo, setTtsInfo] = useState("");
   const [watermarkText, setWatermarkText] = useState("");
   const [presets, setPresets] = useState<WatermarkPreset[]>([]);
@@ -335,6 +337,8 @@ export default function SettingsPage() {
         setYtChannels(ytCh.channels || []);
         setTgConfig(tg);
         setHealth(h);
+        setCfgLoaded(true);
+        setGeminiKeysDirty(false);
       } catch {
         setError(t("error.backend"));
       } finally {
@@ -352,18 +356,39 @@ export default function SettingsPage() {
     setStatus(t("btn.saving"));
     setError("");
     try {
-      const res = await saveAppConfig({
-        gemini_api_keys: geminiKeys,
+      // A key pasted into the box but not yet "Thêm"-ed is still what the user
+      // means to save — include it instead of silently dropping it.
+      const pendingKey = geminiKeyInput.trim();
+      const keysToSave =
+        pendingKey && !geminiKeys.includes(pendingKey)
+          ? [...geminiKeys, pendingKey]
+          : geminiKeys;
+      const body: Parameters<typeof saveAppConfig>[0] = {
         google_tts_json: ttsJson || undefined,
-        fal_key: falKey,
         subtitle_style: style,
-        watermark_text: watermarkText,
-      });
+      };
+      // Only send the key list when the user actually added/removed a key.
+      // If the initial load failed, state is empty and sending it back would
+      // wipe the saved keys (backend clears on empty list).
+      if (keysToSave.length > 0) {
+        body.gemini_api_keys = keysToSave;
+      } else if (geminiKeysDirty && cfgLoaded) {
+        body.clear_gemini_keys = true;
+      }
+      // Same rule for full-value fields: never write back state that was never
+      // loaded. (FAL has its own Save/Delete buttons for its own key.)
+      if (cfgLoaded) {
+        body.fal_key = falKey;
+        body.watermark_text = watermarkText;
+      }
+      const res = await saveAppConfig(body);
       if (res.error) {
         setError(res.error);
         setStatus("");
         return;
       }
+      setGeminiKeyInput("");
+      setGeminiKeysDirty(false);
       setStatus(t("status.saved"));
       const [cfg, pc] = await Promise.all([
         getAppConfig(),
@@ -883,6 +908,7 @@ export default function SettingsPage() {
                       type="button"
                       onClick={() => {
                         setGeminiKeys(geminiKeys.filter((_, j) => j !== i));
+                        setGeminiKeysDirty(true);
                         setStatus("");
                       }}
                       className="text-[11px] text-danger hover:text-danger/80 flex-shrink-0 cursor-pointer"
@@ -910,6 +936,7 @@ export default function SettingsPage() {
                   if (!geminiKeys.includes(k)) {
                     setGeminiKeys([...geminiKeys, k]);
                   }
+                  setGeminiKeysDirty(true);
                   setGeminiKeyInput("");
                 }}
                 className="btn-island-secondary whitespace-nowrap cursor-pointer"

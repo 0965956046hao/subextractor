@@ -223,7 +223,7 @@ export interface ImportedDone {
 
 const DEFAULT_DUB: DubOptions = {
   engine: "capcut",
-  voice: "BV074_streaming_dsp",
+  voice: "BV421_vivn_streaming",
   muteOriginal: false,      // giữ âm thanh gốc làm nền
   originalGainDb: 8,       // giảm -8dB
   multiVoice: false,
@@ -3337,7 +3337,7 @@ async function runPipeline(id: string, startStep = 4) {
           // engine is CapCut; Google always uses a Google voice.
           const voice =
             engine === "capcut"
-              ? cur.dubVoice || "BV074_streaming_dsp"
+              ? cur.dubVoice || "BV421_vivn_streaming"
               : cur.dubVoice &&
                   !cur.dubVoice.startsWith("BV") &&
                   !cur.dubVoice.startsWith("AV")

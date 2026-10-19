@@ -793,6 +793,7 @@ export async function getAppConfig(): Promise<AppConfig> {
 export async function saveAppConfig(body: {
   gemini_api_key?: string;
   gemini_api_keys?: string[];
+  clear_gemini_keys?: boolean;
   google_tts_json?: string;
   fal_key?: string;
   auto_context_enabled?: boolean;
