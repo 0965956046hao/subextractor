@@ -23,10 +23,14 @@ class Settings(BaseSettings):
     hardcode_workers: int = 0
     # TTS parallelism: số luồng gọi API gen voice đồng thời (Google TTS + CapCut).
     tts_workers: int = 3
-    # Số worker loop xử lý job song song. Mặc định 1 (xử lý tuần tự). Tăng lên
-    # >1 để chạy nhiều job cùng lúc — lưu ý OCR/Demucs/hardcode có thể không
-    # thread-safe, chỉ tăng khi cần và hiểu rõ rủi ro.
+    # Số worker loop cũ (legacy, không còn dùng để giới hạn concurrency).
+    # Từ khi có step-level scheduler, mỗi lane có worker riêng và job chạy
+    # song song theo bước — giá trị này chỉ giữ để tương thích config cũ.
     job_workers: int = 1
+    # Số thread của executor dùng cho các job nặng (OCR, dub, hardcode...).
+    # Phải đủ lớn cho các lane chạy song song; 8 là dư cho tối đa 2 pipeline
+    # vì các guard gpu/gemini/cpu đã serialize phần thực sự nặng.
+    scheduler_executor_workers: int = 8
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5

@@ -40,6 +40,10 @@ class JobStatus(BaseModel):
     progress: int = 0
     error: str | None = None
     logs: list[LogEntry] = []
+    # Step-level scheduler info (None for jobs that never entered a lane,
+    # e.g. telegram_auto internals inspected from the legacy path).
+    lane: str | None = None
+    queue_position: int | None = None
 
 
 class SrtEntry(BaseModel):

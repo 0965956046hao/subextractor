@@ -13,7 +13,8 @@ from app.config import settings
 from app.services.paddle_ocr_engine import PaddleOCREngine
 from app.services.apple_ocr_engine import AppleOCREngine
 from app.routers import upload, video, process, download, tools, config_router, youtube, video_merge, health, pipeline, meta, thumbnail, capcut, google_tts, video_download, env_tools, image, telegram_auto, annotation, profiles
-from app.worker import supervise_workers
+from app.worker import supervise_lanes
+from app.scheduler import JobQueueRouter, PipelineScheduler
 
 import sys
 
@@ -61,25 +62,28 @@ async def lifespan(app: FastAPI):
     app.state.ocr_engines = ocr_engines
     app.state.jobs: dict = {}
     app.state.ws_clients: dict = {}
-    app.state.job_queue: asyncio.Queue = asyncio.Queue()
+    # Step-level scheduler: one capacity-1 lane per pipeline step + shared
+    # gpu/gemini/cpu guards.  `job_queue` remains a drop-in façade so existing
+    # routers keep calling `await queue.put(job_id)`.
+    scheduler = PipelineScheduler()
+    app.state.scheduler = scheduler
+    app.state.job_queue = JobQueueRouter(app.state.jobs, scheduler)
     # Frontend AutoPipeline step progress, keyed by video_id. Tab 1 (the one
     # driving the pipeline) reports its step_progress here; list_videos merges
     # it into rows so any other tab mirrors the exact same stage/%/steps.
     app.state.pipeline_states: dict = {}
 
-    # Supervisor giữ đúng `job_workers` worker loop sống: worker chết lặng sẽ
-    # được tạo lại thay vì kẹt job queued vĩnh viễn (từng xảy ra, không traceback).
-    # A single loop consumes the queue sequentially, so multiple loops are what
-    # actually allow parallel jobs. Default = 1 (unchanged behavior).
+    # One supervised worker per lane.  Lane workers acquire a lane slot then
+    # the shared gpu/gemini/cpu guards before dispatching the job.  Telegram
+    # auto still runs through its own `auto` lane and bypasses all guards.
     workers = [
         asyncio.create_task(
-            supervise_workers(
+            supervise_lanes(
                 app.state.jobs,
                 app.state.ws_clients,
                 ocr_engines,
-                app.state.job_queue,
                 app.state.pipeline_states,
-                max(1, settings.job_workers),
+                scheduler,
             )
         )
     ]

@@ -17,6 +17,7 @@ import {
   getJobStatus,
   saveVideoSettings,
   resetVideoFromStep,
+  prioritizeJob,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
 
@@ -142,6 +143,8 @@ export interface Pipeline {
   audioUrl: string | null;
   videoId: string | null;
   startedAt: number | null;
+  // Prep is unrestricted; only admission to OCR and later consumes a slot.
+  processingAdmitted?: boolean;
   finishedAt: number | null;
   stepStarts: (number | null)[];
   stepEnds: (number | null)[];
@@ -582,7 +585,7 @@ export const usePipelineStore = create<PipelineState>()(
             ),
           ],
         }));
-        runPrep(id);
+        enqueue(id, 0);
         schedulePersist();
         return id;
       },
@@ -625,7 +628,7 @@ export const usePipelineStore = create<PipelineState>()(
         }));
         // Đã có videoId → lưu setting riêng của video xuống backend ngay.
         persistVideoSettings(id);
-        runPrep(id, 2);
+        enqueue(id, 2);
         return id;
       },
       importActive: (v) => {
@@ -747,15 +750,30 @@ export const usePipelineStore = create<PipelineState>()(
         schedulePersist();
       },
       removePipeline: (id) => {
+        bumpGen(id);
+        abortDelogo(id);
+        resolvePauseWaiters(id);
+        priorityPipelines.delete(id);
+        queue = queue.filter((q) => q.id !== id);
         set((s) => ({ pipelines: s.pipelines.filter((p) => p.id !== id) }));
+        releaseSlot(id);
         schedulePersist();
       },
       clearFinished: () => {
+        const finished = get().pipelines.filter(
+          (p) => p.status === "done" || p.status === "error",
+        );
+        for (const p of finished) {
+          priorityPipelines.delete(p.id);
+          occupiedSlots.delete(p.id);
+          queue = queue.filter((q) => q.id !== p.id);
+        }
         set((s) => ({
           pipelines: s.pipelines.filter(
             (p) => p.status !== "done" && p.status !== "error",
           ),
         }));
+        processQueue();
         schedulePersist();
       },
       rerunPipeline: async (id, step) => {
@@ -824,10 +842,8 @@ export const usePipelineStore = create<PipelineState>()(
           // The original pipeline may have regionMode="auto" from import, but
           // rerun should allow manual region selection.
           patch(id, { regionMode: "manual", region: null });
-          runPrep(id, step);
-        } else {
-          enqueue(id, step);
         }
+        enqueue(id, step);
       },
       confirmRegion: (id, region) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -852,7 +868,7 @@ export const usePipelineStore = create<PipelineState>()(
         persistVideoSettings(id);
         // Restored pipeline (page reload): no live runner → resume prep from where it waited.
         if (!liveRunners.has(id)) {
-          runPrep(id, s.resumeStep ?? 3);
+          enqueue(id, s.resumeStep ?? 3);
         }
       },
       confirmSubtitleStyle: (id, style) => {
@@ -910,11 +926,7 @@ export const usePipelineStore = create<PipelineState>()(
         if (!liveRunners.has(id)) {
           const cur2 = get().pipelines.find((p) => p.id === id);
           const rs = cur2?.resumeStep ?? 4;
-          if (rs <= 3) {
-            runPrep(id, rs);
-          } else {
-            enqueue(id, rs);
-          }
+          enqueue(id, rs);
         }
       },
       confirmKeepOriginal: (id, ranges) => {
@@ -953,7 +965,7 @@ export const usePipelineStore = create<PipelineState>()(
           w.resolve({ action, extra: extraInstructions });
         }
         if (!liveRunners.has(id)) {
-          runPipeline(id, s.resumeStep ?? 11);
+          enqueue(id, s.resumeStep ?? 11);
         }
       },
       resolveThumbnailFallback: (id, choice) => {
@@ -972,7 +984,7 @@ export const usePipelineStore = create<PipelineState>()(
           w.resolve(choice);
         }
         if (!liveRunners.has(id)) {
-          runPipeline(id, s.resumeStep ?? 11);
+          enqueue(id, s.resumeStep ?? 11);
         }
       },
       pausePipeline: async (id) => {
@@ -994,6 +1006,7 @@ export const usePipelineStore = create<PipelineState>()(
                   ...p,
                   status: "queued" as const,
                   paused: true,
+                  processingAdmitted: false,
                   error: "",
                   failedStep: null,
                   finishedAt: null,
@@ -1024,6 +1037,8 @@ export const usePipelineStore = create<PipelineState>()(
         resolvePauseWaiters(id);
         reportPipeline(id, true);
         schedulePersist();
+        priorityPipelines.delete(id);
+        releaseSlot(id);
         // Hủy job backend (KHÔNG xóa file như abort) để nhường worker
         if (s.videoId) {
           try {
@@ -1051,11 +1066,7 @@ export const usePipelineStore = create<PipelineState>()(
         // Sau fix prep không còn chờ watermark sớm, resumeStep luôn đúng.
         const fromStep =
           s.resumeStep ?? STEP_STAGE[s.stage] ?? (s.stage === "idle" ? 0 : 4);
-        if (fromStep <= 3) {
-          runPrep(id, fromStep);
-        } else {
-          enqueueFront(id, fromStep);
-        }
+        enqueueFront(id, fromStep);
       },
       cancelPipeline: async (id) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -1064,7 +1075,10 @@ export const usePipelineStore = create<PipelineState>()(
         bumpGen(id);
         abortDelogo(id);
         abortedPipelines.add(id);
+        priorityPipelines.delete(id);
+        queue = queue.filter((q) => q.id !== id);
         set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
+        releaseSlot(id);
         rejectRegion(id);
         rejectSubtitleStyle(id);
         rejectWatermarkRegion(id);
@@ -1545,8 +1559,28 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 
 // ── Queue ──────────────────────────────────────────────────────────────────
 
-let queue: { id: string; startStep: number }[] = [];
-let processing = false;
+// Tối đa 2 pipeline từ OCR trở đi. Prep không chiếm slot; pipeline đã vào
+// xử lý nặng giữ slot khi chờ gate thủ công, nhưng pause chủ động sẽ nhả slot.
+const MAX_ACTIVE_PIPELINES = 2;
+
+// Các bước cuối luôn bị tắt theo yêu cầu: meta (10), thumbnail (11),
+// upload YouTube (12). Pipeline kết thúc sau hardcode (bước 9).
+const ENABLE_META_THUMBNAIL_YOUTUBE = false;
+
+// Queue entry: `phase` tells the launcher whether to run the prep runner
+// (interactive: resolve → region → subtitle style) or the heavy runner
+// (OCR → hardcode).  Most prep steps are 0-3, but the early watermark gate is
+// entered via runPrep(4), so the phase must be explicit.
+type QueuePhase = "prep" | "heavy";
+type QueueEntry = {
+  id: string;
+  startStep: number;
+  phase: QueuePhase;
+  priority?: boolean;
+};
+let queue: QueueEntry[] = [];
+const occupiedSlots = new Set<string>();
+const priorityPipelines = new Set<string>();
 const abortedPipelines = new Set<string>();
 // Pipelines currently driven by a live runner coroutine (runPrep/runPipeline).
 // After a page reload these are empty, so restored interactive waits must
@@ -1558,15 +1592,13 @@ const liveRunners = new Set<string>();
 const runGen = new Map<string, number>();
 function bumpGen(id: string) {
   runGen.set(id, (runGen.get(id) ?? 0) + 1);
+  liveRunners.delete(id);
 }
 function isStaleRun(id: string, gen: number) {
   return (runGen.get(id) ?? 0) !== gen;
 }
-// runPrep không có finally: stale-check ở đó phải tự xóa liveRunners.
 function staleExitPrep(id: string, gen: number): boolean {
-  if (!isStaleRun(id, gen)) return false;
-  liveRunners.delete(id);
-  return true;
+  return isStaleRun(id, gen);
 }
 const regionWaiters = new Map<
   string,
@@ -1883,17 +1915,102 @@ function pollBackendTimelineDecision(
   });
 }
 
-function enqueue(id: string, startStep = 0) {
-  queue.push({ id, startStep });
+function enqueue(
+  id: string,
+  startStep = 0,
+  phase: QueuePhase = startStep < 4 ? "prep" : "heavy",
+) {
+  // Dedup: một pipeline chỉ có tối đa 1 entry trong queue. Bản mới thay bản cũ
+  // để resume/rerun không tạo 2 runner cho cùng video.
+  queue = queue.filter((q) => q.id !== id);
+  queue.push({ id, startStep, phase });
+  processQueue();
+}
+
+/** Enqueue a prep run explicitly (used by the early watermark gate at step 4). */
+function enqueuePrep(id: string, startStep: number) {
+  queue = queue.filter((q) => q.id !== id);
+  queue.push({ id, startStep, phase: "prep" });
   processQueue();
 }
 
 // Resume thủ công của user (bấm Tiếp tục) được ưu tiên chạy ngay sau video
 // đang xử lý, thay vì xếp cuối sau mọi video đang chờ — trước đây resume ở
 // bước dub với 2-3 video trong hàng đợi trông như "bấm mà không chạy".
-function enqueueFront(id: string, startStep = 0) {
-  queue.unshift({ id, startStep });
+// Đồng thời đánh dấu priority để job backend đầu tiên của pipeline này được
+// chen lên đầu lane (không cắt ngang job đang chạy).
+function enqueueFront(id: string, startStep = 4) {
+  priorityPipelines.add(id);
+  queue = queue.filter((q) => q.id !== id);
+  queue.unshift({ id, startStep, phase: startStep < 4 ? "prep" : "heavy", priority: true });
   processQueue();
+}
+
+function releaseSlot(id: string) {
+  if (occupiedSlots.delete(id)) processQueue();
+}
+
+/** Lấy cờ priority của pipeline (chỉ dùng cho job backend đầu tiên). */
+function takePriority(id: string): boolean {
+  if (!priorityPipelines.has(id)) return false;
+  priorityPipelines.delete(id);
+  return true;
+}
+
+/** Ưu tiên job backend vừa tạo nếu pipeline này vừa được resume. */
+async function prioritizeIfNeeded(id: string, jobId: string | undefined | null) {
+  if (!jobId) return;
+  if (priorityPipelines.has(id)) {
+    priorityPipelines.delete(id);
+    await prioritizeJob(jobId);
+  }
+}
+
+function processQueue() {
+  // Prep (steps 1–4) is unrestricted. Only OCR onward needs one of the two
+  // processing slots; admitted pipelines retain it at later manual gates.
+  for (let i = 0; i < queue.length; ) {
+    const entry = queue[i];
+    const pipeline = usePipelineStore
+      .getState()
+      .pipelines.find((p) => p.id === entry.id);
+    if (!pipeline || pipeline.paused) {
+      occupiedSlots.delete(entry.id);
+      queue.splice(i, 1);
+      continue;
+    }
+    if (entry.phase === "prep") {
+      queue.splice(i, 1);
+      launchEntry(entry);
+      continue;
+    }
+    if (occupiedSlots.has(entry.id)) {
+      // Pipeline đã có slot (handoff prep → heavy, hoặc rerun khi runner cũ
+      // còn sống): chạy tiếp mà không chiếm thêm slot.
+      queue.splice(i, 1);
+      launchEntry(entry);
+      continue;
+    }
+    if (occupiedSlots.size >= MAX_ACTIVE_PIPELINES) {
+      i += 1;
+      continue;
+    }
+    queue.splice(i, 1);
+    occupiedSlots.add(entry.id);
+    launchEntry(entry);
+  }
+}
+
+function launchEntry(entry: QueueEntry) {
+  if (entry.priority) priorityPipelines.add(entry.id);
+  const run =
+    entry.phase === "prep"
+      ? runPrep(entry.id, entry.startStep)
+      : runPipeline(entry.id, entry.startStep);
+  void run.catch(() => {
+    // Runner tự bắt lỗi; đây chỉ là lưới an toàn để slot không kẹt.
+    releaseSlot(entry.id);
+  });
 }
 
 // Watches the backend for a voice-review decision made from another tab or the
@@ -1919,22 +2036,6 @@ function pollBackendVoiceDecision(
     };
     setTimeout(step, 1000);
   });
-}
-
-async function processQueue() {
-  if (processing) return;
-  if (queue.length === 0) return;
-  processing = true;
-  const { id, startStep } = queue.shift()!;
-  try {
-    await runPipeline(id, startStep);
-  } finally {
-    // Luôn nhả cờ kể cả khi runner throw ngoài dự kiến — trước đây một
-    // runner chết bất thường là cả hàng đợi tắc vĩnh viễn, mọi video sau
-    // (dù đã chọn vùng xong) đứng im mãi.
-    processing = false;
-    processQueue();
-  }
 }
 
 // ── Runner ─────────────────────────────────────────────────────────────────
@@ -2092,15 +2193,14 @@ function markStepSkipped(id: string, i: number) {
 }
 
 // ── Prep runner (interactive: resolve → merge → region → subtitle style) ──
-// Runs immediately when a video is added, so the user can select region and
-// subtitle position/size while other videos are still being processed in the
-// queue. Only the heavy steps (OCR → hardcode) are enqueued sequentially.
+// Steps 1–4 run without a processing slot, including their manual gates.
 async function runPrep(id: string, startStep = 0) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   const rawUrl = cur.url;
 
   const tick = (i: number) => (t: JobTick) => {
+    if (isStaleRun(id, gen)) return;
     setStepProgress(id, i, t.progress);
     recalcOverall(id);
     if (t.logs) appendBackendLogs(id, t.logs);
@@ -2144,10 +2244,10 @@ async function runPrep(id: string, startStep = 0) {
 
   liveRunners.add(id);
   const gen = runGen.get(id) ?? 0;
+  let handedOff = false;
   try {
     if (abortedPipelines.has(id)) return;
     if (isStaleRun(id, gen)) {
-      liveRunners.delete(id);
       return;
     }
     appendLog(id, `Bắt đầu pipeline (từ bước ${startStep})…`);
@@ -2493,14 +2593,17 @@ async function runPrep(id: string, startStep = 0) {
       }
     }
 
-    // Prep done → enqueue the heavy processing into the sequential queue.
+    // Prep complete: queue for admission to OCR, without reserving a slot.
     // OCR (bước 4) chạy xong → delogo (bước 5) dùng vùng đã chọn ở trên,
     // không dừng hỏi lại.
+    liveRunners.delete(id);
+    handedOff = true;
+    patch(id, { status: "queued", stage: "processing", resumeStep: 4 });
     enqueue(id, 4);
   } catch (e) {
-    liveRunners.delete(id);
     // Runner cũ (đã pause/cancel/rerun) thoát êm, không ghi đè state mới
     if (isStaleRun(id, gen)) return;
+    liveRunners.delete(id);
     const stage = usePipelineStore
       .getState()
       .pipelines.find((x) => x.id === id)?.stage;
@@ -2512,6 +2615,10 @@ async function runPrep(id: string, startStep = 0) {
       finishedAt: Date.now(),
     });
     reportPipeline(id, true);
+    // Terminal error frees the slot; pause/cancel release it in their actions.
+    releaseSlot(id);
+  } finally {
+    if (!handedOff && !isStaleRun(id, gen)) liveRunners.delete(id);
   }
 }
 
@@ -2589,10 +2696,15 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
 }
 
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
-// Executed one video at a time via the sequential queue.
+// Up to two pipeline runners overlap; backend lanes serialize each step.
 async function runPipeline(id: string, startStep = 4) {
+  occupiedSlots.add(id);
+  patch(id, { processingAdmitted: true });
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
-  if (!cur) return;
+  if (!cur) {
+    releaseSlot(id);
+    return;
+  }
   const videoId = cur.videoId;
   let sourceLang = cur.srcLang || "zh";
   let ocrLang = cur.ocrLang || "ch";
@@ -2600,6 +2712,7 @@ async function runPipeline(id: string, startStep = 4) {
   let region = cur.region;
 
   const tick = (i: number) => (t: JobTick) => {
+    if (isStaleRun(id, gen)) return;
     setStepProgress(id, i, t.progress);
     recalcOverall(id);
     if (t.logs) appendBackendLogs(id, t.logs);
@@ -2702,6 +2815,7 @@ async function runPipeline(id: string, startStep = 4) {
           throw new Error((pd as any).detail || "Không thể bắt đầu OCR");
         }
         const jobId = (pd as any).job_id as string;
+        await prioritizeIfNeeded(id, jobId);
         const ps = await pollJob(jobId, tick(4));
         if (isStaleRun(id, gen)) return;
         if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
@@ -2812,12 +2926,16 @@ async function runPipeline(id: string, startStep = 4) {
           const delogoCtl = new AbortController();
           delogoAborters.set(id, delogoCtl);
           try {
-            const delogoRes = await fetch(`/api/delogo/${videoId}`, {
-              method: "POST",
-              headers: JSON_HEADERS,
-              body: JSON.stringify({ regions: wmRegionsNow }),
-              signal: delogoCtl.signal,
-            });
+            const delogoQuery = takePriority(id) ? "?priority=high" : "";
+            const delogoRes = await fetch(
+              `/api/delogo/${videoId}${delogoQuery}`,
+              {
+                method: "POST",
+                headers: JSON_HEADERS,
+                body: JSON.stringify({ regions: wmRegionsNow }),
+                signal: delogoCtl.signal,
+              },
+            );
 
             if (delogoRes.status === 409) {
               // Một encode delogo khác đang chạy cho video này (vd runner cũ
@@ -2944,6 +3062,11 @@ async function runPipeline(id: string, startStep = 4) {
                       const evt = JSON.parse(line.slice(6));
                       if (evt.type === "log") {
                         appendLog(id, `[wm] ${evt.message}`);
+                      } else if (evt.type === "queued") {
+                        appendLog(
+                          id,
+                          `[wm] ${evt.message || "Đang chờ watermark lane..."}`,
+                        );
                       } else if (evt.type === "ping") {
                         // Heartbeat giữ kết nối — không log để khỏi spam.
                       } else if (evt.type === "progress") {
@@ -3046,6 +3169,7 @@ async function runPipeline(id: string, startStep = 4) {
         const cd = await cr.json();
         if (cr.ok && cd.job_id) {
           patch(id, { contextOn: true });
+          await prioritizeIfNeeded(id, cd.job_id);
           const cs = await pollJob(cd.job_id, tick(6));
           if (isStaleRun(id, gen)) return;
           if (cs.status !== "done") {
@@ -3126,6 +3250,7 @@ async function runPipeline(id: string, startStep = 4) {
           });
           const td = await tr.json();
           if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
+          await prioritizeIfNeeded(id, td.job_id);
           const ts = await pollJob(td.job_id, tick(7));
           if (isStaleRun(id, gen)) return;
           if (ts.status !== "done")
@@ -3395,6 +3520,7 @@ async function runPipeline(id: string, startStep = 4) {
             if (!(dr.ok && dd.job_id)) {
               throw new Error(dd.detail || "Không thể bắt đầu lồng tiếng");
             }
+            await prioritizeIfNeeded(id, dd.job_id);
             const ds = await pollJob(dd.job_id, tick(8));
             if (isStaleRun(id, gen)) return;
             if (ds.status !== "done") {
@@ -3513,6 +3639,7 @@ async function runPipeline(id: string, startStep = 4) {
         });
         const hd = await hr.json();
         if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
+        await prioritizeIfNeeded(id, hd.job_id);
         const hs = await pollJob(hd.job_id, tick(9));
         if (isStaleRun(id, gen)) return;
         if (hs.status !== "done")
@@ -3760,53 +3887,30 @@ async function runPipeline(id: string, startStep = 4) {
       }
     };
 
-    // 10. Tạo meta — chỉ cần khi bật tự động upload YouTube (meta dùng để
-    // đăng YouTube). Nếu tắt auto upload → bỏ qua bước này cho nhanh.
-    if (cur.autoUploadYoutube) {
+    // 10-12. Tắt vĩnh viễn theo yêu cầu: meta (11), thumbnail (12),
+    // upload YouTube (13). Pipeline kết thúc sau hardcode/export.
+    if (!ENABLE_META_THUMBNAIL_YOUTUBE) {
+      appendLog(id, "Bỏ qua tạo meta (bước 11 — đã tắt).");
+      markStepSkipped(id, 10);
+      appendLog(id, "Bỏ qua cập nhật thumbnail (bước 12 — đã tắt).");
+      markStepSkipped(id, 11);
+      appendLog(id, "Bỏ qua upload YouTube (bước 13 — đã tắt).");
+      markStepSkipped(id, 12);
+    }
+
+    if (!ENABLE_META_THUMBNAIL_YOUTUBE) {
+      // no-op: giữ khối dưới dạng dead-code có điều kiện để dễ bật lại sau này.
+    } else if (cur.autoUploadYoutube) {
       await Promise.all([doMeta(), doThumbnail()]);
     } else {
-      appendLog(id, "Bỏ qua tạo meta (tự động up YouTube tắt).");
-      markStepSkipped(id, 10);
       await doThumbnail();
     }
     if (abortAfterThumbnail) return;
     if (isStaleRun(id, gen)) return;
 
-    // 12. Upload YouTube (chỉ khi bật auto upload)
-    if (startStep <= 12) {
-      if (!cur.autoUploadYoutube) {
-        appendLog(id, "Bỏ qua upload YouTube (tự động up tắt).");
-        markStepSkipped(id, 12);
-      } else {
-        patch(id, { stage: "youtube" });
-        markStepStart(id, 12);
-        appendLog(id, "Upload YouTube (kèm meta)...");
-        try {
-          const channelId = cur.youtubeChannel || "";
-          const ur = await fetch(
-            `/api/youtube/upload/${videoId}${channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ""}`,
-            { method: "POST" },
-          );
-          const ud = await ur.json();
-          if (ur.ok && ud.job_id) {
-            const us = await pollYoutubeUpload(ud.job_id, tick(12));
-            if (isStaleRun(id, gen)) return;
-            if (us.status === "done") {
-              appendLog(id, "Upload YouTube hoàn tất!");
-            } else {
-              appendLog(id, `Upload YouTube thất bại: ${us.error || "lỗi"}`);
-            }
-          } else {
-            appendLog(
-              id,
-              `Bỏ qua upload YouTube: ${ud.detail || "chưa cấu hình"}`,
-            );
-          }
-        } catch {
-          appendLog(id, "Bỏ qua upload YouTube (lỗi).");
-        }
-        markStepEnd(id, 12);
-      }
+    // 12. Upload YouTube — luôn tắt cùng meta/thumbnail.
+    if (startStep <= 12 && !ENABLE_META_THUMBNAIL_YOUTUBE) {
+      markStepSkipped(id, 12);
     }
 
     patch(id, {
@@ -3833,7 +3937,24 @@ async function runPipeline(id: string, startStep = 4) {
     });
     reportPipeline(id, true);
   } finally {
-    liveRunners.delete(id);
+    if (!isStaleRun(id, gen)) liveRunners.delete(id);
+    const after = usePipelineStore.getState().pipelines.find((x) => x.id === id);
+    if (!after) {
+      // Cancel/delete đã gỡ pipeline → trả slot ngay.
+      releaseSlot(id);
+    } else if (!isStaleRun(id, gen)) {
+      if (after.status === "done" || after.status === "error") {
+        // Runner hiện tại kết thúc → trả slot.
+        releaseSlot(id);
+      } else if (after.paused) {
+        releaseSlot(id);
+      } else {
+        // Cùng generation nhưng chưa terminal: runner đã enqueue bước kế
+        // (handoff) → giữ slot cho runner mới, chạy tiếp queue.
+        processQueue();
+      }
+    }
+    // Stale do rerun (không paused): runner mới đã/đang thay thế, giữ slot.
   }
 }
 
@@ -3854,6 +3975,15 @@ async function runRestorePaused() {
   restoreRunning = true;
   try {
     const pipes = usePipelineStore.getState().pipelines;
+    // Restore only processing slots, never reserve slots for prep or for
+    // videos waiting to enter OCR. Step timestamps support older saved state.
+    for (const p of pipes) {
+      if (occupiedSlots.size >= MAX_ACTIVE_PIPELINES) break;
+      const admitted = p.processingAdmitted ?? p.stepStarts.slice(4).some((v) => v != null);
+      if (!p.paused && admitted && (p.status === "running" || p.status === "queued")) {
+        occupiedSlots.add(p.id);
+      }
+    }
     // Fetch 1 lần duy nhất cho mọi pipeline (trước đây resumeHeavy fetch riêng
     // mỗi video, vừa chậm vừa treo cả vòng restore khi job đầu chưa xong).
     let videos: VideoMeta[] = [];
@@ -3876,7 +4006,7 @@ async function runRestorePaused() {
       const stepIdx = STEP_STAGE[p.stage];
       if (stepIdx == null) {
         // Freshly-added pipeline that hadn't started prep yet (stage idle).
-        if (p.stage === "idle") runPrep(p.id, 0);
+        if (p.stage === "idle") enqueue(p.id, 0);
         continue;
       }
 
@@ -3890,7 +4020,7 @@ async function runRestorePaused() {
       // Prep steps (0-3)
       if (stepIdx <= 3) {
         const resumeFrom = p.videoId && stepIdx < 2 ? 2 : stepIdx;
-        runPrep(p.id, resumeFrom);
+        enqueue(p.id, resumeFrom);
         continue;
       }
 
@@ -3906,12 +4036,12 @@ async function runRestorePaused() {
           if ((p.removeWatermarkRegions?.length ?? 0) > 0) {
             await resumeHeavy(p.id, p.videoId, 4, p.stage, videos);
           } else {
-            runPrep(p.id, 4);
+            enqueuePrep(p.id, 4);
           }
           continue;
         }
         if (rs <= 3) {
-          runPrep(p.id, rs);
+          enqueue(p.id, rs);
           continue;
         }
         await resumeHeavy(p.id, p.videoId, rs, p.stage, videos);
@@ -4002,9 +4132,15 @@ async function attachHeavyJob(
     return;
   }
   liveRunners.add(id);
+  const gen = runGen.get(id) ?? 0;
+  let handedOff = false;
   try {
     const cur0 = usePipelineStore.getState().pipelines.find((x) => x.id === id);
-    if (!cur0 || cur0.paused) return;
+    if (!cur0) {
+      releaseSlot(id);
+      return;
+    }
+    if (cur0.paused) return;
     const jobStage = stageForJobType(activeRow.job_type, activeRow.phase);
     const jobIdx = STEP_STAGE[jobStage] ?? stepIdx;
     patch(id, {
@@ -4017,16 +4153,24 @@ async function attachHeavyJob(
       stepProgress: stepProgressFor(jobStage, activeRow.progress ?? 0),
     });
     const tick = (t: JobTick) => {
+      if (isStaleRun(id, gen)) return;
       setStepProgress(id, jobIdx, t.progress);
       recalcOverall(id);
       if (t.logs) appendBackendLogs(id, t.logs);
     };
     const st = await pollJob(jobId, tick);
+    if (isStaleRun(id, gen)) return;
     const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
-    if (!cur) return; // đã xóa pipeline giữa chừng
+    if (!cur) {
+      releaseSlot(id);
+      return; // đã xóa pipeline giữa chừng
+    }
     if (cur.paused) return; // user đã pause — giữ nguyên chờ Tiếp tục, không ghi đè
     if (st.status === "error") {
-      if (st.error === "Đã hủy") return; // pause/cancel backend — thoát êm
+      if (st.error === "Đã hủy") {
+        releaseSlot(id);
+        return; // pause/cancel backend — thoát êm
+      }
       patch(id, {
         status: "error",
         stage: "error",
@@ -4034,6 +4178,7 @@ async function attachHeavyJob(
         error: st.error ?? "Lỗi xử lý",
         finishedAt: Date.now(),
       });
+      releaseSlot(id);
       return;
     }
     // The backend may have advanced past where the UI left off (e.g. reload
@@ -4041,8 +4186,12 @@ async function attachHeavyJob(
     for (let i = Math.min(stepIdx, jobIdx); i <= jobIdx; i++) {
       markStepEnd(id, i);
     }
+    liveRunners.delete(id);
+    handedOff = true;
     enqueue(id, jobIdx + 1);
   } finally {
-    liveRunners.delete(id);
+    // Handoff may already have started a new runner in the same generation.
+    // Only clear the follower marker if no handoff was made.
+    if (!handedOff && !isStaleRun(id, gen)) liveRunners.delete(id);
   }
 }

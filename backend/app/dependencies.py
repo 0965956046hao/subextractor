@@ -1,5 +1,3 @@
-import asyncio
-
 from fastapi import Request, HTTPException
 
 from app.services.paddle_ocr_engine import PaddleOCREngine
@@ -24,8 +22,12 @@ def get_ws_clients(request: Request) -> dict:
     return request.app.state.ws_clients
 
 
-def get_job_queue(request: Request) -> asyncio.Queue:
+def get_job_queue(request: Request):
     return request.app.state.job_queue
+
+
+def get_scheduler(request: Request):
+    return request.app.state.scheduler
 
 
 def get_pipeline_states(request: Request) -> dict:

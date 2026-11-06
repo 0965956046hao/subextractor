@@ -5,7 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPExce
 
 from app.config import settings
 from app.models import ProcessRequest, JobStatus, LogEntry
-from app.dependencies import get_jobs, get_ws_clients, get_job_queue
+from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_scheduler
 from app.services.video_processor import resolve_video_path
 from app.worker import enqueue_job
 
@@ -17,7 +17,8 @@ router = APIRouter()
 async def start_processing(
     req: ProcessRequest,
     jobs: dict = Depends(get_jobs),
-    job_queue: asyncio.Queue = Depends(get_job_queue),
+    job_queue=Depends(get_job_queue),
+    scheduler=Depends(get_scheduler),
 ):
     video_dir = settings.temp_dir / "videos" / req.video_id
     if not video_dir.exists():
@@ -47,6 +48,7 @@ async def start_processing(
     return JobStatus(
         job_id=job["job_id"],
         status=job["status"],
+        lane="ocr",
     )
 
 
@@ -54,12 +56,16 @@ async def start_processing(
 async def cancel_job(
     job_id: str,
     jobs: dict = Depends(get_jobs),
+    scheduler=Depends(get_scheduler),
 ):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     job["cancelled"] = True
     job["status"] = "cancelled"
+    # Remove from the lane immediately so a cancelled job does not occupy a
+    # queue slot / get picked up later.
+    await scheduler.cancel(job_id)
     logger.info("job %s: cancel requested", job_id)
     return JobStatus(
         job_id=job_id,
@@ -69,14 +75,44 @@ async def cancel_job(
     )
 
 
+@router.post("/api/jobs/{job_id}/prioritize")
+async def prioritize_job(
+    job_id: str,
+    jobs: dict = Depends(get_jobs),
+    scheduler=Depends(get_scheduler),
+):
+    """Move a queued job to the front of its lane (resume priority).
+
+    Never preempts the job currently running in that lane.
+    """
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    job["priority"] = True
+    moved = await scheduler.prioritize(job_id)
+    logger.info("job %s: prioritize requested (moved=%s)", job_id, moved)
+    return {"job_id": job_id, "prioritized": moved}
+
+
 @router.get("/api/status/{job_id}", response_model=JobStatus)
 async def get_status(
     job_id: str,
     jobs: dict = Depends(get_jobs),
+    scheduler=Depends(get_scheduler),
 ):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+
+    lane_name = None
+    queue_position = None
+    from app.scheduler import lane_for
+
+    lane_name = lane_for(job.get("job_type", "ocr"))
+    lane = scheduler.lanes.get(lane_name)
+    if lane is not None:
+        queue_position = lane.position(job_id)
+
     return JobStatus(
         job_id=job_id,
         status=job["status"],
@@ -84,6 +120,8 @@ async def get_status(
         progress=job.get("progress", 0),
         error=job.get("error"),
         logs=[LogEntry(**entry) for entry in job.get("logs", [])],
+        lane=lane_name,
+        queue_position=queue_position,
     )
 
 

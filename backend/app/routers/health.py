@@ -45,10 +45,15 @@ async def worker_status(request: Request):
         1 for j in jobs.values()
         if j.get("status") in ("queued", "processing")
     )
+    scheduler = getattr(request.app.state, "scheduler", None)
+    snapshot = scheduler.snapshot() if scheduler is not None else {"lanes": {}, "resources": {}}
     return {
         "queue_size": queue.qsize(),
         "workers": beats,
         "workers_alive": any(now - v < 15 for v in _worker_heartbeats.values()),
         "active_jobs": active,
         "now": now,
+        # Per-step lane state + shared gpu/gemini/cpu owners.
+        "lanes": snapshot.get("lanes", {}),
+        "resources": snapshot.get("resources", {}),
     }

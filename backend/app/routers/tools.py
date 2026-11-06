@@ -11,7 +11,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.config import settings
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
-from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_pipeline_states
+from app.dependencies import (
+    get_jobs,
+    get_ws_clients,
+    get_job_queue,
+    get_pipeline_states,
+    get_scheduler,
+)
 from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _hardcoded_is_complete, _delogo_video_path
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
@@ -383,13 +389,17 @@ async def retranslate_srt(video_id: str, request: Request):
         raise HTTPException(400, "Missing translated SRT content")
     source_lang = body.get("source_lang", "zh")
     target_lang = body.get("target_lang", "vi")
+    scheduler = get_scheduler(request)
     try:
-        updated = retranslate_untranslated(
-            video_id,
-            content,
-            source_lang=source_lang,
-            target_lang=target_lang,
-        )
+        # Unique key per request: the gate treats a repeated id as re-entrant
+        # (same owner), which would let a double-click run two Gemini calls.
+        async with scheduler.guard("gemini", f"retranslate:{video_id}:{uuid.uuid4().hex[:8]}"):
+            updated = retranslate_untranslated(
+                video_id,
+                content,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
     except ValueError as e:
         raise HTTPException(404, str(e))
     # Ghi luôn bản đã vá lên file SRT cuối (bản dịch) để các dòng chưa dịch
@@ -460,8 +470,10 @@ async def re_translate_srt_line(video_id: str, request: Request):
         if src is not None:
             source_text = src.text
 
+    scheduler = get_scheduler(request)
     try:
-        new_text = _rt_line(video_id, source_text, source_lang=source_lang, target_lang=target_lang)
+        async with scheduler.guard("gemini", f"re-translate-line:{video_id}:{uuid.uuid4().hex[:8]}"):
+            new_text = _rt_line(video_id, source_text, source_lang=source_lang, target_lang=target_lang)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except RuntimeError as e:
@@ -516,10 +528,12 @@ async def rewrite_srt_line(video_id: str, request: Request):
             f"- Natural for spoken subtitles (avoid formal/literary style)\n\n"
             f"Current text: {current_text}"
         )
-        response = _call_gemini(prompt, {
-            "system_instruction": "You are a concise subtitle editor. Output only the rewritten text.",
-            "temperature": 0.4,
-        })
+        scheduler = get_scheduler(request)
+        async with scheduler.guard("gemini", f"rewrite-line:{video_id}:{uuid.uuid4().hex[:8]}"):
+            response = _call_gemini(prompt, {
+                "system_instruction": "You are a concise subtitle editor. Output only the rewritten text.",
+                "temperature": 0.4,
+            })
         new_text = _clean_gemini_response(response.text.strip())
         # Take last non-empty line
         lines = [ln.strip() for ln in new_text.splitlines() if ln.strip()]
@@ -910,6 +924,8 @@ async def delogo_video(
     video_id: str,
     request: Request,
     pipeline_states: dict = Depends(get_pipeline_states),
+    scheduler=Depends(get_scheduler),
+    priority: str | None = Query(None),
 ):
     """
     Apply FFmpeg delogo filter to remove watermark(s).
@@ -1560,7 +1576,7 @@ async def delogo_video(
     import re as _re
     import time as _time
 
-    async def _run_delogo_sse():
+    async def _run_delogo_ffmpeg():
         start_time = _time.time()
         loop = asyncio.get_running_loop()
         proc = _sp.Popen(
@@ -1768,6 +1784,64 @@ async def delogo_video(
             with _DELOGO_LOCK:
                 if _DELOGO_PROCS.get(video_id) is proc:
                     del _DELOGO_PROCS[video_id]
+
+    async def _run_delogo_sse():
+        """Wait for the watermark lane + gpu/cpu guards, then stream FFmpeg.
+
+        Delogo is a direct SSE endpoint (not a queued job), so it participates
+        in the same lane/guard system manually.  The queued event tells the
+        frontend the request is waiting instead of hung.
+        """
+        from app.scheduler import LaneCancelled
+
+        delogo_key = f"delogo:{video_id}:{uuid.uuid4().hex[:8]}"
+        lane = scheduler.lanes["watermark"]
+        if lane.is_busy():
+            yield f"data: {json.dumps({'type': 'queued', 'lane': 'watermark', 'position': lane.qsize() + 1, 'message': 'Đang chờ video khác xoá watermark xong...'})}\n\n"
+
+        acquire = asyncio.create_task(
+            scheduler.acquire_direct(
+                delogo_key, "delogo", priority=(priority == "high")
+            )
+        )
+        try:
+            while True:
+                done, _ = await asyncio.wait({acquire}, timeout=2)
+                if acquire in done:
+                    break
+                try:
+                    disconnected = await request.is_disconnected()
+                except Exception:
+                    disconnected = False
+                if disconnected:
+                    await scheduler.cancel(delogo_key)
+                    acquire.cancel()
+                    try:
+                        await acquire
+                    except (asyncio.CancelledError, LaneCancelled):
+                        pass
+                    scheduler.release_direct(delogo_key, "delogo")
+                    return
+            # Surface acquisition errors (cancelled while queued).
+            acquire.result()
+        except LaneCancelled:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Delogo cancelled while waiting in queue'})}\n\n"
+            return
+        except asyncio.CancelledError:
+            await scheduler.cancel(delogo_key)
+            acquire.cancel()
+            try:
+                await acquire
+            except (asyncio.CancelledError, LaneCancelled):
+                pass
+            scheduler.release_direct(delogo_key, "delogo")
+            raise
+
+        try:
+            async for chunk in _run_delogo_ffmpeg():
+                yield chunk
+        finally:
+            scheduler.release_direct(delogo_key, "delogo")
 
     return StreamingResponse(
         _run_delogo_sse(),
@@ -2002,15 +2076,20 @@ async def generate_voice_map_now(request: Request, video_id: str):
     except Exception:
         pass
     target_lang = str(body.get("target_lang", "vi") or "vi")
+    scheduler = get_scheduler(request)
+    priority = request.query_params.get("priority") == "high"
 
     srt_path = _srt_best_path(video_id)
     entries = parse_srt(srt_path.read_text(encoding="utf-8"))
     if not entries:
         raise HTTPException(400, "No SRT entries")
 
-    voice_map = await run_in_threadpool(
-        _gen_voice_map, video_id, entries, None, target_lang
-    )
+    async with scheduler.guard(
+        "gemini", f"voice-map:{video_id}:{uuid.uuid4().hex[:8]}", priority=priority
+    ):
+        voice_map = await run_in_threadpool(
+            _gen_voice_map, video_id, entries, None, target_lang
+        )
     if not voice_map:
         raise HTTPException(500, "Không tạo được voice_map.json (kiểm tra Gemini key / CapCut voice catalog).")
     return {"status": "done", "voices": len(voice_map)}

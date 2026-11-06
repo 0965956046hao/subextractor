@@ -290,6 +290,15 @@ export async function cancelJob(jobId: string): Promise<void> {
   await api.post(`/process/${jobId}/cancel`);
 }
 
+/** Move a queued backend job to the front of its lane (resume priority). */
+export async function prioritizeJob(jobId: string): Promise<void> {
+  try {
+    await api.post(`/jobs/${jobId}/prioritize`);
+  } catch {
+    // Priority is a best-effort optimisation; never fail the pipeline.
+  }
+}
+
 export function createWsUrl(jobId: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/api/ws/${jobId}`;

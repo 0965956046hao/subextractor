@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.dependencies import get_jobs, get_pipeline_states
+from app.dependencies import get_jobs, get_pipeline_states, get_scheduler
 from app.services.video_processor import resolve_video_path
 from app.services.media_utils import _hardcoded_is_complete
 
@@ -519,7 +519,11 @@ async def reset_video_from_step(video_id: str, body: dict):
 
 
 @router.post("/api/video/{video_id}/pause")
-async def pause_video(video_id: str, jobs: dict = Depends(get_jobs)):
+async def pause_video(
+    video_id: str,
+    jobs: dict = Depends(get_jobs),
+    scheduler=Depends(get_scheduler),
+):
     """Tạm dừng: hủy job đang chạy của video để nhường worker, KHÔNG xóa file.
 
     Khác với /abort (xóa srt/videos/frames): pipeline được giữ lại để chạy tiếp
@@ -532,7 +536,11 @@ async def pause_video(video_id: str, jobs: dict = Depends(get_jobs)):
             job["cancelled"] = True
             job["status"] = "cancelled"
             cancelled += 1
+            await scheduler.cancel(job_id)
             logger.info("job %s: paused via video %s", job_id, video_id)
+    # Delogo là SSE trực tiếp (không nằm trong jobs dict): hủy cả entry đang
+    # chờ trong watermark lane lẫn encode đang chạy.
+    await scheduler.cancel_video(video_id)
     # Dừng cả encode delogo đang chạy (nếu có): delogo là SSE trực tiếp, không
     # nằm trong job queue nên phải kill riêng — nếu không ffmpeg sẽ encode mồ
     # côi hàng giờ sau khi user đã tạm dừng. KHÔNG xóa file (giữ .srt + video).
@@ -546,7 +554,12 @@ async def pause_video(video_id: str, jobs: dict = Depends(get_jobs)):
 
 
 @router.post("/api/video/{video_id}/abort")
-async def abort_video(video_id: str, jobs: dict = Depends(get_jobs), pipeline_states: dict = Depends(get_pipeline_states)):
+async def abort_video(
+    video_id: str,
+    jobs: dict = Depends(get_jobs),
+    pipeline_states: dict = Depends(get_pipeline_states),
+    scheduler=Depends(get_scheduler),
+):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
     cancelled = 0
@@ -555,7 +568,9 @@ async def abort_video(video_id: str, jobs: dict = Depends(get_jobs), pipeline_st
             job["cancelled"] = True
             job["status"] = "cancelled"
             cancelled += 1
+            await scheduler.cancel(job_id)
             logger.info("job %s: aborted via video %s", job_id, video_id)
+    await scheduler.cancel_video(video_id)
     pipeline_states.pop(video_id, None)
     try:
         from app.routers.tools import kill_delogo
@@ -583,11 +598,16 @@ TEMP_DATA_SUBDIRS = (
 
 
 @router.post("/api/temp/clear")
-async def clear_temp(jobs: dict = Depends(get_jobs), pipeline_states: dict = Depends(get_pipeline_states)):
-    for job in jobs.values():
+async def clear_temp(
+    jobs: dict = Depends(get_jobs),
+    pipeline_states: dict = Depends(get_pipeline_states),
+    scheduler=Depends(get_scheduler),
+):
+    for job_id, job in jobs.items():
         if job.get("status") not in ("done", "cancelled"):
             job["cancelled"] = True
             job["status"] = "cancelled"
+            await scheduler.cancel(job_id)
     pipeline_states.clear()
     removed = 0
     for name in TEMP_DATA_SUBDIRS:
