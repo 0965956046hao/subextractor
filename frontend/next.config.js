@@ -7,6 +7,9 @@ const nextConfig = {
   output: isProduction ? "standalone" : undefined,
   experimental: {
     serverComponentsExternalPackages: ["puppeteer-core"],
+    // Match the upload client's 120-minute timeout. The default proxy idle
+    // timeout is only 30s and can reset uploads while the OCR backend is busy.
+    proxyTimeout: 120 * 60 * 1000,
   },
   async rewrites() {
     return {

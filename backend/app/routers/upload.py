@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from pathlib import Path
 
@@ -7,12 +8,13 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from app.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 @router.post("/api/upload")
-async def upload_video(
+def upload_video(
     file: UploadFile = File(...),
     origin: str = Form("extract"),
 ):
@@ -31,11 +33,16 @@ async def upload_video(
     written = 0
     try:
         with open(video_path, "wb") as f:
-            while chunk := await file.read(64 * 1024):
+            # This sync route runs in FastAPI's thread pool, keeping disk I/O
+            # off the event loop while OCR and other requests are active.
+            while chunk := file.file.read(64 * 1024):
                 written += len(chunk)
                 if settings.max_upload_size > 0 and written > settings.max_upload_size:
                     raise HTTPException(413, "File too large")
                 f.write(chunk)
+    except HTTPException:
+        video_path.unlink(missing_ok=True)
+        raise
     except Exception as e:
         if video_path.exists():
             video_path.unlink()

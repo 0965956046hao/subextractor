@@ -46,20 +46,60 @@ BACKEND_PID=""
 CAPCUT_PID=""
 CAFFEINATE_PID=""
 DS2API_PID=""
+FRONTEND_PID=""
+STOP_PIDS=()
+collect_process_tree() {
+  local pid="$1" child
+  STOP_PIDS+=("$pid")
+  while read -r child; do
+    [ -n "$child" ] && collect_process_tree "$child"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+}
+
 cleanup() {
+  # Cleanup runs once, even when Ctrl+C is followed by the EXIT trap.
+  trap - EXIT
+  trap '' INT TERM
+  local pid attempt running
+  STOP_PIDS=()
+  # Snapshot descendants before TERM: reloaders/npm can exit before their
+  # children, leaving those children reparented and otherwise hard to find.
+  for pid in "$BACKEND_PID" "$CAPCUT_PID" "$DS2API_PID" "$CAFFEINATE_PID" "$FRONTEND_PID"; do
+    [ -n "$pid" ] && collect_process_tree "$pid"
+  done
   echo ""
   echo "Stopping backend (${BACKEND_PID:-?})..."
-  [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null || true
   echo "Stopping capcut service (${CAPCUT_PID:-?})..."
-  [ -n "$CAPCUT_PID" ] && kill "$CAPCUT_PID" 2>/dev/null || true
   echo "Stopping ds2api (${DS2API_PID:-?})..."
-  [ -n "$DS2API_PID" ] && kill "$DS2API_PID" 2>/dev/null || true
   echo "Stopping caffeinate (${CAFFEINATE_PID:-?})..."
-  [ -n "$CAFFEINATE_PID" ] && kill "$CAFFEINATE_PID" 2>/dev/null || true
+  echo "Stopping frontend (${FRONTEND_PID:-?})..."
+  for pid in "${STOP_PIDS[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  # Blocking SDK calls/threads may ignore graceful shutdown. Bound the wait.
+  for ((attempt=0; attempt<50; attempt++)); do
+    running=0
+    for pid in "${STOP_PIDS[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        running=1
+        break
+      fi
+    done
+    [ "$running" -eq 0 ] && break
+    sleep 0.1
+  done
+  for pid in "${STOP_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Force stopping process $pid (shutdown timed out)."
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
   wait 2>/dev/null || true
   echo "All stopped."
 }
-trap cleanup INT TERM EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap cleanup EXIT
 
 # Đảm bảo .next của frontend là bản DEV, không phải bản production.
 # `npm run build` ghi artifact production (output: standalone) vào frontend/.next
@@ -108,4 +148,6 @@ caffeinate -i -s -w "$BACKEND_PID" &
 CAFFEINATE_PID=$!
 
 echo "==> Starting frontend http://localhost:3000"
-(cd "$FRONTEND" && exec npm run dev)
+(cd "$FRONTEND" && exec npm run dev) &
+FRONTEND_PID=$!
+wait "$FRONTEND_PID"

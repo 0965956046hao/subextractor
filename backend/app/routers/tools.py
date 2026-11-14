@@ -239,7 +239,10 @@ async def retranslate_srt(video_id: str, request: Request):
     source_lang = body.get("source_lang", "zh")
     target_lang = body.get("target_lang", "vi")
     try:
-        updated = retranslate_untranslated(
+        # Gemini uses blocking HTTP calls and retry sleeps; keep them off the
+        # event loop so health checks, polling and other requests stay responsive.
+        updated = await asyncio.to_thread(
+            retranslate_untranslated,
             video_id,
             content,
             source_lang=source_lang,
