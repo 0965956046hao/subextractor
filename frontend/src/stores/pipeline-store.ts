@@ -321,7 +321,7 @@ interface PipelineState {
   ) => void;
   resolveThumbnailFallback: (id: string, choice: "fal" | "skip") => void;
   restorePaused: () => void;
-  /** Thứ tự xử lý thực tế: [đang chạy heavy, ...chờ trong hàng đợi]. Tab đang
+  /** Thứ tự xử lý thực tế: [...đang chạy heavy, ...chờ trong hàng đợi]. Tab đang
    *  xử lý sort theo mảng này; pipeline không có trong mảng (chờ user, prep)
    *  xếp sau theo startedAt. Không persist (tái tạo khi runner đăng ký lại). */
   queueOrder: string[];
@@ -798,7 +798,7 @@ export const usePipelineStore = create<PipelineState>()(
           w.resolve({ action, extra: extraInstructions });
         }
         if (!liveRunners.has(id)) {
-          runPipeline(id, s.resumeStep ?? 11);
+          enqueue(id, s.resumeStep ?? 11);
         }
       },
       resolveThumbnailFallback: (id, choice) => {
@@ -817,7 +817,7 @@ export const usePipelineStore = create<PipelineState>()(
           w.resolve(choice);
         }
         if (!liveRunners.has(id)) {
-          runPipeline(id, s.resumeStep ?? 11);
+          enqueue(id, s.resumeStep ?? 11);
         }
       },
       pausePipeline: async (id) => {
@@ -827,7 +827,6 @@ export const usePipelineStore = create<PipelineState>()(
         bumpGen(id);
         // Gỡ khỏi hàng đợi để clip tiếp theo được xử lý ngay
         queue = queue.filter((q) => q.id !== id);
-        if (currentHeavyId === id) currentHeavyId = null;
         syncQueueOrder();
         // Reset bước đang xử lý về trạng thái chờ, giữ nguyên stage để chạy tiếp
         const stepIdx = STEP_STAGE[s.stage];
@@ -897,7 +896,6 @@ export const usePipelineStore = create<PipelineState>()(
         bumpGen(id);
         abortedPipelines.add(id);
         queue = queue.filter((q) => q.id !== id);
-        if (currentHeavyId === id) currentHeavyId = null;
         syncQueueOrder();
         set((st) => ({ pipelines: st.pipelines.filter((p) => p.id !== id) }));
         rejectRegion(id);
@@ -1345,15 +1343,19 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 
 // ── Queue ──────────────────────────────────────────────────────────────────
 
-let queue: { id: string; startStep: number }[] = [];
-let processing = false;
-let currentHeavyId: string | null = null;
+type QueueEntry = {
+  id: string;
+  startStep: number;
+  restore?: { videoId: string | null; stage: Stage };
+};
+const MAX_CONCURRENT_PIPELINES = 3;
+let queue: QueueEntry[] = [];
+const activePipelines = new Set<string>();
+const ocrPipelines = new Set<string>();
 // Đồng bộ thứ tự hàng đợi lên state để UI sort theo (đang chạy trước, rồi
-// đến lượt chờ). Gọi sau mọi thay đổi queue/currentHeavyId.
+// đến lượt chờ). Gọi sau mọi thay đổi queue/activePipelines.
 function syncQueueOrder() {
-  const ids: string[] = [];
-  if (currentHeavyId && !ids.includes(currentHeavyId))
-    ids.push(currentHeavyId);
+  const ids = [...activePipelines];
   for (const q of queue) if (!ids.includes(q.id)) ids.push(q.id);
   usePipelineStore.setState({ queueOrder: ids });
 }
@@ -1674,8 +1676,11 @@ function pollBackendTimelineDecision(
   });
 }
 
-function enqueue(id: string, startStep = 0) {
-  queue.push({ id, startStep });
+function enqueue(id: string, startStep = 0, restore?: QueueEntry["restore"]) {
+  // Keep at most one pending continuation/retry per video. A live runner may
+  // enqueue its next pass, but that pass must wait for the old runner to exit.
+  queue = queue.filter((q) => q.id !== id);
+  queue.push({ id, startStep, restore });
   syncQueueOrder();
   processQueue();
 }
@@ -1705,22 +1710,45 @@ function pollBackendVoiceDecision(
   });
 }
 
-async function processQueue() {
-  if (processing) return;
-  if (queue.length === 0) {
-    currentHeavyId = null;
+function releaseOcrSlot(id: string) {
+  if (ocrPipelines.delete(id)) processQueue();
+}
+
+function processQueue() {
+  while (activePipelines.size < MAX_CONCURRENT_PIPELINES) {
+    const index = queue.findIndex(
+      (q) =>
+        !activePipelines.has(q.id) &&
+        (q.startStep > 4 || ocrPipelines.size === 0),
+    );
+    if (index === -1) break;
+    const entry = queue.splice(index, 1)[0];
+    const cur = usePipelineStore
+      .getState()
+      .pipelines.find((p) => p.id === entry.id);
+    if (!cur || cur.paused || abortedPipelines.has(entry.id)) continue;
+
+    activePipelines.add(entry.id);
+    if (entry.startStep <= 4) ocrPipelines.add(entry.id);
     syncQueueOrder();
-    return;
+    void runQueueEntry(entry);
   }
-  processing = true;
-  const { id, startStep } = queue.shift()!;
-  currentHeavyId = id;
   syncQueueOrder();
-  await runPipeline(id, startStep);
-  processing = false;
-  currentHeavyId = null;
-  syncQueueOrder();
-  processQueue();
+}
+
+async function runQueueEntry({ id, startStep, restore }: QueueEntry) {
+  try {
+    if (restore) {
+      await resumeHeavy(id, restore.videoId, startStep, restore.stage);
+    } else {
+      await runPipeline(id, startStep);
+    }
+  } finally {
+    ocrPipelines.delete(id);
+    activePipelines.delete(id);
+    syncQueueOrder();
+    processQueue();
+  }
 }
 
 // ── Runner ─────────────────────────────────────────────────────────────────
@@ -1881,7 +1909,7 @@ function markStepSkipped(id: string, i: number) {
 // ── Prep runner (interactive: resolve → merge → region → subtitle style) ──
 // Runs immediately when a video is added, so the user can select region and
 // subtitle position/size while other videos are still being processed in the
-// queue. Only the heavy steps (OCR → hardcode) are enqueued sequentially.
+// queue. Heavy steps use a bounded queue, with one OCR at a time.
 async function runPrep(id: string, startStep = 0) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
@@ -2219,7 +2247,7 @@ async function runPrep(id: string, startStep = 0) {
       }
     }
 
-    // Prep done → enqueue the heavy processing into the sequential queue.
+    // Prep done → enqueue the heavy processing into the bounded queue.
     enqueue(id, 4);
   } catch (e) {
     liveRunners.delete(id);
@@ -2313,7 +2341,7 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
 }
 
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
-// Executed one video at a time via the sequential queue.
+// Up to three videos overlap; only the OCR stage is serialized.
 async function runPipeline(id: string, startStep = 4) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
@@ -2427,11 +2455,14 @@ async function runPipeline(id: string, startStep = 4) {
         if (isStaleRun(id, gen)) return;
         if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
         appendLog(id, "OCR xong, đã có phụ đề.");
+        releaseOcrSlot(id);
         // Double-check #1: chạy ngay trên SRT gốc (OCR) trước khi dịch.
         await runSrtAutoChecks(id, videoId);
         markStepEnd(id, 4);
       }
     }
+    if (isStaleRun(id, gen)) return;
+    releaseOcrSlot(id);
 
     // 3.5 STEP 5 — Xoá watermark: chọn vùng + FFmpeg delogo
     if (startStep <= 5 && !cur.removeWatermarkEnabled) {
@@ -3458,6 +3489,7 @@ async function runRestorePaused() {
     for (const p of pipes) {
       if (p.status !== "running" && p.status !== "queued") continue;
       if (liveRunners.has(p.id)) continue;
+      if (activePipelines.has(p.id) || queue.some((q) => q.id === p.id)) continue;
       // Pipeline đang tạm dừng: giữ nguyên, chờ user bấm Tiếp tục
       if (p.paused) continue;
 
@@ -3488,7 +3520,7 @@ async function runRestorePaused() {
       }
 
       // Heavy steps (4-8)
-      await resumeHeavy(p.id, p.videoId, stepIdx, p.stage);
+      enqueue(p.id, stepIdx, { videoId: p.videoId, stage: p.stage });
     }
   } finally {
     restoreRunning = false;
@@ -3508,9 +3540,10 @@ async function resumeHeavy(
 ) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
+  const gen = runGen.get(id) ?? 0;
 
   if (!videoId) {
-    enqueue(id, stepIdx);
+    await runPipeline(id, stepIdx);
     return;
   }
 
@@ -3527,10 +3560,12 @@ async function resumeHeavy(
   } catch {
     // ignore — treat as no active job
   }
+  if (isStaleRun(id, gen)) return;
 
   if (activeRow) {
     const jobStage = stageForJobType(activeRow.job_type, activeRow.phase);
     const jobIdx = STEP_STAGE[jobStage] ?? stepIdx;
+    if (jobIdx > 4) releaseOcrSlot(id);
     patch(id, {
       status: "running",
       stage: jobStage,
@@ -3546,6 +3581,7 @@ async function resumeHeavy(
       if (t.logs) appendBackendLogs(id, t.logs);
     };
     const st = await pollJob(activeRow.job_id as string, tick);
+    if (isStaleRun(id, gen)) return;
     if (st.status === "error") {
       patch(id, {
         status: "error",
@@ -3561,7 +3597,8 @@ async function resumeHeavy(
     for (let i = Math.min(stepIdx, jobIdx); i <= jobIdx; i++) {
       markStepEnd(id, i);
     }
-    enqueue(id, jobIdx + 1);
+    releaseOcrSlot(id);
+    await runPipeline(id, jobIdx + 1);
   } else {
     // Resume ở bước hardcode (muxing) nhưng chưa có audio lồng tiếng trong khi
     // pipeline vẫn bật dub → lùi về bước TTS/dub (8) để tạo lại giọng đọc trước
@@ -3577,6 +3614,7 @@ async function resumeHeavy(
         // ignore — giữ nguyên bước cũ
       }
     }
-    enqueue(id, resumeFrom);
+    if (isStaleRun(id, gen)) return;
+    await runPipeline(id, resumeFrom);
   }
 }

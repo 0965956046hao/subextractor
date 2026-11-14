@@ -17,10 +17,9 @@ class Settings(BaseSettings):
     hardcode_workers: int = 0
     # TTS parallelism: số luồng gọi API gen voice đồng thời (Google TTS + CapCut).
     tts_workers: int = 3
-    # Số worker loop xử lý job song song. Mặc định 1 (xử lý tuần tự). Tăng lên
-    # >1 để chạy nhiều job cùng lúc — lưu ý OCR/Demucs/hardcode có thể không
-    # thread-safe, chỉ tăng khi cần và hiểu rõ rủi ro.
-    job_workers: int = 1
+    # Cho phép các bước sau OCR chạy gối đầu giữa tối đa 3 pipeline.
+    # OCR dùng executor riêng một luồng để không dùng chung engine đồng thời.
+    job_workers: int = 3
 
     det_db_thresh: float = 0.3
     text_score: float = 0.5

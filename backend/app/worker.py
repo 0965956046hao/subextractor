@@ -363,6 +363,9 @@ def process_job_sync(
     return srt_content
 
 
+_ocr_executor: ThreadPoolExecutor | None = None
+
+
 async def run_job(
     jobs: dict,
     ws_clients: dict,
@@ -402,6 +405,13 @@ async def run_job(
 
         loop = asyncio.get_event_loop()
 
+        # Shared OCR engines contain mutable language/cache state. Serialize
+        # the actual thread work, including work still exiting after a timeout.
+        # Initialize lazily to avoid adding import-time startup side effects.
+        global _ocr_executor
+        if _ocr_executor is None:
+            _ocr_executor = ThreadPoolExecutor(max_workers=1)
+
         fn = functools.partial(
             process_job_sync,
             video_path, region, target_fps,
@@ -413,7 +423,7 @@ async def run_job(
         t_start = time.time()
 
         srt_content = await asyncio.wait_for(
-            loop.run_in_executor(_executor, fn),
+            loop.run_in_executor(_ocr_executor, fn),
             timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
 

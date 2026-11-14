@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     # Supervisor giữ đúng `job_workers` worker loop sống: worker chết lặng sẽ
     # được tạo lại thay vì kẹt job queued vĩnh viễn (từng xảy ra, không traceback).
     # A single loop consumes the queue sequentially, so multiple loops are what
-    # actually allow parallel jobs. Default = 1 (unchanged behavior).
+    # actually allow parallel jobs. Default = 3; OCR remains serialized.
     workers = [
         asyncio.create_task(
             supervise_workers(
