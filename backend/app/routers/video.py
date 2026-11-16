@@ -12,6 +12,7 @@ from app.config import settings
 from app.dependencies import get_jobs, get_pipeline_states, get_scheduler
 from app.services.video_processor import resolve_video_path
 from app.services.media_utils import _hardcoded_is_complete
+from app.services.processing_timing import stop_processing
 
 logger = logging.getLogger(__name__)
 
@@ -479,6 +480,19 @@ async def reset_video_from_step(video_id: str, body: dict):
                         except Exception:
                             pass
                 continue
+            if (name == "srt" and not (d / "subtitles.srt").exists()
+                    and (d / "ocr_checkpoints").is_dir()
+                    and not body.get("discard_ocr_checkpoint", False)):
+                # Preserve completed chunks when retrying an incomplete OCR.
+                # A completed SRT or explicit discard still means a fresh run.
+                for child in d.iterdir():
+                    if child.name == "ocr_checkpoints":
+                        continue
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        child.unlink(missing_ok=True)
+                continue
             shutil.rmtree(d, ignore_errors=True)
             removed.append(name)
 
@@ -535,6 +549,7 @@ async def pause_video(
         if job.get("video_id") == video_id and job.get("status") not in ("done", "error", "cancelled"):
             job["cancelled"] = True
             job["status"] = "cancelled"
+            stop_processing(job)
             cancelled += 1
             await scheduler.cancel(job_id)
             logger.info("job %s: paused via video %s", job_id, video_id)
@@ -567,6 +582,7 @@ async def abort_video(
         if job.get("video_id") == video_id and job.get("status") != "done":
             job["cancelled"] = True
             job["status"] = "cancelled"
+            stop_processing(job)
             cancelled += 1
             await scheduler.cancel(job_id)
             logger.info("job %s: aborted via video %s", job_id, video_id)
@@ -607,6 +623,7 @@ async def clear_temp(
         if job.get("status") not in ("done", "cancelled"):
             job["cancelled"] = True
             job["status"] = "cancelled"
+            stop_processing(job)
             await scheduler.cancel(job_id)
     pipeline_states.clear()
     removed = 0

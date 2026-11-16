@@ -20,6 +20,7 @@ import {
   prioritizeJob,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
+import { processingElapsed, receivedTiming, type ProcessingTiming, type StepProcessingTiming } from "@/lib/processing-timing";
 
 function sanitizeFilename(name: string): string {
   return (name || "")
@@ -105,6 +106,19 @@ export const STEP_STAGE: Record<string, number> = {
   youtube: 12,
 };
 
+function pipelineResumeStep(p: Pipeline): number {
+  // Manual gates may intentionally continue at a different step than their
+  // display stage (e.g. watermark selection before OCR, timeline after save).
+  const manualGate =
+    p.stage === "region" || p.stage === "subtitle_preview" ||
+    p.stage === "watermark_region" || p.stage === "wm_delogo" ||
+    p.timelineCheck?.waiting || p.voiceCheck?.waiting;
+  if (manualGate && p.resumeStep != null) return p.resumeStep;
+  // Persisted pipelines may still carry resumeStep=4/5 from an earlier gate.
+  // For processing stages, the current stage is the authoritative checkpoint.
+  return STEP_STAGE[p.stage] ?? p.resumeStep ?? (p.stage === "idle" ? 0 : 4);
+}
+
 export const DEFAULT_REGION: Region = {
   x1: 0.114,
   y1: 0.748,
@@ -149,6 +163,8 @@ export interface Pipeline {
   stepStarts: (number | null)[];
   stepEnds: (number | null)[];
   stepSkipped: boolean[];
+  stepTimings?: (StepProcessingTiming | null)[];
+  stepCached?: boolean[];
   failedStep: number | null;
   ocrEngine: string;
   ocrLang: string;
@@ -812,6 +828,8 @@ export const usePipelineStore = create<PipelineState>()(
                   stepSkipped: p.stepSkipped.map((v, i) =>
                     i >= step ? false : v,
                   ),
+                  stepTimings: (p.stepTimings ?? emptySteps(null)).map((v, i) => i >= step ? null : v),
+                  stepCached: (p.stepCached ?? emptySteps(false)).map((v, i) => i >= step ? false : v),
                 }
               : p,
           ),
@@ -992,6 +1010,7 @@ export const usePipelineStore = create<PipelineState>()(
         if (!s || s.paused || s.status === "done" || s.status === "error")
           return;
         bumpGen(id);
+        const pauseGen = runGen.get(id) ?? 0;
         // Hủy fetch delogo SSE (nếu đang kẹt ở reader.read): runner cũ thoát
         // êm qua isStaleRun, backend kill ffmpeg encode mồ côi.
         abortDelogo(id);
@@ -1006,7 +1025,12 @@ export const usePipelineStore = create<PipelineState>()(
                   ...p,
                   status: "queued" as const,
                   paused: true,
+                  resumeStep: pipelineResumeStep(p),
                   processingAdmitted: false,
+                  stepTimings: (p.stepTimings ?? emptySteps(null)).map((v) => v ? {
+                    ...v, elapsedMs: processingElapsed(v, Date.now(), true) ?? 0,
+                    running: false, receivedAt: Date.now(),
+                  } : null),
                   error: "",
                   failedStep: null,
                   finishedAt: null,
@@ -1043,6 +1067,9 @@ export const usePipelineStore = create<PipelineState>()(
         if (s.videoId) {
           try {
             await fetch(`/api/video/${s.videoId}/pause`, { method: "POST" });
+            if (get().pipelines.find((p) => p.id === id)?.paused) {
+              await refreshStepTimings(id, s.videoId, pauseGen);
+            }
           } catch {
             // ignore
           }
@@ -1059,13 +1086,7 @@ export const usePipelineStore = create<PipelineState>()(
           failedStep: null,
         });
         appendLog(id, "Tiếp tục pipeline từ bước đã tạm dừng...");
-        // Ưu tiên resumeStep (nơi runner thực sự đang chờ) thay vì suy từ
-        // stage: stage "watermark_region" map tới step 5 nhưng prep trước đây
-        // set resumeStep=4 (OCR chưa chạy). Resume sai 5 sẽ bỏ qua OCR và
-        // chạy delogo ngay → treo ở Xóa watermark khi chưa có SRT.
-        // Sau fix prep không còn chờ watermark sớm, resumeStep luôn đúng.
-        const fromStep =
-          s.resumeStep ?? STEP_STAGE[s.stage] ?? (s.stage === "idle" ? 0 : 4);
+        const fromStep = pipelineResumeStep(s);
         enqueueFront(id, fromStep);
       },
       cancelPipeline: async (id) => {
@@ -1277,6 +1298,8 @@ export function fmtElapsed(ms: number): string {
 export interface JobTick {
   progress: number;
   logs?: LogEntry[];
+  jobId?: string;
+  processingTiming?: ProcessingTiming;
 }
 
 async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
@@ -1294,7 +1317,8 @@ async function pollJob(jobId: string, onTick: (t: JobTick) => void) {
       if (!r.ok) continue;
       fails = 0;
       const d = await r.json();
-      onTick({ progress: d.progress ?? 0, logs: d.logs });
+      onTick({ progress: d.progress ?? 0, logs: d.logs, jobId,
+        processingTiming: d.processing_timing });
       if (d.status === "done") return d;
       if (d.status === "error") return { status: "error", error: d.error };
       if (d.status === "cancelled") return { status: "error", error: "Đã hủy" };
@@ -1559,9 +1583,10 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 
 // ── Queue ──────────────────────────────────────────────────────────────────
 
-// Tối đa 2 pipeline từ OCR trở đi. Prep không chiếm slot; pipeline đã vào
+// Tối đa 3 pipeline từ OCR trở đi (có thể cấu hình về 2). Prep không chiếm slot; pipeline đã vào
 // xử lý nặng giữ slot khi chờ gate thủ công, nhưng pause chủ động sẽ nhả slot.
-const MAX_ACTIVE_PIPELINES = 2;
+// NEXT_PUBLIC_* is read at frontend build/start time, not from backend/.env.
+const MAX_ACTIVE_PIPELINES = process.env.NEXT_PUBLIC_MAX_ACTIVE_PIPELINES === "2" ? 2 : 3;
 
 // Các bước cuối luôn bị tắt theo yêu cầu: meta (10), thumbnail (11),
 // upload YouTube (12). Pipeline kết thúc sau hardcode (bước 9).
@@ -1958,8 +1983,14 @@ function takePriority(id: string): boolean {
 }
 
 /** Ưu tiên job backend vừa tạo nếu pipeline này vừa được resume. */
-async function prioritizeIfNeeded(id: string, jobId: string | undefined | null) {
+async function prioritizeIfNeeded(id: string, jobId: string | undefined | null, gen?: number) {
   if (!jobId) return;
+  if (gen != null && isStaleRun(id, gen)) return;
+  const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+  const step = cur ? STEP_STAGE[cur.stage] : undefined;
+  if (step != null) applyJobTiming(id, step, jobId, {
+    started_at: null, finished_at: null, elapsed_ms: 0, running: false,
+  });
   if (priorityPipelines.has(id)) {
     priorityPipelines.delete(id);
     await prioritizeJob(jobId);
@@ -1967,7 +1998,7 @@ async function prioritizeIfNeeded(id: string, jobId: string | undefined | null) 
 }
 
 function processQueue() {
-  // Prep (steps 1–4) is unrestricted. Only OCR onward needs one of the two
+  // Prep (steps 1–4) is unrestricted. Only OCR onward needs a processing
   // processing slots; admitted pipelines retain it at later manual gates.
   for (let i = 0; i < queue.length; ) {
     const entry = queue[i];
@@ -2160,10 +2191,60 @@ function recalcOverall(id: string) {
   reportPipeline(id);
 }
 
+function applyJobTiming(id: string, step: number, jobId: string, timing: ProcessingTiming) {
+  const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+  if (!cur) return;
+  patch(id, { stepTimings: (cur.stepTimings ?? emptySteps(null)).map(
+    (v, i) => i === step ? receivedTiming(jobId, timing) : v,
+  ) });
+}
+
+interface TimingJob {
+  job_id: string;
+  job_type: string;
+  status: string;
+  phase: string;
+  processing_timing: ProcessingTiming;
+}
+
+async function refreshStepTimings(id: string, videoId: string, gen: number): Promise<TimingJob[]> {
+  try {
+    const response = await fetch(`/api/timings/${videoId}`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return [];
+    const data = await response.json();
+    if (isStaleRun(id, gen)) return [];
+    const jobs: TimingJob[] = data.jobs ?? [];
+    const stepMap: Record<string, number> = { ocr: 4, context: 6, translate: 7, tts: 8, dub: 8, hardcode: 9, export: 9 };
+    const accepted: TimingJob[] = [];
+    for (const job of jobs) {
+      const step = stepMap[job.job_type];
+      if (step == null) continue;
+      const cur = usePipelineStore.getState().pipelines.find((p) => p.id === id);
+      const expectedJob = cur?.stepTimings?.[step]?.jobId;
+      const stepStart = cur?.stepStarts[step];
+      // Never recover an old completed job from before a rerun/reset. Prefer
+      // the exact job id saved as soon as submission returns, before polling.
+      const sameAttempt = expectedJob ? expectedJob === job.job_id :
+        stepStart != null && job.processing_timing.started_at != null &&
+        job.processing_timing.started_at * 1000 >= stepStart - 100;
+      if (sameAttempt) {
+        applyJobTiming(id, step, job.job_id, job.processing_timing);
+        accepted.push(job);
+      }
+    }
+    return accepted;
+  } catch {
+    return [];
+  }
+}
+
 function markStepStart(id: string, i: number) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   patch(id, {
+    resumeStep: i,
+    stepTimings: (cur.stepTimings ?? emptySteps(null)).map((v, idx) => idx === i ? null : v),
+    stepCached: (cur.stepCached ?? emptySteps(false)).map((v, idx) => idx === i ? false : v),
     stepStarts: cur.stepStarts.map((v, idx) => (idx === i ? Date.now() : v)),
     stepEnds: cur.stepEnds.map((v, idx) => (idx === i ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, idx) => (idx === i ? false : v)),
@@ -2182,10 +2263,11 @@ function markStepEnd(id: string, i: number) {
   recalcOverall(id);
 }
 
-function markStepSkipped(id: string, i: number) {
+function markStepSkipped(id: string, i: number, cached = false) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
   patch(id, {
+    stepCached: (cur.stepCached ?? emptySteps(false)).map((v, idx) => idx === i ? cached : v),
     stepSkipped: cur.stepSkipped.map((v, idx) => (idx === i ? true : v)),
     stepProgress: cur.stepProgress.map((v, idx) => (idx === i ? 100 : v)),
   });
@@ -2238,6 +2320,8 @@ async function runPrep(id: string, startStep = 0) {
     stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
+    stepTimings: (cur.stepTimings ?? emptySteps(null)).map((v, i) => i >= startStep ? null : v),
+    stepCached: (cur.stepCached ?? emptySteps(false)).map((v, i) => i >= startStep ? false : v),
     region: startStep === 2 ? null : cur.region,
     subtitleStyle: startStep <= 3 ? null : cur.subtitleStyle,
   });
@@ -2696,7 +2780,7 @@ async function runSrtAutoChecks(id: string, videoId: string | null) {
 }
 
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
-// Up to two pipeline runners overlap; backend lanes serialize each step.
+// Up to MAX_ACTIVE_PIPELINES runners overlap; one shared backend lane per step.
 async function runPipeline(id: string, startStep = 4) {
   occupiedSlots.add(id);
   patch(id, { processingAdmitted: true });
@@ -2713,26 +2797,29 @@ async function runPipeline(id: string, startStep = 4) {
 
   const tick = (i: number) => (t: JobTick) => {
     if (isStaleRun(id, gen)) return;
+    if (t.jobId && t.processingTiming) applyJobTiming(id, i, t.jobId, t.processingTiming);
     setStepProgress(id, i, t.progress);
     recalcOverall(id);
     if (t.logs) appendBackendLogs(id, t.logs);
   };
 
-  const stageForStart =
-    [
-      "processing",
-      "context",
-      "translating",
-      "dub",
-      "muxing",
-      "meta",
-      "thumbnail",
-      "youtube",
-    ][startStep - 4] ?? "processing";
+  const stageForStart: Stage =
+    ({
+      4: "processing",
+      5: "wm_delogo",
+      6: "context",
+      7: "translating",
+      8: "dub",
+      9: "muxing",
+      10: "meta",
+      11: "thumbnail",
+      12: "youtube",
+    } as Record<number, Stage>)[startStep] ?? "processing";
 
   patch(id, {
     status: "running",
-    stage: stageForStart as Stage,
+    stage: stageForStart,
+    resumeStep: startStep,
     progress: 0,
     startedAt: cur.startedAt ?? Date.now(),
     finishedAt: null,
@@ -2744,6 +2831,8 @@ async function runPipeline(id: string, startStep = 4) {
     stepStarts: cur.stepStarts.map((v, i) => (i >= startStep ? null : v)),
     stepEnds: cur.stepEnds.map((v, i) => (i >= startStep ? null : v)),
     stepSkipped: cur.stepSkipped.map((v, i) => (i >= startStep ? false : v)),
+    stepTimings: (cur.stepTimings ?? emptySteps(null)).map((v, i) => i >= startStep ? null : v),
+    stepCached: (cur.stepCached ?? emptySteps(false)).map((v, i) => i >= startStep ? false : v),
   });
 
   liveRunners.add(id);
@@ -2778,7 +2867,7 @@ async function runPipeline(id: string, startStep = 4) {
       }
       if (srtExists) {
         appendLog(id, "Phụ đề đã có sẵn — bỏ qua OCR.");
-        markStepSkipped(id, 4);
+        markStepSkipped(id, 4, true);
         patch(id, { stage: "context" });
       } else {
         patch(id, { stage: "processing" });
@@ -2815,7 +2904,7 @@ async function runPipeline(id: string, startStep = 4) {
           throw new Error((pd as any).detail || "Không thể bắt đầu OCR");
         }
         const jobId = (pd as any).job_id as string;
-        await prioritizeIfNeeded(id, jobId);
+        await prioritizeIfNeeded(id, jobId, gen);
         const ps = await pollJob(jobId, tick(4));
         if (isStaleRun(id, gen)) return;
         if (ps.status !== "done") throw new Error(ps.error || "OCR thất bại");
@@ -3060,6 +3149,8 @@ async function runPipeline(id: string, startStep = 4) {
                     if (!line.startsWith("data: ")) continue;
                     try {
                       const evt = JSON.parse(line.slice(6));
+                      if (isStaleRun(id, gen)) return;
+                      if (evt.processing_timing && evt.timing_job_id) applyJobTiming(id, 5, evt.timing_job_id, evt.processing_timing);
                       if (evt.type === "log") {
                         appendLog(id, `[wm] ${evt.message}`);
                       } else if (evt.type === "queued") {
@@ -3169,7 +3260,7 @@ async function runPipeline(id: string, startStep = 4) {
         const cd = await cr.json();
         if (cr.ok && cd.job_id) {
           patch(id, { contextOn: true });
-          await prioritizeIfNeeded(id, cd.job_id);
+          await prioritizeIfNeeded(id, cd.job_id, gen);
           const cs = await pollJob(cd.job_id, tick(6));
           if (isStaleRun(id, gen)) return;
           if (cs.status !== "done") {
@@ -3211,6 +3302,7 @@ async function runPipeline(id: string, startStep = 4) {
       const translateTarget = cur.translateTarget || "vi";
 
       let translateSkipped = false;
+      let translateCached = false;
       if (cur.translateOn === false) {
         appendLog(id, "Đã tắt dịch tự động — giữ nguyên phụ đề gốc.");
         translateSkipped = true;
@@ -3250,7 +3342,7 @@ async function runPipeline(id: string, startStep = 4) {
           });
           const td = await tr.json();
           if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
-          await prioritizeIfNeeded(id, td.job_id);
+          await prioritizeIfNeeded(id, td.job_id, gen);
           const ts = await pollJob(td.job_id, tick(7));
           if (isStaleRun(id, gen)) return;
           if (ts.status !== "done")
@@ -3258,6 +3350,8 @@ async function runPipeline(id: string, startStep = 4) {
           appendLog(id, "Dịch xong.");
         } else {
           appendLog(id, "Bản dịch đã có sẵn — dùng lại, bỏ qua dịch.");
+          translateSkipped = true;
+          translateCached = true;
         }
 
         patch(id, { stage: "saving" });
@@ -3431,7 +3525,7 @@ async function runPipeline(id: string, startStep = 4) {
         await ensureVoiceMap(videoId, id, translateTarget);
       }
 
-      if (translateSkipped) markStepSkipped(id, 7);
+      if (translateSkipped) markStepSkipped(id, 7, translateCached);
       else markStepEnd(id, 7);
     }
 
@@ -3454,7 +3548,7 @@ async function runPipeline(id: string, startStep = 4) {
         if (dubbedExists) {
           patch(id, { dubbedUrl: `/api/download/dubbed/${videoId}` });
           appendLog(id, "Audio lồng tiếng đã có sẵn — bỏ qua.");
-          markStepSkipped(id, 8);
+          markStepSkipped(id, 8, true);
         } else {
           const engine = cur.dubEngine === "capcut" ? "capcut" : "google";
           // Voice must match the engine: CapCut voices (BV*/AV*...) are rejected by
@@ -3520,7 +3614,7 @@ async function runPipeline(id: string, startStep = 4) {
             if (!(dr.ok && dd.job_id)) {
               throw new Error(dd.detail || "Không thể bắt đầu lồng tiếng");
             }
-            await prioritizeIfNeeded(id, dd.job_id);
+            await prioritizeIfNeeded(id, dd.job_id, gen);
             const ds = await pollJob(dd.job_id, tick(8));
             if (isStaleRun(id, gen)) return;
             if (ds.status !== "done") {
@@ -3604,7 +3698,7 @@ async function runPipeline(id: string, startStep = 4) {
       const needSpeedReencode = (cur.playbackSpeed ?? 1.0) !== 1.0;
       if (hardcodedExists && !cur.watermark && !needSpeedReencode) {
         appendLog(id, "Video đã có phụ đề cứng — bỏ qua encode.");
-        markStepSkipped(id, 9);
+        markStepSkipped(id, 9, true);
       } else {
         if (hardcodedExists) {
           if (needSpeedReencode) {
@@ -3639,7 +3733,7 @@ async function runPipeline(id: string, startStep = 4) {
         });
         const hd = await hr.json();
         if (!hr.ok) throw new Error(hd.detail || "Nhúng SRT thất bại");
-        await prioritizeIfNeeded(id, hd.job_id);
+        await prioritizeIfNeeded(id, hd.job_id, gen);
         const hs = await pollJob(hd.job_id, tick(9));
         if (isStaleRun(id, gen)) return;
         if (hs.status !== "done")
@@ -3995,6 +4089,8 @@ async function runRestorePaused() {
     for (const p of pipes) {
       if (p.status !== "running" && p.status !== "queued") continue;
       if (liveRunners.has(p.id)) continue;
+      const timingJobs = p.videoId
+        ? await refreshStepTimings(p.id, p.videoId, runGen.get(p.id) ?? 0) : [];
       // Pipeline đang tạm dừng: giữ nguyên, chờ user bấm Tiếp tục
       if (p.paused) continue;
 
@@ -4034,7 +4130,7 @@ async function runRestorePaused() {
           // Dữ liệu cũ không có resumeStep: có vùng rồi thì về OCR,
           // chưa có vùng thì hỏi lại từ prep.
           if ((p.removeWatermarkRegions?.length ?? 0) > 0) {
-            await resumeHeavy(p.id, p.videoId, 4, p.stage, videos);
+            await resumeHeavy(p.id, p.videoId, 4, p.stage, videos, timingJobs);
           } else {
             enqueuePrep(p.id, 4);
           }
@@ -4044,12 +4140,12 @@ async function runRestorePaused() {
           enqueue(p.id, rs);
           continue;
         }
-        await resumeHeavy(p.id, p.videoId, rs, p.stage, videos);
+        await resumeHeavy(p.id, p.videoId, rs, p.stage, videos, timingJobs);
         continue;
       }
 
       // Heavy steps (4-8)
-      await resumeHeavy(p.id, p.videoId, stepIdx, p.stage, videos);
+      await resumeHeavy(p.id, p.videoId, stepIdx, p.stage, videos, timingJobs);
     }
   } finally {
     restoreRunning = false;
@@ -4067,6 +4163,7 @@ async function resumeHeavy(
   stepIdx: number,
   stage: Stage,
   videos: VideoMeta[],
+  timingJobs: TimingJob[] = [],
 ) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
@@ -4090,6 +4187,20 @@ async function resumeHeavy(
     // giờ, mọi video sau đứng treo ở stage cũ dù không liên quan.
     void attachHeavyJob(id, activeRow, stepIdx);
   } else {
+    const types: Record<number, string[]> = { 4: ["ocr"], 6: ["context"], 7: ["translate"],
+      8: ["dub", "tts"], 9: ["hardcode", "export"] };
+    const previousJob = timingJobs.find((j) => types[stepIdx]?.includes(j.job_type));
+    if (previousJob?.status === "done") {
+      applyJobTiming(id, stepIdx, previousJob.job_id, previousJob.processing_timing);
+      markStepEnd(id, stepIdx);
+      enqueue(id, stepIdx + 1);
+      return;
+    }
+    if (previousJob && (previousJob.status === "processing" || previousJob.status === "queued")) {
+      void attachHeavyJob(id, { video_id: videoId, job_id: previousJob.job_id,
+        job_type: previousJob.job_type, phase: previousJob.phase } as VideoMeta, stepIdx);
+      return;
+    }
     // Resume ở bước hardcode (muxing) nhưng chưa có audio lồng tiếng trong khi
     // pipeline vẫn bật dub → lùi về bước TTS/dub (8) để tạo lại giọng đọc trước
     // khi encode. (VD video cedcdec2320c: dub báo xong nhưng full_audio.m4a không
@@ -4141,7 +4252,7 @@ async function attachHeavyJob(
       return;
     }
     if (cur0.paused) return;
-    const jobStage = stageForJobType(activeRow.job_type, activeRow.phase);
+    const jobStage = stageForJobType(activeRow.job_type, activeRow.job_type ? undefined : activeRow.phase);
     const jobIdx = STEP_STAGE[jobStage] ?? stepIdx;
     patch(id, {
       status: "running",
@@ -4154,6 +4265,7 @@ async function attachHeavyJob(
     });
     const tick = (t: JobTick) => {
       if (isStaleRun(id, gen)) return;
+      if (t.jobId && t.processingTiming) applyJobTiming(id, jobIdx, t.jobId, t.processingTiming);
       setStepProgress(id, jobIdx, t.progress);
       recalcOverall(id);
       if (t.logs) appendBackendLogs(id, t.logs);

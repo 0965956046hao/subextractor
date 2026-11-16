@@ -1,10 +1,12 @@
 """OCR keeps the selected region without heatmap refinement."""
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app import worker
-from app.config import Settings
+from app.config import Settings, settings
 
 
 class OCRRegionTests(unittest.TestCase):
@@ -21,6 +23,9 @@ class OCRRegionTests(unittest.TestCase):
                 cap.get.side_effect = lambda prop: 60 if prop == cv2.CAP_PROP_FRAME_COUNT else 30
                 job = {}
                 with (
+                    tempfile.TemporaryDirectory() as temp_dir,
+                    patch.object(settings, "temp_dir", Path(temp_dir)),
+                    patch.object(worker, "video_identity", return_value={"path": "video.mp4"}),
                     patch("cv2.VideoCapture", return_value=cap),
                     patch.object(worker, "_ocr_segment_entries", return_value=([(0.5, 1.0, "字幕")], None)) as ocr,
                     patch.object(worker, "job_log"),

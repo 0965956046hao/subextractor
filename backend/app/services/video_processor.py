@@ -120,10 +120,10 @@ def stream_frames_generator(
     extracted = 0
     pbar = tqdm(total=max(1, end_frame - idx), desc="  frames", unit="fr", leave=False)
     try:
-        while True:
+        while idx < min(end_frame, total_frames):
             ret, frame = cap.read()
             if not ret:
-                break
+                raise RuntimeError(f"Cannot decode video frame {idx} before segment end {end_frame}")
             if idx >= start_frame and idx < end_frame and idx % step == 0:
                 timestamp = idx / video_fps
                 yield frame, timestamp

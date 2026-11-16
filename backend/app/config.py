@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     # Chồng lấn giữa 2 đoạn liền kề (giây) để sub nằm ngay biên không bị cắt đôi;
     # phần trùng được gộp lại khi merge kết quả.
     ocr_parallel_overlap: float = 2.0
+    # Persist completed OCR chunks; retry/pause resumes without copying video.
+    ocr_checkpoint_seconds: float = 120.0
 
     # Gemini translation
     gemini_api_key: str = ""

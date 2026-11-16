@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { ProcessingTiming } from "./processing-timing";
 
 const api = axios.create({
   baseURL: "/api",
@@ -240,6 +241,7 @@ export interface JobStatus {
   progress: number;
   error: string | null;
   logs?: LogEntry[];
+  processing_timing?: ProcessingTiming;
 }
 
 export type OcrLang = "ch" | "en" | "latin";

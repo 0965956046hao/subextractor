@@ -33,6 +33,13 @@ class LogEntry(BaseModel):
     level: str = "info"
 
 
+class ProcessingTiming(BaseModel):
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_ms: float = 0
+    running: bool = False
+
+
 class JobStatus(BaseModel):
     job_id: str
     status: str
@@ -44,6 +51,7 @@ class JobStatus(BaseModel):
     # e.g. telegram_auto internals inspected from the legacy path).
     lane: str | None = None
     queue_position: int | None = None
+    processing_timing: ProcessingTiming | None = None
 
 
 class SrtEntry(BaseModel):

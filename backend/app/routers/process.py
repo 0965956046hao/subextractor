@@ -8,6 +8,7 @@ from app.models import ProcessRequest, JobStatus, LogEntry
 from app.dependencies import get_jobs, get_ws_clients, get_job_queue, get_scheduler
 from app.services.video_processor import resolve_video_path
 from app.worker import enqueue_job
+from app.services.processing_timing import timing_snapshot, stop_processing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,15 +64,18 @@ async def cancel_job(
         raise HTTPException(404, "Job not found")
     job["cancelled"] = True
     job["status"] = "cancelled"
+    stop_processing(job)
     # Remove from the lane immediately so a cancelled job does not occupy a
     # queue slot / get picked up later.
     await scheduler.cancel(job_id)
     logger.info("job %s: cancel requested", job_id)
+    timing = timing_snapshot(job)
     return JobStatus(
         job_id=job_id,
         status=job["status"],
         phase=job.get("phase", ""),
         progress=job.get("progress", 0),
+        processing_timing=timing,
     )
 
 
@@ -113,16 +117,34 @@ async def get_status(
     if lane is not None:
         queue_position = lane.position(job_id)
 
+    timing = timing_snapshot(job)
     return JobStatus(
         job_id=job_id,
-        status=job["status"],
+        status="processing" if timing["running"] and job["status"] == "done" else job["status"],
         phase=job.get("phase", ""),
         progress=job.get("progress", 0),
         error=job.get("error"),
         logs=[LogEntry(**entry) for entry in job.get("logs", [])],
         lane=lane_name,
         queue_position=queue_position,
+        processing_timing=timing,
     )
+
+
+@router.get("/api/timings/{video_id}")
+async def get_video_timings(video_id: str, jobs: dict = Depends(get_jobs)):
+    # Latest attempt per job type; useful when a job finishes during F5.
+    latest = {}
+    for job_id, job in jobs.items():
+        if job.get("video_id") == video_id and job.get("job_type") != "telegram_auto":
+            timing = timing_snapshot(job)
+            latest[job.get("job_type", "ocr")] = {
+                "job_id": job_id, "job_type": job.get("job_type", "ocr"),
+                "status": "processing" if timing["running"] and job.get("status") == "done" else job.get("status"),
+                "phase": job.get("phase", ""),
+                "processing_timing": timing,
+            }
+    return {"jobs": list(latest.values())}
 
 
 @router.websocket("/api/ws/{job_id}")

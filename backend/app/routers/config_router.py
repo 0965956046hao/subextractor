@@ -78,7 +78,7 @@ class SaveConfigRequest(BaseModel):
     gemini_api_keys: list[str] | None = None
     clear_gemini_keys: bool = False
     google_tts_json: str = ""
-    fal_key: str = ""
+    fal_key: str | None = None
     auto_context_enabled: bool | None = None
     subtitle_style: dict | None = None
     watermark_text: str | None = None

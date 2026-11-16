@@ -146,6 +146,21 @@ def _delogo_video_path(video_id: str) -> Path:
     return settings.temp_dir / "videos" / video_id / "delogo.mp4"
 
 
+def _source_video_path(video_id: str) -> Path:
+    """Resolve unprocessed input without reusing delogo.mp4 or creating links."""
+    video_dir = settings.temp_dir / "videos" / video_id
+    if video_dir.exists():
+        for source in video_dir.iterdir():
+            if source.stem.startswith("video") and source.is_file():
+                return source
+    merge_id = _merge_id(video_id)
+    if merge_id:
+        source = settings.temp_dir / "merged" / f"{merge_id}_video.mp4"
+        if source.is_file():
+            return source
+    raise FileNotFoundError(f"Original video not found: {video_id}")
+
+
 def _video_path(video_id: str) -> Path:
     video_dir = settings.temp_dir / "videos" / video_id
     if video_dir.exists():

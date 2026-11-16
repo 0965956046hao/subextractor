@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.config import settings
+from app.services.processing_timing import start_processing, stop_processing, timing_snapshot
 from app.models import UpdateSrtRequest, PipelineState, TimelineAction
 from app.dependencies import (
     get_jobs,
@@ -18,7 +19,7 @@ from app.dependencies import (
     get_pipeline_states,
     get_scheduler,
 )
-from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _hardcoded_is_complete, _delogo_video_path
+from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _source_video_path, _hardcoded_is_complete, _delogo_video_path
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 import subprocess
@@ -27,6 +28,14 @@ import platform
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# `no-transform` prevents Next.js dev-server gzip compression from buffering
+# SSE progress/log frames until the whole encode completes. The heartbeat
+# below stays under the dev proxy's 30s idle timeout.
+SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+}
 
 
 def _get_video_encoder_candidates(target_br: str = "8M", bufsize: str = "16M") -> list[list[str]]:
@@ -932,7 +941,10 @@ async def delogo_video(
     After success, updates pipeline state so frontend continues automatically.
     """
 
-    video_path = _video_path(video_id)
+    try:
+        video_path = _source_video_path(video_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
     logger.info(
         f"[delogo] video_id={video_id} "
@@ -1466,7 +1478,9 @@ async def delogo_video(
     # 6. Build output path
     # ============================================================
 
-    output = _delogo_video_path(video_id)
+    final_output = _delogo_video_path(video_id)
+    # Publish only a successful encode; cancellation/failure preserves prior output.
+    output = final_output.with_name(f"delogo.{uuid.uuid4().hex}.partial.mp4")
 
     output.parent.mkdir(
         parents=True,
@@ -1576,7 +1590,10 @@ async def delogo_video(
     import re as _re
     import time as _time
 
+    delogo_timing = {"job_id": f"delogo:{video_id}:{uuid.uuid4().hex[:8]}", "status": "processing"}
+
     async def _run_delogo_ffmpeg():
+        start_processing(delogo_timing)
         start_time = _time.time()
         loop = asyncio.get_running_loop()
         proc = _sp.Popen(
@@ -1692,7 +1709,7 @@ async def delogo_video(
                 if proc.poll() is not None:
                     break
                 now = _time.time()
-                if now - last_ping >= 30:
+                if now - last_ping >= 10:
                     last_ping = now
                     yield f"data: {json.dumps({'type': 'ping', 'elapsed': round(now - start_time, 1)})}\n\n"
 
@@ -1718,9 +1735,8 @@ async def delogo_video(
             if proc.stdout:
                 proc.stdout.close()
 
-            # Client ngắt giữa chừng (pause-abort/tab đóng): proc đã bị kill ở
-            # trên -> output chỉ là bản dở dang -> xóa để lần chạy lại (ffmpeg -y)
-            # encode sạch từ đầu. CHỈ xóa delogo.mp4 dở, KHÔNG BAO GIỜ đụng .srt.
+            # Delete only this attempt's temporary output on disconnect/failure;
+            # never remove the previously published delogo.mp4 or subtitles.
             if cancelled:
                 try:
                     if output.exists():
@@ -1768,7 +1784,10 @@ async def delogo_video(
                     return
             except Exception as e:
                 logger.warning(f"[delogo] ffprobe output failed: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Cannot validate output video'})}\n\n"
+                return
 
+            output.replace(final_output)
             elapsed = _time.time() - start_time
 
             # Update pipeline state so frontend continues automatically
@@ -1779,8 +1798,20 @@ async def delogo_video(
             }
             pipeline_states[video_id] = ps
 
-            yield f"data: {json.dumps({'type': 'done', 'video_id': video_id, 'path': str(output), 'width': width, 'height': height, 'regions': len(delogo_filters), 'filters': delogo_filters, 'output_size': output_size, 'elapsed': round(elapsed, 1)})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'video_id': video_id, 'path': str(final_output), 'width': width, 'height': height, 'regions': len(delogo_filters), 'effect': 'delogo', 'output_size': output_size, 'elapsed': round(elapsed, 1)})}\n\n"
         finally:
+            # If the client disconnected while this generator was suspended at
+            # a yield, no code below the loop ran: never leave FFmpeg orphaned.
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    logger.warning("[delogo] Cannot stop FFmpeg during cleanup")
+            try:
+                output.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("[delogo] Cannot clean temporary output %s", output)
             with _DELOGO_LOCK:
                 if _DELOGO_PROCS.get(video_id) is proc:
                     del _DELOGO_PROCS[video_id]
@@ -1804,52 +1835,57 @@ async def delogo_video(
                 delogo_key, "delogo", priority=(priority == "high")
             )
         )
+        acquired = False
         try:
             while True:
                 done, _ = await asyncio.wait({acquire}, timeout=2)
                 if acquire in done:
+                    # Surface acquisition errors (cancelled while queued).
+                    acquire.result()
+                    acquired = True
                     break
                 try:
                     disconnected = await request.is_disconnected()
                 except Exception:
                     disconnected = False
                 if disconnected:
-                    await scheduler.cancel(delogo_key)
-                    acquire.cancel()
-                    try:
-                        await acquire
-                    except (asyncio.CancelledError, LaneCancelled):
-                        pass
-                    scheduler.release_direct(delogo_key, "delogo")
                     return
-            # Surface acquisition errors (cancelled while queued).
-            acquire.result()
+                # A watermark encode can run for many minutes. Keep the SSE
+                # connection alive while queued, under the proxy idle timeout.
+                yield f"data: {json.dumps({'type': 'ping', 'queued': True})}\n\n"
         except LaneCancelled:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Delogo cancelled while waiting in queue'})}\n\n"
             return
-        except asyncio.CancelledError:
-            await scheduler.cancel(delogo_key)
-            acquire.cancel()
-            try:
-                await acquire
-            except (asyncio.CancelledError, LaneCancelled):
-                pass
-            scheduler.release_direct(delogo_key, "delogo")
-            raise
+        finally:
+            # Also covers GeneratorExit when the browser/proxy closes the SSE
+            # while we are suspended at the queued ping. Without this cleanup,
+            # a cancelled waiter could later acquire the watermark lane and
+            # never release it, blocking every following video forever.
+            if not acquired:
+                await scheduler.cancel(delogo_key)
+                acquire.cancel()
+                try:
+                    await acquire
+                except (asyncio.CancelledError, LaneCancelled):
+                    pass
+                scheduler.release_direct(delogo_key, "delogo")
 
         try:
             async for chunk in _run_delogo_ffmpeg():
-                yield chunk
+                payload = json.loads(chunk.removeprefix("data: ").strip())
+                if payload.get("type") in ("done", "error"):
+                    stop_processing(delogo_timing)
+                payload["processing_timing"] = timing_snapshot(delogo_timing)
+                payload["timing_job_id"] = delogo_timing["job_id"]
+                yield f"data: {json.dumps(payload)}\n\n"
         finally:
+            stop_processing(delogo_timing)
             scheduler.release_direct(delogo_key, "delogo")
 
     return StreamingResponse(
         _run_delogo_sse(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=SSE_HEADERS,
     )
 
 # ── POST /api/hardcode/{video_id} ──

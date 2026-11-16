@@ -41,6 +41,7 @@ import SubtitlePreview from "@/components/SubtitlePreview";
 import TimelineCheckModal from "@/components/TimelineCheckModal";
 import VoiceCheckModal from "@/components/VoiceCheckModal";
 import PreviewModal from "@/components/PreviewModal";
+import { processingElapsed } from "@/lib/processing-timing";
 import {
   usePipelineStore,
   STEPS,
@@ -2857,10 +2858,17 @@ function DetailView({
               const skipped = p.stepSkipped[i];
               const stepPct = p.stepProgress[i] ?? (done || isFailed ? 100 : 0);
               let stepTime: string | null = null;
-              if (skipped) stepTime = tr("pipeline.skipped");
+              if (skipped) stepTime = p.stepCached?.[i] ? "Đã có kết quả" : tr("pipeline.skipped");
+              else if ([4, 5, 6, 7, 8, 9].includes(i)) {
+                const elapsed = processingElapsed(p.stepTimings?.[i], now,
+                  active && p.status === "running" && !p.paused);
+                stepTime = elapsed != null ? fmtElapsed(elapsed) : active && !p.paused
+                  ? tr("pipeline.waiting") : null;
+              }
+              else if (i === 2 || i === 3) stepTime = null; // manual interaction, not processing
               else if (start != null && end != null)
                 stepTime = fmtElapsed(end - start);
-              else if (start != null) stepTime = fmtElapsed(now - start);
+              else if (start != null) stepTime = fmtElapsed((p.finishedAt ?? now) - start);
 
               return (
                 <div key={s.label} className="flex items-center gap-3 relative">

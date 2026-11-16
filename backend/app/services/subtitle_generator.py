@@ -347,6 +347,13 @@ def generate_srt_entries(
     pbar.close()
     ocr_engine.log_stats()
 
+    # Flush the stable final subtitle too: chunk boundaries need not coincide
+    # with a text change, and dropping this tail would leave holes at seams.
+    if prev_text.strip() and stable_count >= min_stable and prev_ts > start_time:
+        entries.append((start_time, prev_ts, prev_text.strip()))
+        if text_callback:
+            text_callback(start_time, prev_ts, prev_text.strip())
+
     # Nếu collect_boxes, boxes_accum chứa tất cả box thu thập được (chể nhiều trùng lặp
     # vì các frame lân cận). Chúng ta return list thô; caller (worker) có thể merge/
     # lọc nếu muốn. Ở bản MVP chúng ta chỉ trả về None boxes nhưng đã truyền cấu trúc sẵn.
