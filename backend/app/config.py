@@ -1,5 +1,6 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -36,8 +37,14 @@ class Settings(BaseSettings):
     # Gemini translation
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.1-flash-lite"
+    gemini_models: list[str] = Field(default_factory=lambda: [
+        "gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
+    ])
     gemini_timeout: int = 300  # seconds (5 phút) per API call
     gemini_context_timeout: int = 300  # seconds per context-note / Vision call (5 phút, có retry)
+    # Shared by all Gemini jobs in this backend process, including key rotation.
+    gemini_min_interval: float = Field(default=6.0, ge=0)
+    gemini_rate_limit_cooldown: float = Field(default=30.0, ge=1)
 
     # Google Cloud TTS
     google_tts_credentials: str = ""

@@ -6,6 +6,7 @@ from pathlib import Path
 from app.config import settings
 from app.services.retry_utils import (
     gemini_retry,
+    gemini_chat_rotating,
     configured_gemini_keys,
     _next_key,
     genai_generate_content_factory,
@@ -259,7 +260,7 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
     api_key = _next_key(keys)
     from google.genai import types as _genai_types
     _ctx_timeout = int(getattr(settings, "gemini_context_timeout", 300) * 1000)
-    _http_opts = _genai_types.HttpOptions(timeout=_ctx_timeout)
+    _http_opts = _genai_types.HttpOptions(timeout=_ctx_timeout, retry_options=_genai_types.HttpRetryOptions(attempts=1))
     client = genai.Client(api_key=api_key, http_options=_http_opts)
 
     # Check if files already uploaded for this video_id AND by this key —
@@ -336,8 +337,8 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
                 "Chỉ chọn từ danh sách có sẵn, không tự đặt tên giọng mới."
             )
         # Dùng Chat API (client.chats.create().send_message) thay vì
-        # models.generate_content để tránh cảnh báo AFC của SDK. Retry giữ
-        # nguyên qua gemini_retry, nhưng KHÔNG xoay key (file trên File Store
+        # models.generate_content để tránh cảnh báo AFC của SDK. Retry có thể
+        # xoay model, nhưng KHÔNG xoay key (file trên File Store
         # khóa theo api_key đã upload → key khác sẽ 403).
         prompt = (
             f"Analyze these {len(uploaded_files)} context images from video '{video_id}'. "
@@ -357,15 +358,17 @@ def generate_video_context(video_id: str, target_lang: str = "vi") -> str | None
             + voice_instruction
         )
 
-        # Reuse the SAME client/key used for the File-Store upload above.
+        # Rotate models, but reuse the SAME client/key used for upload above.
         # Gemini File Store is key-scoped, so the chat call MUST use the same
         # api_key (rotating here would 403 on the uploaded files). Creating a
         # throwaway client inside a factory and returning its bound method lets
         # the client be garbage-collected before the request is sent, raising
         # "Cannot send a request, as the client has been closed" (see
         # retry_utils.genai_generate_content_factory docstring).
-        chat = client.chats.create(model=settings.gemini_model)
-        response = gemini_retry(chat.send_message)([*uploaded_files, prompt])
+        response = gemini_chat_rotating(
+            [*uploaded_files, prompt], client=client, api_key=api_key,
+            _timeout=settings.gemini_context_timeout,
+        )
 
         context = response.text.strip()
     except Exception as e:

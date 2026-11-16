@@ -1,5 +1,6 @@
 import logging
 import json
+import hashlib
 from pathlib import Path
 
 from app.config import settings
@@ -392,42 +393,29 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
     return voice_map
 
 
-def _build_patch_context_note(translated_texts: list[str], source_lang: str, target_lang: str) -> str:
+def _build_patch_context_note(translated_texts: list[str], source_lang: str, target_lang: str, log_fn=None, cancelled_cb=None) -> str:
     """Ask Gemini to summarize a translated patch into a reusable context note.
 
-    Timeout 5 phút (gemini_context_timeout=300) + retry 3 lần với backoff
+    Timeout 5 phút (gemini_context_timeout=300) + tối đa 5 lần thử dùng chung
     (qua gemini_call_rotating: xoay key + retry timeout/429/503). Treo/timeout
     sau hết retry thì bỏ qua, không chặn batch tiếp theo.
     """
-    import time as _time
-    import random as _random
-    from app.services.retry_utils import _is_retryable
-
     sn = LANG_NAMES.get(source_lang, source_lang)
     tn = LANG_NAMES.get(target_lang, target_lang)
     prompt = PATCH_CONTEXT_PROMPT.format(source_lang_name=sn, target_lang_name=tn)
     payload = "\n".join(f"{i}|{t}" for i, t in enumerate(translated_texts))
-    last_err: Exception | None = None
-    # Retry ngoài cùng (3 lần) — mỗi lần bên trong gemini_call_rotating đã tự
-    # xoay key + retry 5 lần với timeout 5p. Retry ngoài giúp vượt qua cả
-    # trường hợp non-retryable transient stall sau backoff.
-    for attempt in range(1, 4):
-        try:
-            response = gemini_map_texts_call_note(prompt, payload, timeout=settings.gemini_context_timeout)
-            return response.strip()
-        except Exception as e:
-            last_err = e
-            if attempt < 3 and _is_retryable(e):
-                delay = _random.uniform(2, 6)
-                logger.warning("Patch context note attempt %d/3 failed (retryable): %s — backoff %.1fs", attempt, e, delay)
-                _time.sleep(delay)
-                continue
-            break
-    logger.warning("Patch context note failed after retries (batch not blocked): %s", last_err)
-    return ""
+    try:
+        response = gemini_map_texts_call_note(prompt, payload, timeout=settings.gemini_context_timeout, log_fn=log_fn, cancelled_cb=cancelled_cb)
+        return response.strip()
+    except JobCancelled:
+        raise
+    except Exception as error:
+        # The shared caller already retried; no second nested retry loop.
+        logger.warning("Patch context note failed after retries (batch not blocked): %s", error)
+        return ""
 
 
-def gemini_map_texts_call_note(prompt: str, payload: str, timeout: float | None = None) -> str:
+def gemini_map_texts_call_note(prompt: str, payload: str, timeout: float | None = None, log_fn=None, cancelled_cb=None) -> str:
     """One-shot Gemini call for the patch context note (numbered lines in, prose out)."""
     from app.services.retry_utils import gemini_call_rotating, genai_generate_content_factory
 
@@ -443,6 +431,8 @@ def gemini_map_texts_call_note(prompt: str, payload: str, timeout: float | None 
             "temperature": 0.2,
         },
         _timeout=timeout,
+        _log_fn=log_fn,
+        _cancelled_cb=cancelled_cb,
     )
     return response.text.strip()
 
@@ -596,6 +586,7 @@ def retranslate_untranslated(
         system_instruction="You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
         temperature=0.7,
         log_fn=log_fn,
+        require_complete=True,
     )
 
     fixed_by_idx = dict(zip(untranslated_idx, results))
@@ -664,15 +655,48 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     batch_size = 50
     translated_entries = []
     total_batches = (len(entries) + batch_size - 1) // batch_size
+    out_dir = settings.temp_dir / "translated" / video_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = out_dir / f"translation_{target_lang}.checkpoint.json"
+    fingerprint = hashlib.sha256(json.dumps(
+        ["translation-v1", content, source_lang, target_lang, settings.gemini_model],
+        ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    completed_texts: list[str] = []
+    try:
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        cached = checkpoint.get("texts")
+        if (checkpoint.get("fingerprint") == fingerprint and isinstance(cached, list)
+                and isinstance(checkpoint.get("context", ""), str)
+                and all(isinstance(text, str) for text in cached)
+                and len(cached) <= len(entries)
+                and (len(cached) % batch_size == 0 or len(cached) == len(entries))):
+            completed_texts = cached
+            patch_context = checkpoint.get("context", "")
+            translated_entries = [entry.model_copy(update={"text": text}) for entry, text in zip(entries, cached)]
+            if log_fn and cached:
+                log_fn(f"Khôi phục {len(cached)}/{len(entries)} dòng đã dịch từ checkpoint — tiếp tục phần còn lại.")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
 
-    for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
+    def save_checkpoint():
+        pending = checkpoint_path.with_suffix(".tmp")
+        pending.write_text(json.dumps({
+            "fingerprint": fingerprint,
+            "texts": completed_texts,
+            "context": patch_context,
+        }, ensure_ascii=False), encoding="utf-8")
+        pending.replace(checkpoint_path)
+
+    if progress_callback and completed_texts:
+        progress_callback((len(completed_texts) + batch_size - 1) // batch_size, total_batches)
+
+    for batch_start in range(len(completed_texts), len(entries), batch_size):
+        bi = batch_start // batch_size
         if cancelled_cb is not None and cancelled_cb():
             raise JobCancelled()
         batch = entries[batch_start:batch_start + batch_size]
         texts = [e.text for e in batch]
-
-        if progress_callback:
-            progress_callback(bi + 1, total_batches)
 
         instruction = _build_base_prompt(source_lang, target_lang, video_id, len(texts))
         if patch_context:
@@ -692,6 +716,8 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             system_instruction=SYSTEM_INSTRUCTION,
             temperature=0.3,
             log_fn=log_fn,
+            require_complete=True,
+            cancelled_cb=cancelled_cb,
         )
 
         # Zip 1:1 back onto the ORIGINAL entries — timeline untouched by design.
@@ -710,6 +736,10 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 text=new_text or b.text.strip(),
             ))
         translated_entries.extend(out_batch)
+        completed_texts.extend(e.text for e in out_batch)
+        save_checkpoint()
+        if progress_callback:
+            progress_callback(bi + 1, total_batches)
 
         if changed == 0 and len(texts) > 0:
             logger.warning("Batch %d-%d: Gemini echoed input without translating", bi + 1, bi + len(batch))
@@ -722,15 +752,17 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
 
         # Build a context note from this patch and append it so the NEXT patch
         # keeps names, honorifics, terminology and tone consistent.
-        # Timeout 5p + retry: treo/timeout sau 3 lần retry thì bỏ qua, KHÔNG chặn batch tiếp.
+        # Optional context uses the same bounded retries / shared quota gate.
         if log_fn:
             log_fn(f"  Batch {bi + 1}: đang tạo ngữ cảnh cho batch tiếp theo...")
         note = _build_patch_context_note(
             [e.text for e in out_batch], source_lang, target_lang,
+            log_fn=log_fn, cancelled_cb=cancelled_cb,
         )
         if note:
             patch_context = (patch_context + "\n\n" + note) if patch_context else note
             append_translation_context(video_id, note)
+            save_checkpoint()
             logger.info("Updated translation context after batch %d (%d chars)", bi + 1, len(patch_context))
             if log_fn:
                 log_fn(f"  Batch {bi + 1}: đã cập nhật ngữ cảnh ({len(note)} ký tự) cho các batch tiếp theo.")
@@ -740,11 +772,14 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
 
     # Save translated SRT, named by target language so multiple translations
     # (zh / en / vi) can coexist per video.
-    out_dir = settings.temp_dir / "translated" / video_id
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if cancelled_cb and cancelled_cb():
+        raise JobCancelled()
     out_path = out_dir / f"subtitles_{target_lang}.srt"
     out_content = entries_to_srt(translated_entries)
-    out_path.write_text(out_content, encoding="utf-8")
+    pending_output = out_path.with_suffix(".srt.tmp")
+    pending_output.write_text(out_content, encoding="utf-8")
+    pending_output.replace(out_path)
+    checkpoint_path.unlink(missing_ok=True)
 
     # Multi-voice: ask Gemini to assign a CapCut voice to each line → voice_map.json
     if multi_voice:

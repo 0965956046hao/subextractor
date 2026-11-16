@@ -2,10 +2,10 @@
 
 import json
 import logging
-import os
 
 from app.config import settings
 from app.services.context_service import load_video_context, load_share_text
+from app.services.retry_utils import configured_gemini_keys, gemini_chat_rotating
 
 logger = logging.getLogger(__name__)
 
@@ -65,20 +65,8 @@ def generate_video_meta(video_id: str) -> dict:
     context = load_video_context(video_id) or ""
     share_text = load_share_text(video_id) or ""
 
-    api_key = (
-        settings.gemini_api_key
-        or os.environ.get("GEMINI_API_KEY", "")
-        or _read_user_config().get("gemini_api_key", "")
-    )
-    if not api_key:
+    if not configured_gemini_keys():
         raise RuntimeError("Gemini API key not configured")
-
-    try:
-        from google import genai
-    except ImportError:
-        raise RuntimeError("google-genai not installed")
-
-    client = genai.Client(api_key=api_key)
 
     prompt = PROMPT.format(
         context=context or "Không có",
@@ -89,8 +77,7 @@ def generate_video_meta(video_id: str) -> dict:
     # (automatic function calling) của SDK và chỉ thực hiện 1 lượt truy vấn
     # thay vì nhiều round-trip (tối đa 10) → nhanh hơn, không làm proxy
     # frontend reset socket (ECONNRESET) khi meta generation chạy lâu.
-    chat = client.chats.create(model=settings.gemini_model)
-    response = chat.send_message(prompt, config={"temperature": 0.3})
+    response = gemini_chat_rotating(prompt, config={"temperature": 0.3}, _timeout=settings.gemini_timeout)
     raw = response.text.strip()
     raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     meta = json.loads(raw)

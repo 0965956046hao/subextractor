@@ -14,6 +14,7 @@ import logging
 import re
 
 from app.config import settings
+from app.services.job_utils import JobCancelled
 from app.services.retry_utils import (
     gemini_call_rotating,
     genai_generate_content_factory,
@@ -59,13 +60,16 @@ def gemini_map_texts(
     temperature: float = 0.3,
     max_attempts: int = 3,
     log_fn=None,
+    require_complete: bool = False,
+    cancelled_cb=None,
 ) -> list[str]:
     """Map N source texts to N processed texts via Gemini.
 
     Sends the numbered payload with `instruction`, parses the numbered reply,
     and retries only the MISSING positions (telling Gemini exactly which ones
     it skipped). After `max_attempts` rounds any slot still unresolved keeps
-    its original text. Always returns a list of len(texts).
+    its original text unless `require_complete=True` (translation): failed
+    requests or unresolved positions then raise instead of returning source text.
     """
     n = len(texts)
     if n == 0:
@@ -76,6 +80,8 @@ def gemini_map_texts(
     extra_note = ""
 
     for attempt in range(1, max_attempts + 1):
+        if cancelled_cb and cancelled_cb():
+            raise JobCancelled()
         prompt = (
             f"{instruction}\n\n{extra_note}\nInput lines ({n} total):\n\n{payload}"
             if extra_note
@@ -91,12 +97,20 @@ def gemini_map_texts(
                     "temperature": temperature,
                 },
                 _timeout=settings.gemini_timeout,
+                _log_fn=log_fn,
+                _cancelled_cb=cancelled_cb,
             )
             response_text = (response.text or "").strip()
+        except JobCancelled:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("gemini_map_texts attempt %d failed: %s", attempt, e)
             if log_fn:
                 log_fn(f"  Lượt {attempt}: lỗi Gemini ({e})", level="warning")
+            if require_complete:
+                # Transport retries are already exhausted by the shared helper.
+                # Never turn a failed translation request into source text.
+                raise RuntimeError("Gemini không dịch được batch sau các lần thử. Nếu lỗi 429 tiếp diễn, kiểm tra quota của project Gemini rồi chạy tiếp bước dịch.") from e
             continue
 
         got = parse_numbered_response(response_text, n)
@@ -125,4 +139,7 @@ def gemini_map_texts(
             f"For example their sources start with: {preview}"
         )
 
+    missing = [i for i in range(n) if i not in merged]
+    if require_complete and missing:
+        raise RuntimeError(f"Gemini trả thiếu {len(missing)}/{n} dòng sau {max_attempts} lượt. Chưa lưu batch này là bản dịch hoàn tất.")
     return [merged.get(i) or texts[i] for i in range(n)]
