@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from app.config import settings
 from app.models import SrtEntry
-from app.services import gemini_array, retry_utils, translation_service
+from app.services import gemini_array, job_utils, retry_utils, translation_service
 from app.services.job_utils import JobCancelled
 from app.services.srt_utils import entries_to_srt, parse_srt
 
@@ -41,10 +41,15 @@ class GeminiGateTests(unittest.TestCase):
             return "ok"
 
         def video(index):
-            barrier.wait(timeout=5)
-            if index % 2:
-                return retry_utils.gemini_retry(request)()
-            return retry_utils.gemini_call_rotating(lambda *a, **kw: request)
+            with gate.translation(str(index)):
+                barrier.wait(timeout=5)
+                if index % 2:
+                    result = retry_utils.gemini_retry(request)()
+                else:
+                    result = retry_utils.gemini_call_rotating(lambda *a, **kw: request)
+                # Keep every video active until all requests have completed.
+                barrier.wait(timeout=5)
+                return result
 
         with patch.object(retry_utils, "_gemini_gate", gate), \
                 patch.object(retry_utils, "configured_gemini_keys", return_value=["key-a", "key-b"]), \
@@ -53,6 +58,61 @@ class GeminiGateTests(unittest.TestCase):
                 self.assertEqual(list(pool.map(video, range(4))), ["ok"] * 4)
         self.assertEqual(maximum, 1)
         self.assertTrue(all(b - a >= 0.025 for a, b in zip(starts, starts[1:])))
+
+    def test_one_video_does_not_wait_between_requests_even_with_nested_translation(self):
+        gate = retry_utils._GeminiGate()
+        with patch.object(retry_utils.time, "monotonic", return_value=1000), \
+                patch.object(settings, "gemini_min_interval", 6), \
+                patch.object(gate.condition, "wait", side_effect=AssertionError("Unexpected pacing")):
+            with gate.translation("one"), gate.translation("one"):
+                self.assertEqual(len(gate.translations), 1)
+                for _ in range(3):
+                    with gate.slot():
+                        pass
+        self.assertEqual(gate.translations, {})
+
+    def test_two_videos_wait_six_seconds_then_single_video_runs_immediately(self):
+        gate = retry_utils._GeminiGate()
+        clock = [1000.0]
+        with patch.object(retry_utils.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(settings, "gemini_min_interval", 6), \
+                patch.object(gate.condition, "wait", side_effect=lambda timeout: clock.__setitem__(0, clock[0] + timeout)):
+            with gate.translation("one"):
+                with gate.slot():
+                    pass
+                with gate.translation("two"):
+                    with gate.slot():
+                        self.assertEqual(clock[0], 1006)
+                with gate.slot():
+                    self.assertEqual(clock[0], 1006)
+
+    def test_wait_is_removed_when_second_video_finishes(self):
+        gate = retry_utils._GeminiGate()
+        with patch.object(retry_utils.time, "monotonic", return_value=1000), \
+                patch.object(settings, "gemini_min_interval", 6):
+            with gate.translation("one"):
+                with gate.slot():
+                    pass
+                second = gate.translation("two")
+                second.__enter__()
+                with patch.object(gate.condition, "wait", side_effect=lambda **kw: second.__exit__(None, None, None)) as wait:
+                    with gate.slot():
+                        self.assertEqual(list(gate.translations), ["one"])
+                wait.assert_called_once()
+
+    def test_translation_registration_is_cleaned_up_on_error_or_cancellation(self):
+        gate = retry_utils._GeminiGate()
+
+        @retry_utils.gemini_translation_job
+        def translate(video_id, error):
+            self.assertEqual(gate.translations, {video_id: 1})
+            raise error
+
+        with patch.object(retry_utils, "_gemini_gate", gate):
+            for error in (RuntimeError("failed"), JobCancelled()):
+                with self.assertRaises(type(error)):
+                    translate(video_id="one", error=error)
+                self.assertEqual(gate.translations, {})
 
     def test_rate_limit_cooldown_survives_key_rotation_and_honors_server_hint(self):
         gate = retry_utils._GeminiGate()
@@ -78,10 +138,11 @@ class GeminiGateTests(unittest.TestCase):
                 patch.object(retry_utils.time, "monotonic", side_effect=lambda: clock[0]), \
                 patch.object(retry_utils.random, "uniform", return_value=0), \
                 patch.object(gate.condition, "wait", side_effect=wait):
-            with self.assertRaises(RateLimitError):
-                retry_utils.gemini_call_rotating(factory, _max_attempts=1)
-            self.assertFalse(gate.busy)
-            self.assertEqual(retry_utils.gemini_call_rotating(factory, _max_attempts=1), "ok")
+            with gate.translation("only-video"):
+                with self.assertRaises(RateLimitError):
+                    retry_utils.gemini_call_rotating(factory, _max_attempts=1)
+                self.assertFalse(gate.busy)
+                self.assertEqual(retry_utils.gemini_call_rotating(factory, _max_attempts=1), "ok")
         self.assertEqual([key for key, _ in starts], ["key-a", "key-b"])
         self.assertGreaterEqual(starts[1][1] - starts[0][1], 90)
 
@@ -207,6 +268,55 @@ class GeminiModelRotationTests(unittest.TestCase):
     def test_model_list_is_deduplicated(self):
         with patch.object(settings, "gemini_models", [self.models[0], self.models[1], "", self.models[1]]):
             self.assertEqual(retry_utils.configured_gemini_models(), self.models)
+
+    def test_intermediate_error_is_saved_and_pushed_to_client_even_if_retry_succeeds(self):
+        error = Exception("503 SERVICE_UNAVAILABLE for key-a")
+        error.code = 503
+        request = Mock(side_effect=[error, "translated"])
+        jobs = {"job": {"logs": []}}
+
+        def log(message, level="info"):
+            job_utils.job_log_sync(None, jobs, {}, "job", message, level)
+
+        with patch.object(job_utils, "notify_ws_sync") as notify:
+            result = retry_utils.gemini_call_rotating(
+                lambda *a, **kw: request, model=self.models[0], _log_fn=log,
+            )
+        self.assertEqual(result, "translated")
+        warnings = [entry for entry in jobs["job"]["logs"] if entry["level"] == "warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("503 SERVICE_UNAVAILABLE", warnings[0]["message"])
+        self.assertIn("Lượt 1/5", warnings[0]["message"])
+        self.assertIn(self.models[0], warnings[0]["message"])
+        self.assertIn("key 1/2", warnings[0]["message"])
+        self.assertIn("thử tổ hợp key/model tiếp theo", warnings[0]["message"])
+        self.assertNotIn("key-a", warnings[0]["message"])
+        pushed = [call.args[-1] for call in notify.call_args_list]
+        self.assertTrue(any(event.get("level") == "warning" and event["type"] == "log" for event in pushed))
+
+    def test_exhausted_attempts_each_emit_a_warning(self):
+        log = Mock()
+        request = Mock(side_effect=RateLimitError("429 RESOURCE_EXHAUSTED"))
+        with self.assertRaises(RateLimitError):
+            retry_utils.gemini_call_rotating(
+                lambda *a, **kw: request, model=self.models[0], _max_attempts=2, _log_fn=log,
+            )
+        warnings = [call.args[0] for call in log.call_args_list if call.kwargs.get("level") == "warning"]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("Lượt 1/2", warnings[0])
+        self.assertIn("Lượt 2/2", warnings[1])
+        self.assertIn("Đã hết lượt thử", warnings[1])
+
+    def test_permanent_error_is_visible_but_cancellation_is_not_reported_as_error(self):
+        for error in (ValueError("invalid request"), JobCancelled()):
+            log = Mock()
+            request = Mock(side_effect=error)
+            with self.assertRaises(type(error)):
+                retry_utils.gemini_call_rotating(
+                    lambda *a, **kw: request, model=self.models[0], _log_fn=log,
+                )
+            warnings = [call for call in log.call_args_list if call.kwargs.get("level") == "warning"]
+            self.assertEqual(len(warnings), 0 if isinstance(error, JobCancelled) else 1)
 
 
 class TranslationCheckpointTests(unittest.TestCase):

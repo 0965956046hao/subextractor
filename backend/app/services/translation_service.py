@@ -19,6 +19,7 @@ from app.services.retry_utils import (
     configured_gemini_keys,
     gemini_call_rotating,
     genai_generate_content_factory,
+    gemini_translation_job,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,7 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
                     "system_instruction": "You are an expert audio analyst. Identify speakers and their characteristics from the audio. Use timestamps to accurately map speakers to subtitle lines.",
                     "temperature": 0.2,
                 },
+                _log_fn=log_fn,
             )
 
             raw = response.text.strip()
@@ -355,6 +357,7 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
                     "system_instruction": "You assign CapCut voices to subtitle lines. Output JSON only. Keep voice assignments consistent with PREVIOUS VOICE ASSIGNMENTS.",
                     "temperature": 0.2,
                 },
+                _log_fn=log_fn,
             )
             raw = response.text.strip()
             raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -475,16 +478,18 @@ def _build_base_prompt(source_lang: str, target_lang: str, video_id: str, n_line
     return base_prompt
 
 
-def _call_gemini(contents, config: dict):
+def _call_gemini(contents, config: dict, log_fn=None):
     return gemini_call_rotating(
         genai_generate_content_factory,
         model=settings.gemini_model,
         contents=contents,
         config=config,
         _timeout=settings.gemini_timeout,
+        _log_fn=log_fn,
     )
 
 
+@gemini_translation_job
 def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", target_lang: str = "vi", log_fn=None) -> str:
     """Re-translate a single SRT line with Gemini (same prompts as translate_srt)."""
     if not configured_gemini_keys():
@@ -514,7 +519,7 @@ def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", 
     response = _call_gemini(prompt, {
         "system_instruction": "You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
         "temperature": 0.3,
-    })
+    }, log_fn=log_fn)
     text = _clean_gemini_response(response.text.strip())
     # Strip the SRT framing: take the last non-empty line (the text).
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -526,6 +531,7 @@ def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", 
     return new_text
 
 
+@gemini_translation_job
 def retranslate_untranslated(
     video_id: str,
     translated_content: str,
@@ -613,6 +619,7 @@ def retranslate_untranslated(
     return entries_to_srt(out)
 
 
+@gemini_translation_job
 def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None, progress_callback=None, cancelled_cb=None) -> str:
     """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt.
 

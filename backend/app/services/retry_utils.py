@@ -100,13 +100,34 @@ def _retry_after_seconds(error: Exception) -> float:
 
 
 class _GeminiGate:
-    """One in-flight request + project-wide spacing/cooldown across all keys."""
+    """Serialize requests; pace concurrent video translations, always honor 429."""
 
     def __init__(self):
         self.condition = threading.Condition()
         self.busy = False
         self.next_at = 0.0
+        self.last_started = None
         self.rate_failures = 0
+        self.translations: dict[str, int] = {}
+
+    @contextmanager
+    def translation(self, video_id: str):
+        # Count distinct videos, not nested calls/retries for the same video.
+        with self.condition:
+            self.translations[video_id] = self.translations.get(video_id, 0) + 1
+            self.condition.notify_all()
+        try:
+            yield
+        finally:
+            with self.condition:
+                remaining = self.translations[video_id] - 1
+                if remaining:
+                    self.translations[video_id] = remaining
+                else:
+                    del self.translations[video_id]
+                # A waiting request can proceed immediately when only one
+                # translating video remains (unless a 429 cooldown is active).
+                self.condition.notify_all()
 
     @contextmanager
     def slot(self, log_fn=None, cancelled_cb=None):
@@ -116,10 +137,15 @@ class _GeminiGate:
                 if cancelled_cb and cancelled_cb():
                     raise JobCancelled()
                 now = time.monotonic()
-                remaining = self.next_at - now
+                spacing_at = (
+                    self.last_started + settings.gemini_min_interval
+                    if len(self.translations) >= 2 and self.last_started is not None
+                    else 0.0
+                )
+                remaining = max(self.next_at, spacing_at) - now
                 if not self.busy and remaining <= 0:
                     self.busy = True
-                    self.next_at = now + settings.gemini_min_interval
+                    self.last_started = now
                     break
                 if log_fn and now - last_log >= 30:
                     message = (f"Gemini: đang chờ giới hạn gọi API, còn khoảng {max(1, int(remaining + 1))} giây."
@@ -150,6 +176,15 @@ class _GeminiGate:
 
 
 _gemini_gate = _GeminiGate()
+
+
+def gemini_translation_job(fn):
+    """Register translation lifetime, including waits; always unregister on exit."""
+    @wraps(fn)
+    def tracked(video_id, *args, **kwargs):
+        with _gemini_gate.translation(video_id):
+            return fn(video_id, *args, **kwargs)
+    return tracked
 
 
 def gemini_retry(fn):
@@ -292,10 +327,31 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
                     _log_fn(f"Gemini: dùng model {model} (lượt {i + 1}/{_max_attempts}).")
                 fn = fn_factory(key, timeout=_timeout)
                 return fn(*args, **call_kwargs)
+        except JobCancelled:
+            raise
         except Exception as e:
             last_err = e
             model_unavailable = bool(model) and _is_model_unavailable(e)
-            if not model_unavailable and not _should_retry(e):
+            retryable = model_unavailable or _should_retry(e)
+            retrying = retryable and i < _max_attempts - 1 and (
+                not model_unavailable or len(models) > 1
+            )
+            delay = random.uniform(2, 8) if retrying else 0.0
+            if _log_fn:
+                error_text = str(e)
+                for secret in keys:
+                    error_text = error_text.replace(secret, "[API key đã ẩn]")
+                action = (
+                    f"Chờ {delay:.1f}s rồi thử tổ hợp key/model tiếp theo (vẫn tuân thủ cooldown nếu có)."
+                    if retrying else "Đã hết lượt thử." if retryable else "Lỗi không thể tự thử lại."
+                )
+                _log_fn(
+                    f"Lượt {i + 1}/{_max_attempts}: lỗi Gemini "
+                    f"[model {model or 'cố định'}, key {keys.index(key) + 1}/{len(keys)}] "
+                    f"({error_text}). {action}",
+                    level="warning",
+                )
+            if not retryable:
                 raise
             if model_unavailable and model in models:
                 models.remove(model)
@@ -303,8 +359,7 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
                     raise
                 if _log_fn:
                     _log_fn(f"Model {model} không khả dụng; chuyển sang model khác.", level="warning")
-            if i < _max_attempts - 1:
-                delay = random.uniform(2, 8)
+            if retrying:
                 logger.info(
                     "Gemini call failed on key %s, model %s (attempt %d/%d): %s — rotating key/model, backoff %.1fs",
                     _mask(key), model or "fixed", i + 1, _max_attempts, e, delay,

@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     ])
     gemini_timeout: int = 300  # seconds (5 phút) per API call
     gemini_context_timeout: int = 300  # seconds per context-note / Vision call (5 phút, có retry)
-    # Shared by all Gemini jobs in this backend process, including key rotation.
+    # Request spacing only while >=2 distinct videos are translating.
     gemini_min_interval: float = Field(default=6.0, ge=0)
+    # 429 cooldown applies even when only one video is translating.
     gemini_rate_limit_cooldown: float = Field(default=30.0, ge=1)
 
     # Google Cloud TTS
