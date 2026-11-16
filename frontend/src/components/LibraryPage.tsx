@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { listVideos, getFrameUrl, deleteVideo, cancelJob } from "@/lib/api";
 import type { VideoMeta } from "@/lib/api";
 import { AnimatedBlock } from "@/lib/animation";
@@ -601,6 +602,23 @@ function JobStatusBlock({
   );
 }
 
+function CloneLanguageButton({ video }: { video: VideoMeta }) {
+  const router = useRouter();
+  if (video.status !== "done") return null;
+  return (
+    <button
+      className="btn-island-secondary btn-xs"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        router.push(`/auto?clone_video_id=${encodeURIComponent(video.video_id)}`);
+      }}
+    >
+      Tạo bản ngôn ngữ khác
+    </button>
+  );
+}
+
 function VideoRow({
   video,
   index,
@@ -739,6 +757,7 @@ function VideoRow({
                     {t("library.videoUnavailable" as string)}
                   </span>
                 )}
+                <CloneLanguageButton video={video} />
               </div>
             )}
           </div>
@@ -985,6 +1004,7 @@ function VideoCard({
                 {t("library.linesCount" as string, { count: video.entries })}
               </p>
             )}
+            {video.status === "done" && <div className="mt-2"><CloneLanguageButton video={video} /></div>}
           </div>
         </div>
       </div>

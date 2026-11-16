@@ -60,6 +60,9 @@ def _merge_id(video_id: str) -> str | None:
 
 def _merge_audio_path(video_id: str) -> Path | None:
     """Raw audio track downloaded during merge (merged/{merge_id}_audio.mp4)."""
+    local_audio = settings.temp_dir / "videos" / video_id / "source_audio.mp4"
+    if local_audio.is_file():
+        return local_audio
     merge_id = _merge_id(video_id)
     if not merge_id:
         return None

@@ -3,16 +3,19 @@ import logging
 import shutil
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.config import settings
 from app.dependencies import get_jobs, get_pipeline_states
 from app.services.video_processor import resolve_video_path
-from app.services.media_utils import _hardcoded_is_complete
+from app.services.media_utils import _merge_audio_path, _video_path
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +250,67 @@ async def list_videos(
     return {"videos": videos}
 
 
+class CloneLanguageRequest(BaseModel):
+    target_lang: Literal["zh", "en", "vi"]
+    source_lang: Literal["zh", "en", "vi"] = "zh"
+
+
+@router.post("/api/video/{video_id}/clone-language")
+def clone_video_language(
+    video_id: str,
+    body: CloneLanguageRequest,
+    jobs: dict = Depends(get_jobs),
+):
+    """Copy source media + OCR, with no links to the original video's assets."""
+    if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
+        raise HTTPException(400, "Invalid video_id")
+    if any(j.get("video_id") == video_id and j.get("status") in ("queued", "processing") for j in jobs.values()):
+        raise HTTPException(409, "Video đang xử lý. Hãy chờ hoàn tất trước khi tạo bản ngôn ngữ khác.")
+    source_srt = settings.temp_dir / "srt" / video_id / "subtitles.srt"
+    if not source_srt.is_file() or not source_srt.stat().st_size:
+        raise HTTPException(409, "Video chưa có kết quả OCR để sao chép.")
+    try:
+        source_video = _video_path(video_id)
+        if not source_video.is_file() or not source_video.stat().st_size:
+            raise FileNotFoundError(video_id)
+    except FileNotFoundError:
+        raise HTTPException(409, "Video nguồn đã được dọn ở lần xử lý trước. Cần nhập lại video nguồn để tạo bản ngôn ngữ khác.")
+
+    clone_id = uuid.uuid4().hex[:12]
+    video_dir = settings.temp_dir / "videos" / clone_id
+    srt_dir = settings.temp_dir / "srt" / clone_id
+    try:
+        video_dir.mkdir(parents=True)
+        srt_dir.mkdir(parents=True)
+        # copy2 follows symlinks: deleting the original/merged source cannot
+        # invalidate the new copy. Never use the burned-in final deliverable.
+        shutil.copy2(source_video, video_dir / f"video{source_video.suffix}")
+        source_audio = _merge_audio_path(video_id)
+        if source_audio:
+            shutil.copy2(source_audio, video_dir / "source_audio.mp4")
+        shutil.copy2(source_srt, srt_dir / "subtitles.srt")
+        source_meta_path = settings.temp_dir / "videos" / video_id / "meta.json"
+        source_meta = json.loads(source_meta_path.read_text(encoding="utf-8")) if source_meta_path.exists() else {}
+        filename = _meta_filename(video_id) or f"{video_id}.mp4"
+        filename = f"{Path(filename).stem} [{body.target_lang}]{Path(filename).suffix or '.mp4'}"
+        meta = {key: source_meta[key] for key in ("region", "subtitle_style") if key in source_meta}
+        meta.update({
+            "filename": filename,
+            "origin": "pipeline",
+            "cloned_from": video_id,
+            "source_lang": body.source_lang,
+            "target_lang": body.target_lang,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        (video_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"video_id": clone_id, "filename": filename, "region": meta.get("region")}
+    except Exception as exc:
+        shutil.rmtree(video_dir, ignore_errors=True)
+        shutil.rmtree(srt_dir, ignore_errors=True)
+        logger.exception("Failed to clone video %s", video_id)
+        raise HTTPException(500, "Không thể sao chép video và OCR. Kiểm tra dung lượng ổ đĩa rồi thử lại.") from exc
+
+
 @router.post("/api/video/{video_id}/cleanup")
 async def cleanup_video(video_id: str):
     """Delete intermediate temp data for a finished video, keeping only the
@@ -254,7 +318,7 @@ async def cleanup_video(video_id: str):
     - hardcoded/{video_id}/        (final video + ASS)
     - srt/{video_id}/              (final subtitles)
     - tts/{video_id}/full_audio.m4a (dubbed audio)
-    - videos/{video_id}/meta.json  (original filename)
+    - videos/{video_id}/           (source media + metadata for language variants)
     - projects/{video_id}/         (editor project state)
 
     Also removes meta/, thumb/ and the risk_check result, which are
@@ -264,25 +328,8 @@ async def cleanup_video(video_id: str):
         raise HTTPException(400, "Invalid video_id")
     removed: list[str] = []
 
-    # Safety: only delete the source video once the hardcoded deliverable is a
-    # full-length encode. If it's missing or partial (previous crashed run), keep
-    # the source so the hardcode step can still be re-run.
-    hd_ok = _hardcoded_is_complete(video_id)
-
-    # videos/: keep only meta.json (needed for download filename)
-    video_dir = settings.temp_dir / "videos" / video_id
-    if video_dir.exists():
-        for f in video_dir.iterdir():
-            if f.name == "meta.json":
-                continue
-            if f.is_dir():
-                shutil.rmtree(f, ignore_errors=True)
-            elif hd_ok:
-                f.unlink(missing_ok=True)
-            # else: keep source video — hardcoded output is not complete yet
-        if not hd_ok:
-            logger.info("cleanup %s: keeping source video (hardcoded output not complete)", video_id)
-        removed.append("videos")
+    # Source media and OCR are reusable inputs for independent language variants.
+    # They are removed only by explicit video deletion / clear-temp.
 
     # frames/: first frame — intermediate
     frames_dir = settings.temp_dir / "frames" / video_id

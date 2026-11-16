@@ -270,6 +270,9 @@ interface PipelineState {
   addPipelineFromUpload: (input: {
     videoId: string;
     filename: string;
+    ocrComplete?: boolean;
+    region?: Region | null;
+    subtitleStyle?: Partial<SubtitleStyle> | null;
     srcLang?: string;
     regionMode?: "manual" | "auto";
     dub?: Partial<DubOptions>;
@@ -525,10 +528,20 @@ export const usePipelineStore = create<PipelineState>()(
               videoId: input.videoId,
               title: input.filename,
               originalName: sanitizeFilename(input.filename) || "video",
+              ...(input.ocrComplete ? {
+                region: input.region ?? DEFAULT_REGION,
+                subtitleStyle: input.subtitleStyle ?? null,
+                stage: "context" as Stage,
+                stepProgress: STEPS.map((_, i) => i <= 4 ? 100 : null),
+                stepStarts: STEPS.map((_, i) => i <= 4 ? Date.now() : null),
+                stepEnds: STEPS.map((_, i) => i <= 4 ? Date.now() : null),
+                logs: [{ message: "Đã tạo bản sao độc lập với video nguồn và kết quả OCR. Tiếp tục xử lý sau OCR.", ts: Date.now() / 1000, level: "info" as const }],
+              } : {}),
             },
           ],
         }));
-        runPrep(id, 2);
+        if (input.ocrComplete) enqueue(id, 5);
+        else runPrep(id, 2);
         return id;
       },
       importActive: (v) => {

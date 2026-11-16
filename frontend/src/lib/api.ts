@@ -134,6 +134,19 @@ export async function deleteVideo(videoId: string): Promise<void> {
   await api.delete(`/video/${videoId}`);
 }
 
+export async function cloneVideoLanguage(
+  videoId: string,
+  targetLang: string,
+  sourceLang: string,
+): Promise<{ video_id: string; filename: string; region: Region | null }> {
+  // Large source videos may take several minutes to copy independently.
+  const res = await api.post(`/video/${videoId}/clone-language`, {
+    target_lang: targetLang,
+    source_lang: sourceLang,
+  }, { timeout: 0 });
+  return res.data;
+}
+
 export interface Region {
   x1: number;
   y1: number;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import axios from "axios";
 import { AnimatedBlock } from "@/lib/animation";
 import PageHeader from "@/components/layout/PageHeader";
 import { useI18n, type Dict } from "@/lib/i18n";
@@ -17,6 +18,7 @@ import {
   getVideoUrl,
   listVideos,
   deleteVideo,
+  cloneVideoLanguage,
   getAppConfig,
   uploadVideo,
   getDownloadUrl,
@@ -297,7 +299,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
-  const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
+  const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US" | "zh-CN">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
   const [muteOriginal, setMuteOriginal] = useState(false);
   const [keepOriginalEnabled, setKeepOriginalEnabled] = useState(false);
@@ -330,6 +332,12 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   const [healthLoading, setHealthLoading] = useState(true);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [historyVideos, setHistoryVideos] = useState<VideoMeta[]>([]);
+  const [languageSource, setLanguageSource] = useState<{
+    videoId: string; filename: string; pipeline?: Pipeline;
+  } | null>(null);
+  const [cloningLanguage, setCloningLanguage] = useState(false);
+  const [cloneError, setCloneError] = useState<string | null>(null);
+  const inputPanelRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -557,7 +565,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     return () => {
       mounted = false;
     };
-  }, [dubEngine, voiceLang]);
+  }, [dubEngine, voiceLang, languageSource?.videoId]);
 
   const switchDubEngine = async (engine: "google" | "capcut") => {
     setDubEngine(engine);
@@ -726,6 +734,97 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     setTab("detail");
   };
 
+  const prepareLanguageVersion = (videoId: string, filename: string, pipeline?: Pipeline) => {
+    if (cloningLanguage) return;
+    setLanguageSource({ videoId, filename, pipeline });
+    setCloneError(null);
+    setTranslateOn(true);
+    setDubOn(true);
+    if (pipeline) {
+      setSrcLang(pipeline.srcLang === "en" || pipeline.srcLang === "vi" ? pipeline.srcLang : "zh");
+      setDubEngine(pipeline.dubEngine);
+      setMuteOriginal(pipeline.muteOriginal);
+      setOriginalGainDb(pipeline.originalGainDb);
+      setKeepOriginalEnabled(pipeline.keepOriginalEnabled);
+      setMultiVoice(pipeline.multiVoice);
+      setAutoFitSubs(pipeline.autoFit);
+      setWatermarkOn(pipeline.watermark);
+      setWatermarkPreset(pipeline.watermarkPreset);
+      setRemoveWmEnabled(pipeline.removeWatermarkEnabled);
+      setRemoveWmRegions(pipeline.removeWatermarkRegions);
+      setCheckSubs(pipeline.checkSubs);
+      setCheckVoice(pipeline.checkVoice);
+      setPlaybackSpeed(pipeline.playbackSpeed ?? 1);
+      setUseFalThumbnail(pipeline.useFalThumbnail);
+      setUseGptThumbnail(pipeline.useGptThumbnail);
+      setAutoUploadYoutube(pipeline.autoUploadYoutube);
+      setYtChannel(pipeline.youtubeChannel);
+    }
+    const target = pipeline?.translateTarget === "en" ? "vi" : "en";
+    setTranslateTarget(target);
+    setVoiceLang(target === "en" ? "en-US" : "vi-VN");
+    setDubVoice("");
+    setPreviewUrl(null);
+    setOptTab("voice");
+    inputPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleCloneLanguage = async () => {
+    if (!languageSource || cloningLanguage) return;
+    setCloningLanguage(true);
+    setCloneError(null);
+    try {
+      const copy = await cloneVideoLanguage(languageSource.videoId, translateTarget, srcLang);
+      const source = languageSource.pipeline;
+      const id = addPipelineFromUpload({
+        videoId: copy.video_id,
+        filename: copy.filename,
+        ocrComplete: true,
+        region: source?.region ?? copy.region,
+        subtitleStyle: source?.subtitleStyle,
+        srcLang,
+        dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb, keepOriginalEnabled, multiVoice: multiVoice && dubEngine === "capcut" },
+        autoFit: autoFitSubs,
+        watermark: watermarkOn,
+        watermarkPreset: watermarkOn ? watermarkPreset : "",
+        removeWatermarkEnabled: removeWmEnabled,
+        removeWatermarkRegions: removeWmRegions,
+        checkSubs,
+        checkVoice,
+        useFalThumbnail,
+        useGptThumbnail,
+        autoUploadYoutube,
+        youtubeChannel: ytChannel,
+        translateOn,
+        translateTarget,
+        dubOn,
+        playbackSpeed,
+      });
+      setLanguageSource(null);
+      setSelectedId(id);
+      setTab("detail");
+    } catch (error) {
+      setCloneError(axios.isAxiosError(error)
+        ? error.response?.data?.detail || error.message
+        : error instanceof Error ? error.message : "Không thể tạo bản ngôn ngữ khác.");
+    } finally {
+      setCloningLanguage(false);
+    }
+  };
+
+  const cloneLinkHandled = useRef(false);
+  useEffect(() => {
+    if (cloneLinkHandled.current) return;
+    const videoId = new URLSearchParams(window.location.search).get("clone_video_id");
+    if (!videoId) return;
+    const video = historyVideos.find((v) => v.video_id === videoId && v.status === "done");
+    if (!video) return;
+    cloneLinkHandled.current = true;
+    const source = pipelines.find((p) => p.videoId === videoId && p.status === "done");
+    prepareLanguageVersion(videoId, video.filename || videoId, source);
+    window.history.replaceState({}, "", "/auto");
+  }, [historyVideos, pipelines]);
+
   const activeCount = pipelines.filter(
     (p) => p.status === "queued" || p.status === "running",
   ).length;
@@ -837,7 +936,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
 
         {/* Step 1: Input */}
         <AnimatedBlock delay={150}>
-          <div className="double-bezel mb-6">
+          <div ref={inputPanelRef} className="double-bezel mb-6">
             <div className="double-bezel-inner p-5 sm:p-6">
               {healthLoading ? (
                 <div className="flex items-center gap-2 mb-4 rounded-xl bg-white/[0.04] ring-1 ring-white/[0.08] px-4 py-3">
@@ -905,7 +1004,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </button>
                 </div>
               ) : null}
-              <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] mb-4 w-fit">
+              <div className={`${languageSource ? "hidden" : "flex"} items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] mb-4 w-fit`}>
                 {(["douyin", "youtube", "upload"] as const).map((t) => (
                   <button
                     key={t}
@@ -923,7 +1022,20 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                   </button>
                 ))}
               </div>
-              {sourceType !== "upload" ? (
+              {languageSource ? (
+                <div className="glass-panel p-4 space-y-3" aria-busy={cloningLanguage}>
+                  <p className="text-sm font-semibold text-ink">Tạo bản ngôn ngữ khác</p>
+                  <p className="text-[12px] text-ink-muted break-words">{languageSource.filename}</p>
+                  <p className="text-[12px] text-ink-muted">Dùng lại kết quả OCR. Chọn lại Giọng & Dịch và Xuất & Đăng bên dưới, rồi tạo bản sao độc lập.</p>
+                  {cloneError && <p role="alert" className="text-[12px] text-danger">{cloneError}</p>}
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={handleCloneLanguage} disabled={cloningLanguage || voicesLoading || (dubOn && !dubVoice) || (autoUploadYoutube && !ytChannel)} className="btn-island-primary btn-sm disabled:opacity-40">
+                      {cloningLanguage ? "Đang sao chép video và OCR…" : "Tạo bản sao & bắt đầu xử lý"}
+                    </button>
+                    <button onClick={() => { setLanguageSource(null); setCloneError(null); }} disabled={cloningLanguage} className="btn-island-secondary btn-sm">Hủy</button>
+                  </div>
+                </div>
+              ) : sourceType !== "upload" ? (
                 <div className="flex items-center gap-2">
                   <input
                     ref={urlInputRef}
@@ -1186,7 +1298,13 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         {(["zh", "en", "vi"] as const).map((l) => (
                           <button
                             key={l}
-                            onClick={() => setTranslateTarget(l)}
+                            onClick={() => {
+                              setTranslateTarget(l);
+                              if (languageSource) {
+                                setVoiceLang(l === "vi" ? "vi-VN" : l === "en" ? "en-US" : "zh-CN");
+                                setPreviewUrl(null);
+                              }
+                            }}
                             className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${translateTarget === l
                               ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                               : "text-ink-light hover:text-ink"
@@ -1239,7 +1357,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       {tr("pipeline.dubTitle")}
                     </span>
                     <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/[0.04] ring-1 ring-white/[0.08]">
-                      {(["vi-VN", "en-US"] as const).map((l) => (
+                      {(["vi-VN", "en-US", "zh-CN"] as const).map((l) => (
                         <button
                           key={l}
                           onClick={() => {
@@ -1258,7 +1376,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         >
                           {l === "vi-VN"
                             ? tr("pipeline.langVi")
-                            : tr("pipeline.langEn")}
+                            : l === "en-US" ? tr("pipeline.langEn") : tr("pipeline.langZh")}
                         </button>
                       ))}
                     </div>
@@ -1856,6 +1974,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         key={p.id}
                         p={p}
                         now={now}
+                        onCloneLanguage={p.status === "done" && p.videoId ? () => prepareLanguageVersion(p.videoId!, p.title || p.originalName, p) : undefined}
                         onOpen={() => {
                           setSelectedId(p.id);
                           setTab("detail");
@@ -1869,6 +1988,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <HistoryRow
                         key={v.video_id}
                         v={v}
+                        onCloneLanguage={() => prepareLanguageVersion(v.video_id, v.filename || v.video_id)}
                         onOpen={() => {
                           const id = importDone({
                             videoId: v.video_id,
@@ -1897,6 +2017,11 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           </AnimatedBlock>
         ) : selected ? (
           <AnimatedBlock delay={250}>
+            {selected.status === "done" && selected.videoId && (
+              <div className="flex justify-end mb-3">
+                <button className="btn-island-secondary btn-sm" onClick={() => prepareLanguageVersion(selected.videoId!, selected.title || selected.originalName, selected)}>Tạo bản ngôn ngữ khác</button>
+              </div>
+            )}
             <DetailView
               pipeline={selected}
               now={now}
@@ -1965,11 +2090,13 @@ function PipelineRow({
   now,
   onOpen,
   onRemove,
+  onCloneLanguage,
 }: {
   p: Pipeline;
   now: number;
   onOpen: () => void;
   onRemove: () => void;
+  onCloneLanguage?: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2102,6 +2229,9 @@ function PipelineRow({
           </p>
         )}
       </div>
+      {onCloneLanguage && (
+        <button className="btn-island-secondary btn-xs" onClick={(e) => { e.stopPropagation(); onCloneLanguage(); }}>Tạo bản ngôn ngữ khác</button>
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -2278,10 +2408,12 @@ function HistoryRow({
   v,
   onOpen,
   onDelete,
+  onCloneLanguage,
 }: {
   v: VideoMeta;
   onOpen: () => void;
   onDelete: () => void;
+  onCloneLanguage: () => void;
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
@@ -2336,6 +2468,7 @@ function HistoryRow({
           </span>
         </div>
       </div>
+      <button className="btn-island-secondary btn-xs" onClick={(e) => { e.stopPropagation(); onCloneLanguage(); }}>Tạo bản ngôn ngữ khác</button>
       <span className="text-[10px] font-mono text-ink-light tabular-nums flex-shrink-0">
         {new Date(v.created_at).toLocaleDateString("vi-VN", {
           day: "2-digit",

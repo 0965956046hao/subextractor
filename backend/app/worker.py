@@ -764,6 +764,51 @@ async def run_translate_job(
         await notify_ws(ws_clients, job_id, {"type": "error", "message": str(e)})
 
 
+_voice_lock: asyncio.Lock | None = None
+
+
+async def _run_voice_sync(job: dict, ws_clients: dict, fn):
+    """FIFO voice queue shared by standalone TTS and pipeline dubbing.
+
+    Queue time is outside the job timeout. Keep the slot until the actual
+    thread exits, even if its caller times out or is cancelled.
+    """
+    global _voice_lock
+    if _voice_lock is None:
+        _voice_lock = asyncio.Lock()
+    lock = _voice_lock
+    if lock.locked():
+        await job_log_async(
+            job, ws_clients,
+            "Đang chờ lượt TTS — mỗi lần chỉ một video tạo giọng nói…",
+        )
+
+    await lock.acquire()
+    future = None
+    try:
+        if job.get("cancelled"):
+            raise JobCancelled()
+        await job_log_async(job, ws_clients, "Đến lượt TTS, bắt đầu xử lý lồng tiếng…")
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(_executor, fn)
+        return await asyncio.wait_for(
+            asyncio.shield(future),
+            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
+        )
+    finally:
+        if future is None or future.done():
+            lock.release()
+        else:
+            # wait_for cannot stop a running thread. Do not start the next
+            # video's TTS while this thread is still using the voice service.
+            def release_when_finished(done):
+                if not done.cancelled():
+                    done.exception()
+                lock.release()
+
+            future.add_done_callback(release_when_finished)
+
+
 async def run_tts_job(
     jobs: dict,
     ws_clients: dict,
@@ -778,7 +823,7 @@ async def run_tts_job(
 
         job["status"] = "processing"
         job["phase"] = "tts"
-        await job_log_async(job, ws_clients, "Bắt đầu tổng hợp giọng nói TTS…")
+        await job_log_async(job, ws_clients, "Đã nhận yêu cầu tổng hợp giọng nói TTS…")
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 0, "phase": "tts",
         })
@@ -790,10 +835,7 @@ async def run_tts_job(
             loop, job_id, jobs, ws_clients, job["video_id"],
         )
 
-        await asyncio.wait_for(
-            loop.run_in_executor(_executor, fn),
-            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
-        )
+        await _run_voice_sync(job, ws_clients, fn)
 
         # run_tts_sync tự bắt lỗi bên trong và set status=error (không raise
         # lại) — tôn trọng kết quả đó, tránh success giả (xem run_dub_job).
@@ -844,7 +886,7 @@ async def run_dub_job(
 
         job["status"] = "processing"
         job["phase"] = "dub"
-        await job_log_async(job, ws_clients, "Bắt đầu lồng tiếng Việt (tách giọng + TTS)…")
+        await job_log_async(job, ws_clients, "Đã nhận yêu cầu lồng tiếng Việt (tách giọng + TTS)…")
         await notify_ws(ws_clients, job_id, {
             "type": "progress", "progress": 0, "phase": "dub",
         })
@@ -856,10 +898,7 @@ async def run_dub_job(
             loop, job_id, jobs, ws_clients, job["video_id"],
         )
 
-        await asyncio.wait_for(
-            loop.run_in_executor(_executor, fn),
-            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
-        )
+        await _run_voice_sync(job, ws_clients, fn)
 
         # run_dub_sync tự bắt lỗi bên trong và set status=error (không raise
         # lại). Tôn trọng kết quả đó — không ghi đè success giả lên job đã lỗi
