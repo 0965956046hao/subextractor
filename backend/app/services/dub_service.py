@@ -20,7 +20,7 @@ from app.services.media_utils import (
     _get_duration,
     _merge_audio_path,
 )
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import JobCancelled, notify_ws_sync, job_log_sync, raise_if_cancelled
 from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
 from app.services.translation_service import load_voice_map, generate_voice_map
 
@@ -737,6 +737,7 @@ def dub_audio_only(
 def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
     """Run dubbing (vocal separation + TTS + mix) in background."""
     job = jobs[job_id]
+    raise_if_cancelled(job)
     job["status"] = "processing"
     job["phase"] = "dub"
 
@@ -745,6 +746,7 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
 
         def progress(pct: int):
             nonlocal last_pct
+            raise_if_cancelled(job)
             pct = int(pct)
             if pct > last_pct:
                 last_pct = pct
@@ -756,6 +758,7 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu tạo audio lồng tiếng Việt (tách giọng + TTS + trộn)...")
 
         def _log(msg: str, level: str = "info"):
+            raise_if_cancelled(job)
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
         out = dub_audio_only(
@@ -770,6 +773,7 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             keep_ranges=job.get("keep_ranges"),
         )
 
+        raise_if_cancelled(job)
         job["status"] = "done"
         job["progress"] = 100
         job["output_path"] = str(out)
@@ -778,6 +782,11 @@ def run_dub_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
             "type": "done", "progress": 100, "video_id": video_id,
         })
     except Exception as e:
+        if isinstance(e, JobCancelled) or job.get("cancelled") or job.get("status") == "cancelled":
+            job["status"] = "cancelled"
+            job["phase"] = ""
+            notify_ws_sync(loop, ws_clients, job_id, {"type": "cancelled"})
+            return
         logger.exception("dub failed")
         job["status"] = "error"
         job["error"] = str(e)

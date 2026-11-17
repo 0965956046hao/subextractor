@@ -389,9 +389,15 @@ async def cleanup_video(video_id: str):
 
 
 @router.delete("/api/video/{video_id}")
-async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeline_states)):
+async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeline_states), jobs: dict = Depends(get_jobs)):
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         raise HTTPException(400, "Invalid video_id")
+    # Deleting from the library also cancels queued/running work. In particular,
+    # voice waiters must stop waiting instead of occupying workers indefinitely.
+    for job in jobs.values():
+        if job.get("video_id") == video_id and job.get("status") not in ("done", "error"):
+            job["cancelled"] = True
+            job["status"] = "cancelled"
     removed: list[str] = []
     # Merged sources are flat files `temp/merged/{merge_id}.mp4` keyed by a
     # merge_id different from video_id. Read meta.json BEFORE the videos dir

@@ -18,7 +18,7 @@ from app.services.subtitle_generator import (
 )
 from app.services.hardcode_service import run_hardcode_sync
 from app.services.align_service import run_align_sync
-from app.services.job_utils import JobCancelled, notify_ws_sync, _touch_job_activity
+from app.services.job_utils import JobCancelled, notify_ws_sync, _touch_job_activity, raise_if_cancelled
 
 from datetime import datetime
 
@@ -767,6 +767,24 @@ async def run_translate_job(
 _voice_lock: asyncio.Lock | None = None
 
 
+async def _wait_voice_future(job: dict, future, timeout: float | None = None):
+    """Watch cancellation without cancelling a running executor thread.
+
+    asyncio.wait leaves its input future intact when this coroutine exits.
+    The caller owns cleanup (a pending lock acquisition vs. an active thread).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout if timeout is not None else None
+    while True:
+        raise_if_cancelled(job)
+        if future.done():
+            return future.result()
+        remaining = deadline - loop.time() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise asyncio.TimeoutError()
+        await asyncio.wait((future,), timeout=min(0.2, remaining) if remaining is not None else 0.2)
+
+
 async def _run_voice_sync(job: dict, ws_clients: dict, fn):
     """FIFO voice queue shared by standalone TTS and pipeline dubbing.
 
@@ -774,6 +792,7 @@ async def _run_voice_sync(job: dict, ws_clients: dict, fn):
     thread exits, even if its caller times out or is cancelled.
     """
     global _voice_lock
+    raise_if_cancelled(job)
     if _voice_lock is None:
         _voice_lock = asyncio.Lock()
     lock = _voice_lock
@@ -783,23 +802,37 @@ async def _run_voice_sync(job: dict, ws_clients: dict, fn):
             "Đang chờ lượt TTS — mỗi lần chỉ một video tạo giọng nói…",
         )
 
-    await lock.acquire()
+    # A single acquisition task preserves FIFO ordering. Repeated wait_for on
+    # lock.acquire would cancel/requeue the waiter and lose its original place.
+    acquisition = asyncio.create_task(lock.acquire())
+    acquired = False
     future = None
     try:
-        if job.get("cancelled"):
-            raise JobCancelled()
+        await _wait_voice_future(job, acquisition)
+        acquired = True
+        raise_if_cancelled(job)
         await job_log_async(job, ws_clients, "Đến lượt TTS, bắt đầu xử lý lồng tiếng…")
+        raise_if_cancelled(job)
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(_executor, fn)
-        return await asyncio.wait_for(
-            asyncio.shield(future),
-            timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
+        return await _wait_voice_future(
+            job, future, timeout=None if settings.job_timeout <= 0 else settings.job_timeout,
         )
     finally:
-        if future is None or future.done():
+        if not acquired:
+            acquisition.cancel()
+            try:
+                # The lock may have been granted just as cancellation arrived.
+                # Release it only if THIS acquisition actually succeeded.
+                acquired = await acquisition
+            except asyncio.CancelledError:
+                pass
+        if acquired and (future is None or future.done()):
+            if future is not None and not future.cancelled():
+                future.exception()
             lock.release()
-        else:
-            # wait_for cannot stop a running thread. Do not start the next
+        elif acquired:
+            # Cancelling an async wait cannot stop a running thread. Do not start the next
             # video's TTS while this thread is still using the voice service.
             def release_when_finished(done):
                 if not done.cancelled():
@@ -819,6 +852,7 @@ async def run_tts_job(
         return
 
     try:
+        raise_if_cancelled(job)
         from app.services.tts_service import run_tts_sync
 
         job["status"] = "processing"
@@ -836,6 +870,7 @@ async def run_tts_job(
         )
 
         await _run_voice_sync(job, ws_clients, fn)
+        raise_if_cancelled(job)
 
         # run_tts_sync tự bắt lỗi bên trong và set status=error (không raise
         # lại) — tôn trọng kết quả đó, tránh success giả (xem run_dub_job).
@@ -856,7 +891,7 @@ async def run_tts_job(
         logger.info("tts job %s: cancelled", job_id)
         job["status"] = "cancelled"
         job["phase"] = ""
-        await job_log_async(job, ws_clients, "Đã hủy TTS.", "warn")
+        await job_log_async(job, ws_clients, "Đã dừng job TTS, nhường worker cho video khác.", "warning")
         await notify_ws(ws_clients, job_id, {"type": "cancelled"})
     except asyncio.TimeoutError:
         logger.error("tts job %s: TIMEOUT", job_id)
@@ -882,6 +917,7 @@ async def run_dub_job(
         return
 
     try:
+        raise_if_cancelled(job)
         from app.services.dub_service import run_dub_sync
 
         job["status"] = "processing"
@@ -899,6 +935,7 @@ async def run_dub_job(
         )
 
         await _run_voice_sync(job, ws_clients, fn)
+        raise_if_cancelled(job)
 
         # run_dub_sync tự bắt lỗi bên trong và set status=error (không raise
         # lại). Tôn trọng kết quả đó — không ghi đè success giả lên job đã lỗi
@@ -920,7 +957,7 @@ async def run_dub_job(
         logger.info("dub job %s: cancelled", job_id)
         job["status"] = "cancelled"
         job["phase"] = ""
-        await job_log_async(job, ws_clients, "Đã hủy lồng tiếng.", "warn")
+        await job_log_async(job, ws_clients, "Đã dừng job lồng tiếng, nhường worker cho video khác.", "warning")
         await notify_ws(ws_clients, job_id, {"type": "cancelled"})
     except asyncio.TimeoutError:
         logger.error("dub job %s: TIMEOUT", job_id)
@@ -1907,7 +1944,7 @@ async def worker_loop(
             continue
         job = jobs.get(job_id)
         try:
-            if job:
+            if job and not job.get("cancelled") and job.get("status") not in ("cancelled", "done", "error"):
                 job_type = job.get("job_type", "ocr")
                 if job_type == "telegram_auto":
                     await run_telegram_auto_job(jobs, ws_clients, ocr_engines, job_id, pipeline_states)

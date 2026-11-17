@@ -14,7 +14,7 @@ from typing import List
 from app.config import settings
 from app.services.srt_utils import _texts_similar, parse_srt
 from app.services.media_utils import _srt_path, _srt_best_path
-from app.services.job_utils import notify_ws_sync, job_log_sync
+from app.services.job_utils import JobCancelled, notify_ws_sync, job_log_sync, raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -447,6 +447,8 @@ def synthesize_srt_capcut(video_id: str, progress_callback=None, use_custom_srt:
                     if log_fn:
                         log_fn(f"  ⚠ Retry vẫn thất bại {len(still_failed)} segment, chèn khoảng lặng.", level="warning")
 
+        except JobCancelled:
+            raise
         except Exception as _e:
             # Lỗi service (vd file trả về khổng lồ bị xoá bởi download_audio) →
             # chèn khoảng lặng cho các dòng thiếu thay vì phá toàn bộ job.
@@ -747,6 +749,7 @@ def _create_silence(out_path: Path, duration_sec: float):
 def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str):
     """Run TTS in background, reporting progress via WebSocket."""
     job = jobs[job_id]
+    raise_if_cancelled(job)
     job["status"] = "processing"
     job["phase"] = "tts"
 
@@ -757,6 +760,7 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
 
         def progress(i, total):
             nonlocal last_pct
+            raise_if_cancelled(job)
             pct = int((i / total) * 90) if total > 0 else 0
             if pct > last_pct:
                 last_pct = pct
@@ -768,6 +772,7 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
                 })
 
         def log_per_line(msg: str, level: str = "info"):
+            raise_if_cancelled(job)
             job_log_sync(loop, jobs, ws_clients, job_id, msg, level=level)
 
         audio_files = synthesize_srt(
@@ -786,6 +791,7 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
                 audio_urls.append(f"/api/tts-audio/{video_id}/{rel}")
 
         job_log_sync(loop, jobs, ws_clients, job_id, f"Đã tạo {len(audio_files)} file audio.")
+        raise_if_cancelled(job)
         job["progress"] = 100
         job["phase"] = "done"
         job["status"] = "done"
@@ -799,6 +805,11 @@ def run_tts_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id: str)
         })
 
     except Exception as e:
+        if isinstance(e, JobCancelled) or job.get("cancelled") or job.get("status") == "cancelled":
+            job["status"] = "cancelled"
+            job["phase"] = ""
+            notify_ws_sync(loop, ws_clients, job_id, {"type": "cancelled"})
+            return
         logger.exception("TTS failed")
         job["status"] = "error"
         job["error"] = str(e)

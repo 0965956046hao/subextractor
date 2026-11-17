@@ -8,6 +8,11 @@ class JobCancelled(Exception):
     """Raised when the user requests to cancel a running job."""
 
 
+def raise_if_cancelled(job: dict) -> None:
+    if job.get("cancelled") or job.get("status") == "cancelled":
+        raise JobCancelled()
+
+
 # Lần cuối CÓ HOẠT ĐỘNG job (log/progress), tính cả thread executor. Dùng để
 # phân biệt "worker bận job dài" với "worker kẹt" trong /api/worker-status.
 _last_job_activity: float = 0.0
