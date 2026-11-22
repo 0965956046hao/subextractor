@@ -93,6 +93,9 @@ export type VideoStatus =
   | "cancelled";
 
 export interface PipelineTimelineCheck {
+  lang?: string;
+  source_lang?: string;
+  source_track?: "original" | "vi";
   waiting: boolean;
   open: boolean;
   issues: TimelineIssue[];
@@ -113,6 +116,7 @@ export interface PipelineProgress {
 /** Setting pipeline riêng của từng video (vùng OCR, voice, watermark...).
  *  Backend lưu trong videos/{id}/meta.json key "pipeline_settings". */
 export interface PipelineVideoSettings {
+  bilingualSubs?: boolean;
   region?: Region | null;
   regionMode?: "manual" | "auto";
   subtitleStyle?: Record<string, unknown> | null;
@@ -215,8 +219,11 @@ export async function reportTimelineAction(
   videoId: string,
   action: "wait" | "open" | "close" | "continue" | "fix",
   issues: TimelineIssue[] = [],
+  lang?: string,
+  sourceLang = "zh",
+  sourceTrack: "original" | "vi" = "original",
 ): Promise<void> {
-  await api.post(`/pipeline/${videoId}/timeline`, { action, issues });
+  await api.post(`/pipeline/${videoId}/timeline`, { action, issues, lang, source_lang: sourceLang, source_track: sourceTrack });
 }
 
 export async function deleteVideo(videoId: string): Promise<void> {
@@ -331,16 +338,17 @@ export interface SrtEntry {
   text: string;
 }
 
-export async function getSrtEntries(videoId: string): Promise<SrtEntry[]> {
-  const res = await api.get<{ entries: SrtEntry[] }>(`/srt/${videoId}/entries`);
+export async function getSrtEntries(videoId: string, lang = "vi"): Promise<SrtEntry[]> {
+  const res = await api.get<{ entries: SrtEntry[] }>(`/srt/${videoId}/entries`, { params: { lang } });
   return res.data.entries;
 }
 
 export async function updateSrt(
   videoId: string,
   content: string,
+  lang = "vi",
 ): Promise<void> {
-  await api.put(`/srt/${videoId}`, { content });
+  await api.put(`/srt/${videoId}`, { content }, { params: { lang } });
 }
 
 export async function reTranslateLine(
@@ -348,11 +356,13 @@ export async function reTranslateLine(
   index: number,
   sourceLang: string,
   targetLang: string,
+  sourceTrack: "original" | "vi" = "original",
 ): Promise<string> {
   const res = await api.post<{ text: string }>(`/srt/${videoId}/re-translate-line`, {
     index,
     source_lang: sourceLang,
     target_lang: targetLang,
+    source_track: sourceTrack,
   });
   return res.data.text;
 }
@@ -375,9 +385,11 @@ export interface TimelineFix {
 
 export async function validateSrtTimeline(
   videoId: string,
+  lang = "vi",
 ): Promise<{ issues: TimelineIssue[]; count: number }> {
   const res = await api.get<{ issues: TimelineIssue[]; count: number }>(
     `/srt/${videoId}/validate`,
+    { params: { lang } },
   );
   return res.data;
 }
@@ -417,11 +429,12 @@ export async function startSrtRiskCheck(
 
 export async function getSrtRiskResult(
   videoId: string,
+  lang = "vi",
 ): Promise<{ risks: SubtitleRisk[]; checked_at?: number | null }> {
   const res = await api.get<{
     risks: SubtitleRisk[];
     checked_at?: number | null;
-  }>(`/srt/${videoId}/risk-check`);
+  }>(`/srt/${videoId}/risk-check`, { params: { lang } });
   return res.data;
 }
 
@@ -754,6 +767,7 @@ export async function clearTempData(): Promise<{
 }
 
 export interface SubtitleStyle {
+  english_style?: Partial<SubtitleStyle>;
   font_family: string;
   font_size: number;
   text_color: string;

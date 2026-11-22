@@ -19,7 +19,7 @@ from app.dependencies import (
     get_pipeline_states,
     get_scheduler,
 )
-from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _source_video_path, _hardcoded_is_complete, _delogo_video_path
+from app.services.media_utils import _srt_path, _srt_best_path, _video_path, _source_video_path, _hardcoded_is_complete, _delogo_video_path, translation_source_path
 from app.services.srt_utils import _fmt, entries_to_srt, fix_timeline, merge_similar_adjacent, parse_srt, shift_overlaps, validate_timeline
 from app.services.context_service import load_video_context, generate_video_context
 import subprocess
@@ -200,8 +200,8 @@ def _original_download_name(video_id: str, suffix: str, ext: str = ".mp4") -> st
 # ── GET /api/srt/{video_id}/entries ──
 
 @router.get("/api/srt/{video_id}/entries")
-async def get_srt_entries(video_id: str):
-    srt_path = _srt_best_path(video_id)
+async def get_srt_entries(video_id: str, lang: str = Query("vi")):
+    srt_path = _srt_best_path(video_id, lang)
     content = srt_path.read_text(encoding="utf-8")
     return {"entries": [e.model_dump() for e in parse_srt(content)]}
 
@@ -210,8 +210,8 @@ async def get_srt_entries(video_id: str):
 # Detect illogical timelines (end<=start, overlaps, out-of-order).
 
 @router.get("/api/srt/{video_id}/validate")
-async def validate_srt_timeline(video_id: str):
-    srt_path = _srt_best_path(video_id)
+async def validate_srt_timeline(video_id: str, lang: str = Query("vi")):
+    srt_path = _srt_best_path(video_id, lang)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     issues = validate_timeline(parse_srt(srt_path.read_text(encoding="utf-8")))
@@ -223,8 +223,8 @@ async def validate_srt_timeline(video_id: str):
 # keeping the longest text. Backs up the previous content first.
 
 @router.post("/api/srt/{video_id}/fix-timeline")
-async def fix_srt_timeline(video_id: str):
-    srt_path = _srt_best_path(video_id)
+async def fix_srt_timeline(video_id: str, lang: str = Query("vi")):
+    srt_path = _srt_best_path(video_id, lang)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current = srt_path.read_text(encoding="utf-8")
@@ -253,8 +253,8 @@ async def fix_srt_timeline(video_id: str):
 # a double-check on both the original and translated SRT.
 
 @router.post("/api/srt/{video_id}/dedup")
-async def dedup_srt(video_id: str):
-    srt_path = _srt_best_path(video_id)
+async def dedup_srt(video_id: str, lang: str = Query("vi")):
+    srt_path = _srt_best_path(video_id, lang)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current = srt_path.read_text(encoding="utf-8")
@@ -283,8 +283,8 @@ async def dedup_srt(video_id: str):
 # timeline review. Backs up the previous content first.
 
 @router.post("/api/srt/{video_id}/auto-fix-overlaps")
-async def auto_fix_srt_overlaps(video_id: str):
-    srt_path = _srt_best_path(video_id)
+async def auto_fix_srt_overlaps(video_id: str, lang: str = Query("vi")):
+    srt_path = _srt_best_path(video_id, lang)
     if not srt_path.exists():
         raise HTTPException(404, "SRT not found")
     current = srt_path.read_text(encoding="utf-8")
@@ -359,15 +359,16 @@ def _untranslated_lines(original, translated, threshold: float = 95.0) -> list[d
 
 @router.post("/api/srt/{video_id}/compare")
 async def compare_srt(video_id: str, request: Request):
-    srt_path = _srt_path(video_id)
-    if not srt_path.exists():
-        raise HTTPException(404, "SRT not found")
-    original = parse_srt(srt_path.read_text(encoding="utf-8"))
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
+    try:
+        srt_path = translation_source_path(video_id, body.get("source_track", "original"))
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    original = parse_srt(srt_path.read_text(encoding="utf-8"))
     translated_content = body.get("content", "")
     translated = parse_srt(translated_content) if (translated_content or "").strip() else []
     return {
@@ -398,6 +399,8 @@ async def retranslate_srt(video_id: str, request: Request):
         raise HTTPException(400, "Missing translated SRT content")
     source_lang = body.get("source_lang", "zh")
     target_lang = body.get("target_lang", "vi")
+    if target_lang not in ("vi", "en", "zh"):
+        raise HTTPException(400, "Unsupported target language")
     scheduler = get_scheduler(request)
     try:
         # Unique key per request: the gate treats a repeated id as re-entrant
@@ -408,13 +411,14 @@ async def retranslate_srt(video_id: str, request: Request):
                 content,
                 source_lang=source_lang,
                 target_lang=target_lang,
+                source_track=body.get("source_track", "original"),
             )
     except ValueError as e:
         raise HTTPException(404, str(e))
     # Ghi luôn bản đã vá lên file SRT cuối (bản dịch) để các dòng chưa dịch
     # không bị rớt mất — trước đây chỉ trả về content mà không lưu.
     if updated != content:
-        out_path = _srt_best_path(video_id)
+        out_path = settings.temp_dir / "translated" / video_id / f"subtitles_{target_lang}.srt"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(updated, encoding="utf-8")
     return {
@@ -427,11 +431,11 @@ async def retranslate_srt(video_id: str, request: Request):
 # ── PUT /api/srt/{video_id} ──
 
 @router.put("/api/srt/{video_id}")
-async def update_srt(video_id: str, body: UpdateSrtRequest):
+async def update_srt(video_id: str, body: UpdateSrtRequest, lang: str = Query("vi")):
     # Ghi về đúng file mà GET /entries đã đọc (_srt_best_path: ưu tiên bản dịch).
     # Trước đây ghi vào _srt_path (SRT gốc OCR) trong khi modal/transcript đọc
     # bản dịch → chỉnh sửa bị "mất" và risk-check vẫn thấy nội dung cũ.
-    srt_path = _srt_best_path(video_id)
+    srt_path = _srt_best_path(video_id, lang)
     # Preserve the pre-edit SRT on first overwrite so it can be inspected
     # later (e.g. comparing timings after translation/hardcode).
     if srt_path.exists():
@@ -463,7 +467,11 @@ async def re_translate_srt_line(video_id: str, request: Request):
     target_lang = str(body.get("target_lang", "vi") or "vi")
 
     # Read the current SRT entry text so we can re-translate the same line.
-    srt_path = _srt_path(video_id)
+    source_track = body.get("source_track", "original")
+    try:
+        srt_path = translation_source_path(video_id, source_track)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(400, str(e))
     current_entries = parse_srt(srt_path.read_text(encoding="utf-8"))
     entry = next((e for e in current_entries if e.index == index), None)
     if entry is None:
@@ -473,7 +481,7 @@ async def re_translate_srt_line(video_id: str, request: Request):
     # the source sentence, not on an already-translated text.
     source_text = entry.text
     orig_path = srt_path.with_name("subtitles_original.srt")
-    if orig_path.exists():
+    if source_track == "original" and orig_path.exists():
         orig_entries = parse_srt(orig_path.read_text(encoding="utf-8"))
         src = next((e for e in orig_entries if e.index == index), None)
         if src is not None:
@@ -572,15 +580,16 @@ async def rewrite_srt_line(video_id: str, request: Request):
 
 @router.post("/api/srt/{video_id}/risk-check")
 async def start_risk_check(video_id: str, request: Request):
-    if not _srt_best_path(video_id).exists():
-        raise HTTPException(404, "SRT not found")
-
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
     lang = str(body.get("lang", "vi") or "vi")
+    if lang not in ("vi", "en", "zh"):
+        raise HTTPException(400, "Unsupported language")
+    if not _srt_best_path(video_id, lang).exists():
+        raise HTTPException(404, "SRT not found")
 
     jobs = get_jobs(request)
     ws_clients = get_ws_clients(request)
@@ -605,8 +614,10 @@ async def start_risk_check(video_id: str, request: Request):
 
 
 @router.get("/api/srt/{video_id}/risk-check")
-async def get_risk_check_result(video_id: str):
-    result_path = settings.temp_dir / "risk_check" / f"{video_id}.json"
+async def get_risk_check_result(video_id: str, lang: str = Query("vi")):
+    if lang not in ("vi", "en", "zh"):
+        raise HTTPException(400, "Unsupported language")
+    result_path = settings.temp_dir / "risk_check" / f"{video_id}_{lang}.json"
     if not result_path.exists():
         return {"video_id": video_id, "risks": [], "checked_at": None}
     data = json.loads(result_path.read_text(encoding="utf-8"))
@@ -708,10 +719,10 @@ async def preview_subtitle(video_id: str, request: Request):
     overlay_only = body.get("format") == "overlay"
     sample_text = body.get("text") or "Phụ đề tiếng Việt"
 
-    # Prefer the real SRT line visible at this timestamp so the user can scrub.
+    # In bilingual setup this step precedes translation: keep both sample texts.
     try:
         srt_path = _srt_path(video_id)
-        if srt_path.exists():
+        if srt_path.exists() and not body.get("bilingual_subs"):
             for e in parse_srt(srt_path.read_text(encoding="utf-8")):
                 if e.start <= time_sec < e.end:
                     sample_text = e.text
@@ -727,6 +738,7 @@ async def preview_subtitle(video_id: str, request: Request):
     return await run_in_threadpool(
         _render_preview_image,
         video_path, time_sec, region, style_override, sample_text, overlay_only,
+        bool(body.get("bilingual_subs")),
     )
 
 
@@ -737,6 +749,7 @@ def _render_preview_image(
     style_override: dict,
     sample_text: str,
     overlay_only: bool,
+    bilingual_subs: bool = False,
 ) -> Response:
     """Blocking preview renderer — runs in a threadpool (see preview_subtitle)."""
     import cv2
@@ -747,10 +760,10 @@ def _render_preview_image(
     if time_sec > 0:
         cap.set(cv2.CAP_PROP_POS_MSEC, time_sec * 1000)
     ok, frame = cap.read()
-    vh, vw = frame.shape[:2]
     cap.release()
     if not ok:
         raise HTTPException(500, "Không đọc được frame từ video")
+    vh, vw = frame.shape[:2]
 
     from app.services.hardcode_service import (
         apply_style_override,
@@ -774,6 +787,17 @@ def _render_preview_image(
     # (trước đây fixed_size=True làm dòng dài/video dọc hiện chữ to tràn khung
     # trong preview nhưng bị shrink ở video cuối → kéo xong bị lệch vị trí).
     overlay = _render_subtitle(sample_text, vw, vh, font_path, style)
+    if bilingual_subs:
+        import numpy as np
+        from PIL import Image
+
+        from app.services.hardcode_service import english_subtitle_style
+        en_style = english_subtitle_style(style, style_override.get("english_style"))
+        en_font = _find_font(en_style.get("font_family", "Arial"), en_style.get("bold"), en_style.get("italic"))
+        en_overlay = _render_subtitle("English subtitles appear here", vw, vh, en_font, en_style)
+        # Renderer returns NumPy RGBA; composite in Pillow, then preserve that
+        # array contract for both PNG encoding and blending onto the video frame.
+        overlay = np.array(Image.alpha_composite(Image.fromarray(overlay), Image.fromarray(en_overlay)))
 
     if overlay_only:
         import numpy as np
@@ -1906,10 +1930,12 @@ async def hardcode_subtitles(video_id: str, request: Request):
     watermark = False
     watermark_preset = None
     playback_speed = 1.0
+    bilingual_subs = False
     try:
         raw = await request.json()
         if isinstance(raw, dict):
             auto_fit = bool(raw.get("auto_fit", False))
+            bilingual_subs = bool(raw.get("bilingual_subs", False))
             region = raw.get("region")
             if region and not all(
                 isinstance(region.get(k), (int, float))
@@ -1943,6 +1969,7 @@ async def hardcode_subtitles(video_id: str, request: Request):
         "error": None,
         "cancelled": False,
         "auto_fit": auto_fit,
+        "bilingual_subs": bilingual_subs,
         "region": region,
         "style": style,
         "watermark": watermark,
@@ -2033,6 +2060,11 @@ async def translate_subtitles(video_id: str, request: Request):
     source_lang = body.get("source_lang", "zh")
     target_lang = body.get("target_lang", "vi")
     multi_voice = bool(body.get("multi_voice", False))
+    source_track = body.get("source_track", "original")
+    if source_track not in ("original", "vi") or (source_track == "vi" and (target_lang != "en" or source_lang != "vi")):
+        raise HTTPException(400, "Invalid translation source")
+    if target_lang not in ("vi", "en", "zh"):
+        raise HTTPException(400, "Unsupported target language")
 
     if srt_content:
         tr_dir = settings.temp_dir / "translated" / video_id
@@ -2041,7 +2073,7 @@ async def translate_subtitles(video_id: str, request: Request):
         custom_srt.write_text(srt_content, encoding="utf-8")
     else:
         try:
-            _srt_path(video_id)
+            translation_source_path(video_id, source_track)
         except FileNotFoundError:
             raise HTTPException(404, "SRT gốc không tồn tại — cần chạy OCR/trích xuất phụ đề trước.")
 
@@ -2060,6 +2092,7 @@ async def translate_subtitles(video_id: str, request: Request):
         "error": None,
         "cancelled": False,
         "use_custom_srt": bool(srt_content),
+        "source_track": source_track,
         "source_lang": source_lang,
         "target_lang": target_lang,
         "multi_voice": multi_voice,
@@ -2440,18 +2473,21 @@ async def rebuild_full_audio(request: Request, video_id: str):
 # ── GET /api/download/translated/{video_id} ──
 
 @router.get("/api/download/translated/{video_id}")
-async def download_translated(video_id: str, lang: str = Query("vi")):
+async def download_translated(video_id: str, lang: str = Query("vi"),
+                              source_track: str | None = Query(None),
+                              source_lang: str | None = Query(None)):
     tr_dir = settings.temp_dir / "translated" / video_id
     if not tr_dir.exists():
         raise HTTPException(404, "Translated SRT not found. Run translate first.")
-    # Prefer the language-specific file; fall back to the only remaining .srt
-    # (legacy files named subtitles_vi.srt / input.srt) for backward compat.
+    if lang not in ("vi", "en", "zh"):
+        raise HTTPException(400, "Unsupported target language")
     path = tr_dir / f"subtitles_{lang}.srt"
-    if not path.exists():
-        files = list(tr_dir.glob("*.srt"))
-        if not files:
-            raise HTTPException(404, "Translated SRT not found. Run translate first.")
-        path = files[0]
+    if not path.exists() or path.stat().st_size == 0:
+        raise HTTPException(404, "Translated SRT not found. Run translate first.")
+    if source_track is not None:
+        from app.services.translation_service import translation_cache_matches
+        if not translation_cache_matches(video_id, lang, source_track, source_lang or "zh"):
+            raise HTTPException(404, "Translation source changed. Run translate again.")
     return FileResponse(str(path), media_type="application/x-subrip", filename=path.name)
 
 
@@ -3017,11 +3053,16 @@ async def update_timeline_check(
     if body.action == "wait":
         tc.update({
             "waiting": True,
-            "open": bool(tc.get("open")),
+            "open": False,
             "fixing": False,
             "decision": None,
             "issues": body.issues,
+            "lang": body.lang or "vi",
+            "source_lang": body.source_lang,
+            "source_track": body.source_track,
         })
+    elif body.lang is not None and body.lang != tc.get("lang", "vi"):
+        raise HTTPException(409, "Timeline review language changed; refresh before continuing")
     elif body.action == "open":
         tc.update({"waiting": True, "open": True})
     elif body.action == "close":

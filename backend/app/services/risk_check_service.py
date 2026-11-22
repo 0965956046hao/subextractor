@@ -136,7 +136,7 @@ def check_subtitle_risks(video_id: str, lang: str = "vi", log_fn=None) -> list[d
 
     Returns a list of risky lines: {index, text, problems, note}.
     """
-    srt_path = _srt_best_path(video_id)
+    srt_path = _srt_best_path(video_id, lang)
     if not srt_path.exists():
         raise ValueError("SRT not found")
 
@@ -255,7 +255,7 @@ def run_risk_check_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_i
         out_dir = settings.temp_dir / "risk_check"
         out_dir.mkdir(parents=True, exist_ok=True)
         result = {"risks": risks, "checked_at": time.time()}
-        (out_dir / f"{video_id}.json").write_text(
+        (out_dir / f"{video_id}_{lang}.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

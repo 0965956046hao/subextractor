@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.models import SrtEntry
-from app.services.media_utils import _srt_path, _video_path
+from app.services.media_utils import _srt_path, _video_path, translation_source_path
 from app.services.srt_utils import parse_srt, entries_to_srt
 from app.services.context_service import (
     load_video_context,
@@ -535,7 +535,7 @@ def re_translate_line(video_id: str, source_text: str, source_lang: str = "zh", 
 
     base_prompt = _build_base_prompt(source_lang, target_lang, video_id, n_lines=1)
 
-    patch_context = load_translation_context(video_id)
+    patch_context = load_translation_context(video_id, target_lang)
     if patch_context:
         patch_prefix = (
             "PREVIOUS PATCH CONTEXT (already-translated subtitles; keep character names, "
@@ -575,6 +575,7 @@ def retranslate_untranslated(
     source_lang: str = "zh",
     target_lang: str = "vi",
     log_fn=None,
+    source_track: str = "original",
 ) -> str:
     """Re-translate lines that were left in the original language.
 
@@ -584,7 +585,7 @@ def retranslate_untranslated(
     """
     from rapidfuzz import fuzz
 
-    original_path = _srt_path(video_id)
+    original_path = translation_source_path(video_id, source_track)
     if not original_path.exists():
         raise ValueError("SRT gốc không tồn tại")
     original = parse_srt(original_path.read_text(encoding="utf-8"))
@@ -613,7 +614,7 @@ def retranslate_untranslated(
     texts = [b.text for b in batch]
 
     base_prompt = _build_base_prompt(source_lang, target_lang, video_id, len(texts))
-    patch_context = load_translation_context(video_id)
+    patch_context = load_translation_context(video_id, target_lang)
     if patch_context:
         base_prompt = (
             "PREVIOUS PATCH CONTEXT (keep character names, honorifics, terminology and tone "
@@ -655,7 +656,21 @@ def retranslate_untranslated(
     return entries_to_srt(out)
 
 
-def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None, progress_callback=None, cancelled_cb=None) -> str:
+def translation_cache_matches(video_id: str, target_lang: str, source_track: str,
+                              source_lang: str) -> bool:
+    """A reviewed output can be reused only while its translation source matches."""
+    meta = read_json(settings.temp_dir / "translated" / video_id / f"subtitles_{target_lang}.source.json")
+    try:
+        content = translation_source_path(video_id, source_track).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta == {
+        "source_track": source_track, "source_lang": source_lang,
+        "source_fingerprint": fingerprint(content),
+    }
+
+
+def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi", use_custom_srt: bool = False, multi_voice: bool = False, log_fn=None, progress_callback=None, cancelled_cb=None, source_track: str = "original") -> str:
     """Translate SRT file using Gemini and save as subtitles_{target_lang}.srt.
 
     `cancelled_cb` (optional, () -> bool): được kiểm tra trước mỗi batch để
@@ -667,12 +682,26 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             raise ValueError("Custom SRT input not found")
         content = custom_path.read_text(encoding="utf-8")
     else:
-        srt_path = _srt_path(video_id)
+        srt_path = _srt_path(video_id) if source_track == "original" else translation_source_path(video_id, source_track)
         content = srt_path.read_text(encoding="utf-8")
+
+    source_meta = {
+        "source_track": "custom" if use_custom_srt else source_track,
+        "source_lang": source_lang, "source_fingerprint": fingerprint(content),
+    }
 
     entries = parse_srt(content)
     if not entries:
         raise ValueError("No subtitle entries found")
+
+    if source_lang == target_lang:
+        # Preserve a separate language-specific track even when it is the source.
+        out_path = settings.temp_dir / "translated" / video_id / f"subtitles_{target_lang}.srt"
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
+        atomic_bytes(out_path, content.encode("utf-8"))
+        atomic_json(out_path.with_suffix(".source.json"), source_meta)
+        return content
 
     logger.info("Translating %d SRT entries with Gemini (%s → %s)", len(entries), source_lang, target_lang)
     if log_fn:
@@ -683,7 +712,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
     # Accumulated translation context keeps names/honorifics/terminology consistent
-    patch_context = load_translation_context(video_id) or ""
+    patch_context = load_translation_context(video_id, target_lang) or ""
     if patch_context:
         logger.info("Using accumulated translation context (%d chars)", len(patch_context))
 
@@ -700,11 +729,16 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
 
     # Do not include the mutable accumulated context in the identity: restore
     # its exact snapshot from this run instead, without appending notes twice.
-    identity = fingerprint({"version": 1, "srt": content, "source": source_lang,
-                            "target": target_lang, "model": settings.gemini_model,
-                            "batch_size": batch_size,
-                            "system": SYSTEM_INSTRUCTION, "patch_prompt": PATCH_CONTEXT_PROMPT,
-                            "prompt": _build_base_prompt(source_lang, target_lang, video_id, batch_size)})
+    identity_fields = {"version": 1, "srt": content, "source": source_lang,
+                       "target": target_lang, "model": settings.gemini_model,
+                       "batch_size": batch_size,
+                       "system": SYSTEM_INSTRUCTION, "patch_prompt": PATCH_CONTEXT_PROMPT,
+                       "prompt": _build_base_prompt(source_lang, target_lang, video_id, batch_size)}
+    # Preserve existing original-source checkpoints; reviewed-Vietnamese runs
+    # have their own identity even if source text happens to be identical.
+    if source_track != "original":
+        identity_fields["source_track"] = source_track
+    identity = fingerprint(identity_fields)
     checkpoint_dir = settings.temp_dir / "translated" / video_id / "checkpoints" / identity
     initial = read_json(checkpoint_dir / "initial.json")
     if not isinstance(initial, dict) or not isinstance(initial.get("context"), str):
@@ -810,7 +844,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         )
         if note:
             patch_context = (patch_context + "\n\n" + note) if patch_context else note
-            append_translation_context(video_id, note)
+            append_translation_context(video_id, note, target_lang)
             logger.info("Updated translation context after batch %d (%d chars)", bi + 1, len(patch_context))
             if log_fn:
                 log_fn(f"  Batch {bi + 1}: đã cập nhật ngữ cảnh ({len(note)} ký tự) cho các batch tiếp theo.")
@@ -843,8 +877,9 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     if cancelled_cb is not None and cancelled_cb():
         raise JobCancelled()
     # Only publish a final SRT when the whole translation step has completed.
-    atomic_bytes(_translation_context_path(video_id), patch_context.encode("utf-8"))
+    atomic_bytes(_translation_context_path(video_id, target_lang), patch_context.encode("utf-8"))
     atomic_bytes(out_path, out_content.encode("utf-8"))
+    atomic_json(out_path.with_suffix(".source.json"), source_meta)
 
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)
     if log_fn:
@@ -888,6 +923,7 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             log_fn=_log,
             progress_callback=_progress,
             cancelled_cb=lambda: bool(jobs.get(job_id, {}).get("cancelled")),
+            source_track=job.get("source_track", "original"),
         )
 
         if job.get("cancelled"):

@@ -96,8 +96,10 @@ def _files_index_path(video_id: str) -> Path:
     return settings.temp_dir / CONTEXT_DIR_NAME / video_id / FILES_INDEX_NAME
 
 
-def _translation_context_path(video_id: str) -> Path:
-    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / TRANSLATION_CONTEXT_NAME
+def _translation_context_path(video_id: str, target_lang: str = "vi") -> Path:
+    # Keep the existing Vietnamese filename; other tracks must not overwrite it.
+    name = TRANSLATION_CONTEXT_NAME if target_lang == "vi" else f"translation_context_{target_lang}.txt"
+    return settings.temp_dir / CONTEXT_DIR_NAME / video_id / name
 
 
 def _context_images_dir(video_id: str) -> Path:
@@ -145,19 +147,19 @@ def _context_image_paths(video_id: str) -> list[Path]:
     return sorted(c.glob("*.jpg"))
 
 
-def load_translation_context(video_id: str) -> str | None:
+def load_translation_context(video_id: str, target_lang: str = "vi") -> str | None:
     """Load the accumulated translation context (built patch-by-patch)."""
-    p = _translation_context_path(video_id)
+    p = _translation_context_path(video_id, target_lang)
     if p.exists():
         return p.read_text(encoding="utf-8").strip()
     return None
 
 
-def append_translation_context(video_id: str, note: str) -> None:
+def append_translation_context(video_id: str, note: str, target_lang: str = "vi") -> None:
     """Append a patch context note to the translation-context file."""
-    p = _translation_context_path(video_id)
+    p = _translation_context_path(video_id, target_lang)
     p.parent.mkdir(parents=True, exist_ok=True)
-    prev = load_translation_context(video_id)
+    prev = load_translation_context(video_id, target_lang)
     content = f"{prev}\n\n{note}" if prev else note
     p.write_text(content, encoding="utf-8")
 

@@ -50,6 +50,7 @@ import {
   STEP_STAGE,
   DEFAULT_REGION,
   fmtElapsed,
+  langLabel,
   type Pipeline,
 } from "@/stores/pipeline-store";
 
@@ -284,6 +285,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   ] as const;
   const [optTab, setOptTab] = useState<"source" | "voice" | "export">("source");
   const [translateOn, setTranslateOn] = useState(true);
+  const [bilingualSubs, setBilingualSubs] = useState(true);
   const [translateTarget, setTranslateTarget] = useState<"zh" | "en" | "vi">(
     "vi",
   );
@@ -681,6 +683,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       dubOn,
       playbackSpeed,
       ocrDecoder,
+      bilingualSubs,
     );
     setUrl("");
     setSelectedId(id);
@@ -727,6 +730,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
     const id = addPipelineFromUpload({
       videoId: uploaded.videoId,
       filename: uploaded.name,
+      bilingualSubs,
       srcLang,
       regionMode,
       dub: { engine: dubEngine, voice: dubVoice, muteOriginal, originalGainDb, keepOriginalEnabled },
@@ -1202,7 +1206,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setTranslateOn(!translateOn)}
+                      onClick={() => { setTranslateOn(!translateOn); if (translateOn) setBilingualSubs(false); }}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${translateOn ? "bg-accent" : "bg-black/10"
                         }`}
                     >
@@ -1221,7 +1225,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         {(["zh", "en", "vi"] as const).map((l) => (
                           <button
                             key={l}
-                            onClick={() => setTranslateTarget(l)}
+                            onClick={() => { setTranslateTarget(l); if (l !== "vi") setBilingualSubs(false); }}
                             className={`px-4 py-1.5 rounded-full text-[11px] font-medium tracking-tight transition-colors active:scale-[0.97] ${translateTarget === l
                               ? "bg-accent text-white shadow-sm ring-1 ring-accent"
                               : "text-ink-light hover:text-ink"
@@ -1240,6 +1244,20 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       </p>
                     </div>
                   )}
+
+                  <div className="mt-4 border-t border-white/[0.07] pt-4 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">Sub song ngữ Việt–Anh</p>
+                      <p className="text-[11px] text-ink-light mt-1">{checkSubs
+                        ? "Duyệt bản Việt → dịch Anh từ bản Việt đã duyệt → duyệt bản Anh. Chỉ lồng tiếng Việt."
+                        : "Dịch Việt trước, Anh sau từ SRT gốc. Chỉ lồng tiếng Việt."}</p>
+                    </div>
+                    <button type="button" role="switch" aria-checked={bilingualSubs} aria-label="Sub song ngữ Việt–Anh"
+                      onClick={() => { setBilingualSubs(!bilingualSubs); if (!bilingualSubs) { setTranslateOn(true); setTranslateTarget("vi"); } }}
+                      className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${bilingualSubs ? "bg-accent" : "bg-black/10"}`}>
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all ${bilingualSubs ? "left-[22px]" : "left-0.5"}`} />
+                    </button>
+                  </div>
 
                   <div className="mt-4 border-t border-white/[0.07] pt-4">
                     <div className="flex items-center justify-between gap-3">
@@ -1576,7 +1594,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                             setRemoveWmEnabled(true);
                           }
                         }}
-                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${removeWmEnabled ? "bg-danger" : "bg-black/10"
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${removeWmEnabled ? "bg-accent" : "bg-black/10"
                           }`}
                       >
                         <span
@@ -1681,7 +1699,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                       <button
                         type="button"
                         onClick={() => setCheckVoice(!checkVoice)}
-                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${checkVoice ? "bg-violet-600" : "bg-black/10"
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300 flex-shrink-0 cursor-pointer ${checkVoice ? "bg-accent" : "bg-black/10"
                           }`}
                       >
                         <span
@@ -2736,6 +2754,8 @@ function DetailView({
             <SubtitlePreview
               videoId={p.videoId}
               region={p.region ?? DEFAULT_REGION}
+              bilingualSubs={p.bilingualSubs}
+              initialStyle={p.subtitleStyle}
               onConfirmed={(s) => confirmSubtitleStyle(p.id, s)}
             />
           </div>
@@ -3380,6 +3400,7 @@ function DetailView({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-ink">
                     {tr("pipeline.timelineCheckTitle")}
+                    {` · ${langLabel(p.timelineCheck.lang ?? p.translateTarget ?? "vi")}`}
                   </p>
                   <p className="text-[12px] text-ink-muted leading-relaxed mt-0.5">
                     {p.timelineCheck.issues.length > 0
@@ -3472,10 +3493,12 @@ function DetailView({
 
       {p.timelineCheck?.waiting && p.timelineCheck.open && p.videoId && (
         <TimelineCheckModal
+          key={`${p.videoId}:${p.timelineCheck.lang ?? "vi"}`}
           videoId={p.videoId}
           initialIssues={p.timelineCheck.issues}
-          targetLang={p.translateTarget || "vi"}
-          sourceLang={p.srcLang || "zh"}
+          targetLang={p.timelineCheck.lang ?? p.translateTarget ?? "vi"}
+          sourceLang={p.timelineCheck.sourceLang ?? p.srcLang ?? "zh"}
+          sourceTrack={p.timelineCheck.sourceTrack ?? "original"}
           onResolve={() => resolveTimelineCheck(p.id, "continue")}
           onClose={() => closeTimelineCheck(p.id)}
         />

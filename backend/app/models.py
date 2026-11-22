@@ -82,11 +82,17 @@ class TimelineCheckState(BaseModel):
     issues: list[dict] = []
     fixing: bool = False
     decision: str | None = None      # "continue" | "fix" once someone resolves
+    lang: str = "vi"
+    source_lang: str = "zh"
+    source_track: Literal["original", "vi"] = "original"
 
 
 class TimelineAction(BaseModel):
     action: Literal["wait", "open", "close", "continue", "fix"]
     issues: list[dict] = []
+    lang: str | None = None
+    source_lang: str = "zh"
+    source_track: Literal["original", "vi"] = "original"
 
 
 class TelegramAutoRequest(BaseModel):

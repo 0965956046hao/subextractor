@@ -20,6 +20,7 @@ from app.services.align_service import run_align_sync
 from app.services.job_utils import JobCancelled, notify_ws_sync
 from app.services.processing_timing import timed_job_call, stop_processing
 from app.services.ocr_checkpoint import OCRCheckpoint, run_checkpointed_ocr, video_identity
+from app.services.checkpoint import atomic_json, fingerprint, read_json
 
 from datetime import datetime
 
@@ -519,6 +520,11 @@ async def run_hardcode_job(
         video_path = job["video_path"]
         video_id = job.get("video_id", job_id)
         srt_path = str(_srt_best_path(video_id))
+        if job.get("bilingual_subs"):
+            for lang in ("vi", "en"):
+                track = settings.temp_dir / "translated" / video_id / f"subtitles_{lang}.srt"
+                if not track.exists() or not track.stat().st_size:
+                    raise ValueError(f"Thiếu SRT {lang} — chạy lại bước Dịch Gemini trước khi xuất song ngữ.")
 
         out_dir = settings.temp_dir / "hardcoded" / video_id
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -531,9 +537,26 @@ async def run_hardcode_job(
         _safe_unlink(partial_path.with_suffix(".ass"))
 
         playback_speed = float(job.get("playback_speed", 1.0) or 1.0)
+        from app.routers.config_router import get_subtitle_style
+        def file_version(path: Path):
+            return [str(path), path.stat().st_size, path.stat().st_mtime_ns] if path.exists() else None
+
+        en_path = settings.temp_dir / "translated" / video_id / "subtitles_en.srt"
+        render_id = fingerprint({
+            "version": 1, "video": file_version(Path(video_path)),
+            "vi": file_version(Path(srt_path)),
+            "en": file_version(en_path) if job.get("bilingual_subs") else None,
+            "audio": file_version(settings.temp_dir / "tts" / video_id / "full_audio.m4a"),
+            "bilingual": bool(job.get("bilingual_subs")), "style": job.get("style"),
+            "defaults": get_subtitle_style(), "region": job.get("region"),
+            "auto_fit": job.get("auto_fit"), "speed": playback_speed,
+        })
+        render_meta = final_path.with_suffix(".json")
+        previous_render = read_json(render_meta)
         if (
             not job.get("watermark")
-            and abs(playback_speed - 1.0) < 0.01
+            and isinstance(previous_render, dict)
+            and previous_render.get("identity") == render_id
             and final_path.exists()
             and final_path.stat().st_size > 0
             and _duration_covers(video_path, str(final_path))
@@ -552,17 +575,17 @@ async def run_hardcode_job(
             })
             return
 
-        # Partial / damaged previous output → discard and re-encode.
+        # Changed settings/tracks or damaged previous output → re-encode.
         if final_path.exists():
             src_dur = _get_duration(video_path)
             out_dur = _get_duration(str(final_path))
             logger.warning(
-                "hardcode job %s: discarding incomplete previous output (src=%.1fs out=%.1fs)",
+                "hardcode job %s: re-encoding previous output (src=%.1fs out=%.1fs)",
                 job_id, src_dur, out_dur,
             )
             await job_log_async(
                 job, ws_clients,
-                f"File phụ đề cứng cũ bị dở dang ({out_dur:.0f}s / {src_dur:.0f}s) — sẽ encode lại đầy đủ.",
+                f"Cấu hình/phụ đề đã thay đổi hoặc video cũ chưa đầy đủ ({out_dur:.0f}s / {src_dur:.0f}s) — encode lại.",
                 "warn",
             )
             _safe_unlink(final_path)
@@ -585,6 +608,7 @@ async def run_hardcode_job(
             raise RuntimeError("Hardcode finished without producing an output file")
         _safe_unlink(final_path)
         partial_path.rename(final_path)
+        atomic_json(render_meta, {"identity": render_id, "bilingual_subs": bool(job.get("bilingual_subs"))})
         _safe_unlink(partial_path.with_suffix(".ass"))
 
         job["status"] = "done"

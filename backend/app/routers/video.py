@@ -363,11 +363,13 @@ async def cleanup_video(video_id: str):
         shutil.rmtree(thumb_dir, ignore_errors=True)
         removed.append("thumb")
 
-    # risk_check/: flat result file temp/risk_check/{video_id}.json
-    risk_file = settings.temp_dir / "risk_check" / f"{video_id}.json"
-    if risk_file.exists():
-        risk_file.unlink(missing_ok=True)
-        removed.append("risk_check")
+    # Include language-specific results as well as the legacy flat result.
+    for suffix in ("", "_vi", "_en", "_zh"):
+        risk_file = settings.temp_dir / "risk_check" / f"{video_id}{suffix}.json"
+        if risk_file.exists():
+            risk_file.unlink(missing_ok=True)
+            if "risk_check" not in removed:
+                removed.append("risk_check")
 
     return {"cleaned": video_id, "removed": removed}
 
@@ -397,10 +399,12 @@ async def delete_video(video_id: str, pipeline_states: dict = Depends(get_pipeli
             removed.append(name)
     # risk_check is stored as a flat file (temp/risk_check/{video_id}.json),
     # not a per-video subdir, so clear it explicitly.
-    risk_file = settings.temp_dir / "risk_check" / f"{video_id}.json"
-    if risk_file.exists():
-        risk_file.unlink(missing_ok=True)
-        removed.append("risk_check")
+    for suffix in ("", "_vi", "_en", "_zh"):
+        risk_file = settings.temp_dir / "risk_check" / f"{video_id}{suffix}.json"
+        if risk_file.exists():
+            risk_file.unlink(missing_ok=True)
+            if "risk_check" not in removed:
+                removed.append("risk_check")
     if merge_id:
         merged_dir = settings.temp_dir / "merged"
         for suffix in ("", "_video", "_audio"):
@@ -522,10 +526,12 @@ async def reset_video_from_step(video_id: str, body: dict):
             removed.append("delogo")
     # Bước 4 (OCR): xóa kết quả risk-check gắn với bản SRT cũ
     if from_step <= 4:
-        risk_file = settings.temp_dir / "risk_check" / f"{video_id}.json"
-        if risk_file.exists():
-            risk_file.unlink(missing_ok=True)
-            removed.append("risk_check")
+        for suffix in ("", "_vi", "_en", "_zh"):
+            risk_file = settings.temp_dir / "risk_check" / f"{video_id}{suffix}.json"
+            if risk_file.exists():
+                risk_file.unlink(missing_ok=True)
+                if "risk_check" not in removed:
+                    removed.append("risk_check")
     # Bước 0..3: không có file output, nhưng gỡ region/style đã lưu cho khớp
     # với runPrep (đã null chúng trong memory khi chạy lại từ các bước này)
     if from_step <= 3:

@@ -8,6 +8,8 @@ import VideoPlayer from "@/components/VideoPlayer";
 interface Props {
   videoId: string;
   region: Region;
+  bilingualSubs?: boolean;
+  initialStyle?: Partial<SubtitleStyle> | null;
   onConfirmed: (style: Partial<SubtitleStyle>) => void;
 }
 
@@ -15,11 +17,20 @@ function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
-export default function SubtitlePreview({ videoId, region, onConfirmed }: Props) {
+export default function SubtitlePreview({ videoId, region, onConfirmed, bilingualSubs = false, initialStyle }: Props) {
   const { t } = useI18n();
-  const [fontSize, setFontSize] = useState(48);
-  const [marginV, setMarginV] = useState(40);
-  const [marginH, setMarginH] = useState(0);
+  const stylesRef = useRef({
+    vi: { font_size: initialStyle?.font_size ?? 48, margin_v: initialStyle?.margin_v ?? 40, margin_h: initialStyle?.margin_h ?? 0 },
+    en: { font_size: initialStyle?.english_style?.font_size ?? Math.round((initialStyle?.font_size ?? 48) * 0.8),
+      margin_v: initialStyle?.english_style?.margin_v ?? (initialStyle?.margin_v ?? 40) + (initialStyle?.font_size ?? 48) + 40,
+      margin_h: initialStyle?.english_style?.margin_h ?? initialStyle?.margin_h ?? 0 },
+  });
+  const [activeLanguage, setActiveLanguage] = useState<"vi" | "en">("vi");
+  const activeRef = useRef<"vi" | "en">("vi");
+  const requestRef = useRef(0);
+  const [fontSize, setFontSize] = useState(stylesRef.current.vi.font_size);
+  const [marginV, setMarginV] = useState(stylesRef.current.vi.margin_v);
+  const [marginH, setMarginH] = useState(stylesRef.current.vi.margin_h);
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -33,6 +44,8 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     async (fs: number, mv: number, mh: number, time: number, force?: boolean) => {
       if (!force && Math.abs(time - lastTimeRef.current) < 0.3) return;
       lastTimeRef.current = time;
+      stylesRef.current[activeRef.current] = { font_size: fs, margin_v: mv, margin_h: mh };
+      const request = ++requestRef.current;
       setLoading(true);
       setError(false);
       try {
@@ -41,7 +54,9 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             region,
-            style: { font_size: fs, margin_v: mv, margin_h: mh },
+            style: { ...initialStyle, ...stylesRef.current.vi,
+              english_style: { ...initialStyle?.english_style, ...stylesRef.current.en } },
+            bilingual_subs: bilingualSubs,
             text: t("preview.sampleText"),
             time,
             format: "overlay",
@@ -49,17 +64,18 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
         });
         if (!res.ok) throw new Error("preview failed");
         const blob = await res.blob();
+        if (request !== requestRef.current) return;
         setOverlayUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return URL.createObjectURL(blob);
         });
       } catch {
-        setError(true);
+        if (request === requestRef.current) setError(true);
       } finally {
-        setLoading(false);
+        if (request === requestRef.current) setLoading(false);
       }
     },
-    [videoId, region, t]
+    [videoId, region, t, bilingualSubs, initialStyle]
   );
 
   // Initial overlay at t=0, then re-render on slider changes (debounced).
@@ -89,7 +105,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   };
 
   const handleMarginV = (v: number) => {
-    const next = clamp(v, 0, 400);
+    const next = clamp(v, 0, 1080);
     setMarginV(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => refresh(fontSize, next, marginH), 250);
@@ -113,7 +129,19 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
   };
 
   const handleConfirm = () => {
-    onConfirmed({ font_size: fontSize, margin_v: marginV, margin_h: marginH });
+    stylesRef.current[activeRef.current] = { font_size: fontSize, margin_v: marginV, margin_h: marginH };
+    onConfirmed({ ...initialStyle, ...stylesRef.current.vi,
+      ...(bilingualSubs ? { english_style: { ...initialStyle?.english_style, ...stylesRef.current.en, box_enabled: false } } : {}) });
+  };
+
+  const selectLanguage = (lang: "vi" | "en") => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    stylesRef.current[activeRef.current] = { font_size: fontSize, margin_v: marginV, margin_h: marginH };
+    activeRef.current = lang;
+    setActiveLanguage(lang);
+    const s = stylesRef.current[lang];
+    setFontSize(s.font_size); setMarginV(s.margin_v); setMarginH(s.margin_h);
+    refresh(s.font_size, s.margin_v, s.margin_h);
   };
 
   // Drag the subtitle text directly on the video to reposition it.
@@ -135,7 +163,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
     const dy = e.clientY - drag.y;
     const scaleV = 1080 / rect.height;
     const scaleH = 1920 / rect.width;
-    const mv = clamp(drag.mv - dy * scaleV, 0, 400);
+    const mv = clamp(drag.mv - dy * scaleV, 0, 1080);
     const mh = clamp(drag.mh + dx * scaleH, -600, 600);
     setMarginV(mv);
     setMarginH(mh);
@@ -208,6 +236,20 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
       />
 
       <div className="glass-panel rounded-2xl p-4 sm:p-5 space-y-4">
+        {bilingualSubs && (
+          <div className="space-y-2">
+            <div className="flex gap-2" role="tablist" aria-label="Ngôn ngữ phụ đề">
+              {(["vi", "en"] as const).map((lang) => (
+                <button key={lang} type="button" role="tab" aria-selected={activeLanguage === lang}
+                  onClick={() => selectLanguage(lang)}
+                  className={activeLanguage === lang ? "btn-island-primary text-xs" : "btn-island-secondary text-xs"}>
+                  {lang === "vi" ? "Tiếng Việt" : "English"}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-ink-muted">Kéo để di chuyển {activeLanguage === "vi" ? "sub Việt" : "sub Anh"}. Sub Anh không nền; video cuối hiển thị cả hai ngôn ngữ.</p>
+          </div>
+        )}
         <label className="block">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] font-medium text-ink-muted uppercase tracking-[0.12em]">
@@ -240,7 +282,7 @@ export default function SubtitlePreview({ videoId, region, onConfirmed }: Props)
           <input
             type="range"
             min={0}
-            max={400}
+            max={1080}
             step={4}
             value={marginV}
             onChange={(e) => handleMarginV(Number(e.target.value))}

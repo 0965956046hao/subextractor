@@ -49,6 +49,33 @@ def apply_style_override(style: dict, override: dict | None) -> dict:
     return out
 
 
+def english_subtitle_style(vietnamese: dict, override: dict | None = None) -> dict:
+    """Shared defaults for preview and final English layer; never draw a box."""
+    style = dict(vietnamese)
+    style.pop("english_style", None)
+    style.update(font_size=max(16, round(int(vietnamese.get("font_size", 48)) * 0.8)),
+                 margin_v=min(1080, int(vietnamese.get("margin_v", 40))
+                              + int(vietnamese.get("font_size", 48)) + 40),
+                 text_color="#FFFFFF", outline_color="#000000", outline_width=2,
+                 box_enabled=False, box_pad_x=0, box_pad_y=0)
+    style = apply_style_override(style, override)
+    style["box_enabled"] = False
+    return style
+
+
+def bilingual_ass(vi_content: str, en_content: str, vw: int, vh: int,
+                  vi_style: dict, en_override: dict | None = None) -> str:
+    """Two independent style/event sets in one ASS, encoded in a single pass."""
+    vi = srt_to_ass_blackbox(vi_content, vw, vh, vi_style)
+    en = srt_to_ass_blackbox(en_content, vw, vh,
+                            english_subtitle_style(vi_style, en_override))
+    en = en.replace("SubStyle", "EnglishSubStyle").replace("BoxStyle", "EnglishBoxStyle").replace("BoxBorder", "EnglishBoxBorder")
+    en_styles = "\n".join(line for line in en.splitlines() if line.startswith("Style: "))
+    vi = vi.replace("[Events]", en_styles + "\n\n[Events]")
+    return vi + "\n".join(line.replace("Dialogue: 2,", "Dialogue: 3,", 1)
+                           for line in en.splitlines() if line.startswith("Dialogue: ")) + "\n"
+
+
 def auto_fit_style(
     style: dict,
     region: dict,
@@ -705,6 +732,16 @@ def run_hardcode_sync(
         )
     # ASS PlayRes = target dims so libass renders text crisply at the final size.
     ass_content = srt_to_ass_blackbox(srt_content, tw, th, style)
+    if job.get("bilingual_subs"):
+        en_path = settings.temp_dir / "translated" / job["video_id"] / "subtitles_en.srt"
+        if not en_path.exists() or not en_path.stat().st_size:
+            raise ValueError("Thiếu SRT tiếng Anh — chạy lại bước Dịch Gemini trước khi xuất song ngữ.")
+        en_content = en_path.read_text(encoding="utf-8")
+        if abs(playback_speed - 1.0) >= 0.01:
+            en_content = _scale_srt_speed(en_content, playback_speed)
+        ass_content = bilingual_ass(srt_content, en_content, tw, th, style,
+                                    (job.get("style") or {}).get("english_style"))
+        _log("Nhúng đồng thời phụ đề Việt + Anh (tiếng Anh không nền).")
     ass_path = Path(out_path).with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
     _log(f"Đã tạo file ASS phụ đề ({len(parse_srt(srt_content))} dòng) — chuẩn bị encode...")
@@ -803,6 +840,8 @@ def run_hardcode_sync(
 
     # ── Watermark (logo + scrolling text) ──────────────────────────────────
     has_libass = _has_subtitles_filter()
+    if job.get("bilingual_subs") and not has_libass:
+        raise RuntimeError("Xuất song ngữ cần FFmpeg có filter subtitles (libass); không xuất video thiếu sub.")
     watermark = None
     if job.get("watermark"):
         from app.routers.config_router import get_watermark

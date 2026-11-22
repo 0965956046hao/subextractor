@@ -93,6 +93,18 @@ def _srt_original_path(video_id: str) -> Path:
     return settings.temp_dir / "srt" / video_id / "subtitles.srt"
 
 
+def translation_source_path(video_id: str, source_track: str = "original") -> Path:
+    """Resolve an explicit translation source, never falling back to another track."""
+    if source_track == "original":
+        return _srt_path(video_id)
+    if source_track == "vi":
+        path = settings.temp_dir / "translated" / video_id / "subtitles_vi.srt"
+        if not path.exists():
+            raise FileNotFoundError("SRT tiếng Việt không tồn tại")
+        return path
+    raise ValueError("Invalid translation source track")
+
+
 def _srt_translated_path(video_id: str, lang: str = "vi") -> Path | None:
     """SRT đã dịch — ưu tiên translated/{id}/subtitles_{lang}.srt.
 
@@ -105,10 +117,7 @@ def _srt_translated_path(video_id: str, lang: str = "vi") -> Path | None:
     preferred = translated_dir / f"subtitles_{lang}.srt"
     if preferred.exists() and preferred.stat().st_size > 0:
         return preferred
-    # Fallback: tìm bất kỳ subtitles_*.srt nào (trừ backup)
-    for f in sorted(translated_dir.glob("subtitles_*.srt"), reverse=True):
-        if f.name != "subtitles_original.srt" and f.stat().st_size > 0:
-            return f
+    # Never substitute another language (in particular English for Vietnamese TTS).
     return None
 
 

@@ -93,6 +93,7 @@ interface TimelineCheckModalProps {
   onClose: () => void;
   targetLang?: string;
   sourceLang?: string;
+  sourceTrack?: "original" | "vi";
 }
 
 type DragMode = "move" | "resize-start" | "resize-end" | null;
@@ -112,10 +113,12 @@ export default function TimelineCheckModal({
   onClose,
   targetLang = "vi",
   sourceLang = "zh",
+  sourceTrack = "original",
 }: TimelineCheckModalProps) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<SrtEntry[]>([]);
   const [loadError, setLoadError] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [duration, setDuration] = useState(0);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [currentTime, setCurrentTime] = useState(0);
@@ -142,10 +145,12 @@ export default function TimelineCheckModal({
 
   useEffect(() => {
     let cancelled = false;
-    getSrtEntries(videoId)
+    setLoaded(false);
+    getSrtEntries(videoId, targetLang)
       .then((es) => {
         if (cancelled) return;
         setEntries(es);
+        setLoaded(true);
         setLoadError("");
       })
       .catch((e) => {
@@ -154,7 +159,7 @@ export default function TimelineCheckModal({
     return () => {
       cancelled = true;
     };
-  }, [videoId]);
+  }, [videoId, targetLang]);
 
   const issueIndexes = useMemo(() => new Set(timelineIssues.map((i) => i.index)), [timelineIssues]);
   const riskIndexes = useMemo(() => new Set(risks.map((r) => r.index)), [risks]);
@@ -297,7 +302,7 @@ export default function TimelineCheckModal({
       setRetranslatingIndex(index);
       setCheckError("");
       try {
-        const newText = await reTranslateLine(videoId, index, sourceLang, targetLang);
+        const newText = await reTranslateLine(videoId, index, sourceLang, targetLang, sourceTrack);
         patchEntry(index, { text: newText });
         // Clear any risk marker tied to this line — the text changed.
         setRisks((prev) => prev.filter((r) => r.index !== index));
@@ -307,7 +312,7 @@ export default function TimelineCheckModal({
         setRetranslatingIndex(-1);
       }
     },
-    [videoId, sourceLang, targetLang, patchEntry]
+    [videoId, sourceLang, targetLang, sourceTrack, patchEntry]
   );
 
   const deleteEntry = useCallback((index: number) => {
@@ -415,7 +420,7 @@ export default function TimelineCheckModal({
       if (st.status === "error") throw new Error(st.error || t("timeline.riskCheckFailed" as string));
       if (i === 599) throw new Error(t("timeline.riskCheckTimeout" as string));
     }
-    const result = await getSrtRiskResult(videoId);
+    const result = await getSrtRiskResult(videoId, targetLang);
     setRisks(result.risks ?? []);
   }, [videoId, targetLang]);
 
@@ -435,26 +440,26 @@ export default function TimelineCheckModal({
     setSaving(true);
     setCheckError("");
     try {
-      await updateSrt(videoId, entriesToSrt(entries));
+      await updateSrt(videoId, entriesToSrt(entries), targetLang);
       await performRiskCheck();
     } catch (e) {
       setCheckError(e instanceof Error ? e.message : t("timeline.saveRecheckFailed" as string));
     } finally {
       setSaving(false);
     }
-  }, [videoId, entries, performRiskCheck]);
+  }, [videoId, targetLang, entries, performRiskCheck]);
 
   const saveAndContinue = useCallback(async () => {
     setSaving(true);
     try {
-      await updateSrt(videoId, entriesToSrt(entries));
-    } catch {
-      // Continue anyway; the pipeline can re-check later.
+      await updateSrt(videoId, entriesToSrt(entries), targetLang);
+      onResolve("continue");
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : t("timeline.saveRecheckFailed" as string));
     } finally {
       setSaving(false);
-      onResolve("continue");
     }
-  }, [videoId, entries, onResolve]);
+  }, [videoId, targetLang, entries, onResolve]);
 
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
@@ -489,15 +494,15 @@ export default function TimelineCheckModal({
     setCheckError("");
     setLoadError("");
     try {
-      const es = await getSrtEntries(videoId);
+      const es = await getSrtEntries(videoId, targetLang);
       setEntries(es);
       setRisks([]);
-      const v = await validateSrtTimeline(videoId);
+      const v = await validateSrtTimeline(videoId, targetLang);
       setTimelineIssues(v.issues ?? []);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : t("timeline.restoreFailed" as string));
     }
-  }, [videoId]);
+  }, [videoId, targetLang]);
 
   const activeRisk = riskByIndex.get(activeIndex);
 
@@ -518,7 +523,7 @@ export default function TimelineCheckModal({
                 <IconAlert className="w-5 h-5 text-amber-400" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">{t("timeline.title" as string)}</p>
+                <p className="text-sm font-semibold text-ink">{t("timeline.title" as string)} · {t(`lang.${targetLang}`)}</p>
                 <p className="text-[12px] text-ink-muted leading-relaxed">
                   {timelineIssues.length > 0
                     ? t("timeline.issuesFound" as string, { count: timelineIssues.length })
@@ -959,7 +964,7 @@ export default function TimelineCheckModal({
             </button>
             <button
               onClick={saveAndContinue}
-              disabled={saving || checking}
+              disabled={saving || checking || !loaded || !!loadError}
               className="px-4 py-2 rounded-full text-[12px] font-medium bg-success text-white hover:bg-success transition-colors cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
             >
               {saving && <IconSpinner className="w-3.5 h-3.5" />}
