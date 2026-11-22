@@ -5,7 +5,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from tqdm import tqdm
 
 from app.config import settings
 
@@ -43,101 +42,6 @@ def get_first_frame(video_path: str, video_id: str) -> Path:
     subprocess.run(cmd, check=True, timeout=60)
 
     return output_path
-
-
-def stream_frames(
-    video_path: str,
-    fps: int | None = None,
-) -> list[tuple[np.ndarray, float]]:
-    target_fps = fps if fps is not None and fps > 0 else None
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = 1 if target_fps is None else max(1, int(round(video_fps / target_fps)))
-
-    logger.info(
-        "  source: %.2f fps, %d frames, step=%d -> ~%d target frames",
-        video_fps, total_frames, step, total_frames // step,
-    )
-
-    frames: list[tuple[np.ndarray, float]] = []
-    idx = 0
-
-    pbar = tqdm(total=total_frames, desc="  frames", unit="fr", leave=False)
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if idx % step == 0:
-            timestamp = idx / video_fps
-            frames.append((frame, timestamp))
-        idx += 1
-        pbar.update(1)
-    pbar.close()
-
-    cap.release()
-    logger.info(
-        "  extracted %d frames (%s)",
-        len(frames), "every frame" if step == 1 else f"~{target_fps} fps",
-    )
-    return frames
-
-
-def stream_frames_generator(
-    video_path: str,
-    fps: int | None = None,
-    start_time: float | None = None,
-    end_time: float | None = None,
-):
-    target_fps = fps if fps is not None and fps > 0 else None
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = 1 if target_fps is None else max(1, int(round(video_fps / target_fps)))
-
-    # Calculate start/end frame numbers
-    start_frame = int(start_time * video_fps) if start_time and start_time > 0 else 0
-    end_frame = int(end_time * video_fps) if end_time and end_time > 0 else total_frames
-
-    logger.info(
-        "  video: %.2f fps, %d total frames, step=%d, start_frame=%d, end_frame=%d (%s)",
-        video_fps, total_frames, step, start_frame, end_frame,
-        "every frame" if step == 1 else f"~{target_fps} fps",
-    )
-
-    idx = 0
-    if start_frame > 0:
-        # Seek thay vì decode tuần tự từ đầu — khi OCR parallel, mỗi segment
-        # decode lại prefix của mình sẽ tốn tổng cộng ~2.5x thời gian decode.
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        idx = start_frame
-    extracted = 0
-    pbar = tqdm(total=max(1, end_frame - idx), desc="  frames", unit="fr", leave=False)
-    try:
-        while idx < min(end_frame, total_frames):
-            ret, frame = cap.read()
-            if not ret:
-                raise RuntimeError(f"Cannot decode video frame {idx} before segment end {end_frame}")
-            if idx >= start_frame and idx < end_frame and idx % step == 0:
-                timestamp = idx / video_fps
-                yield frame, timestamp
-                extracted += 1
-            idx += 1
-            pbar.update(1)
-    finally:
-        pbar.close()
-        cap.release()
-        logger.info(
-            "  extracted %d frames from %d-%d (%s)",
-            extracted, start_frame, end_frame,
-            "every frame" if step == 1 else f"~{target_fps} fps",
-        )
 
 
 def crop_region(frame: np.ndarray, region: dict) -> np.ndarray:

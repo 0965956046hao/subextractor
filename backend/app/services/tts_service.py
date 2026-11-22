@@ -184,7 +184,7 @@ def _is_transient_tts_error(e: Exception) -> bool:
 _TTS_MAX_ATTEMPTS = 5
 
 
-def _synthesize_with_retry(client, entry, out_dir: Path, index: int, voice_name: str = "vi-VN-Standard-A", log_fn=None) -> Path:
+def _synthesize_with_retry(client, entry, out_dir: Path, index: int, voice_name: str = "vi-VN-Standard-A", log_fn=None, cancelled_cb=None) -> Path:
     """Synthesize one entry, retrying transient errors with an increasing delay.
 
     Transient failures (quota / rate-limit / server 5xx) retry with a growing
@@ -196,6 +196,9 @@ def _synthesize_with_retry(client, entry, out_dir: Path, index: int, voice_name:
     attempt = 0
     last_err = None
     while attempt < _TTS_MAX_ATTEMPTS:
+        if cancelled_cb is not None and cancelled_cb():
+            from app.services.job_utils import JobCancelled
+            raise JobCancelled()
         attempt += 1
         try:
             return synthesize_entry(client, entry, out_dir, index, voice_name=voice_name)
@@ -208,7 +211,13 @@ def _synthesize_with_retry(client, entry, out_dir: Path, index: int, voice_name:
             logger.warning("TTS transient error for entry %d (attempt %d/%d): %s", index, attempt, _TTS_MAX_ATTEMPTS, e)
             if attempt >= _TTS_MAX_ATTEMPTS:
                 break
-            time.sleep(wait)
+            # Interrupt backoff promptly without issuing another API request.
+            until = time.monotonic() + wait
+            while time.monotonic() < until:
+                if cancelled_cb is not None and cancelled_cb():
+                    from app.services.job_utils import JobCancelled
+                    raise JobCancelled()
+                time.sleep(min(0.2, max(0, until - time.monotonic())))
             wait = min(wait * 2, 60.0)
     raise RuntimeError(f"TTS failed for entry {index} after {_TTS_MAX_ATTEMPTS} attempts: {last_err}") from last_err
 

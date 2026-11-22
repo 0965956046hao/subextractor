@@ -151,7 +151,7 @@ def genai_generate_content_factory(key: str, timeout: float | None = None):
     return _call
 
 
-def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: float | None = None, **kwargs):
+def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: float | None = None, _cancelled_cb=None, **kwargs):
     """Call a Gemini API with automatic key rotation on quota/rate-limit errors.
 
     `fn_factory(api_key: str, timeout: float | None)` must return the bound
@@ -169,6 +169,9 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
 
     last_err: Exception | None = None
     for i in range(_max_attempts):
+        if _cancelled_cb is not None and _cancelled_cb():
+            from app.services.job_utils import JobCancelled
+            raise JobCancelled()
         key = _next_key(keys)
         try:
             fn = fn_factory(key, timeout=_timeout)

@@ -10,10 +10,12 @@ from app.services.context_service import (
     load_video_context,
     load_translation_context,
     append_translation_context,
+    _translation_context_path,
     _load_capcut_voice_catalog,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
 from app.services.gemini_array import build_numbered_payload, gemini_map_texts
+from app.services.checkpoint import atomic_bytes, atomic_json, fingerprint, read_json
 from app.services.retry_utils import (
     configured_gemini_keys,
     gemini_call_rotating,
@@ -173,7 +175,7 @@ SRT LINES (with timestamps):
 """
 
 
-def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "vi") -> dict:
+def generate_voice_map(video_id: str, entries, log_fn=None, target_lang: str = "vi", cancelled_cb=None) -> dict:
     """Assign a CapCut voice to each SRT line via Gemini; save as voice_map.json.
 
     Returns {index: voice_type}. Saves to ``translated/{video_id}/voice_map.json``.
@@ -346,6 +348,8 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
     total_batches = (total + batch_size - 1) // batch_size
 
     for bi, batch_start in enumerate(range(0, total, batch_size)):
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
         batch = entries[batch_start:batch_start + batch_size]
         batch_srt = entries_to_srt(batch)
 
@@ -415,7 +419,7 @@ Output format: JSON object with SRT index -> speaker info, e.g.:
     return voice_map
 
 
-def _build_patch_context_note(translated_texts: list[str], source_lang: str, target_lang: str) -> str:
+def _build_patch_context_note(translated_texts: list[str], source_lang: str, target_lang: str, cancelled_cb=None) -> str:
     """Ask Gemini to summarize a translated patch into a reusable context note.
 
     Timeout 5 phút (gemini_context_timeout=300) + retry 3 lần với backoff
@@ -435,9 +439,14 @@ def _build_patch_context_note(translated_texts: list[str], source_lang: str, tar
     # xoay key + retry 5 lần với timeout 5p. Retry ngoài giúp vượt qua cả
     # trường hợp non-retryable transient stall sau backoff.
     for attempt in range(1, 4):
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
         try:
-            response = gemini_map_texts_call_note(prompt, payload, timeout=settings.gemini_context_timeout)
+            response = gemini_map_texts_call_note(prompt, payload, timeout=settings.gemini_context_timeout,
+                                                  cancelled_cb=cancelled_cb)
             return response.strip()
+        except JobCancelled:
+            raise
         except Exception as e:
             last_err = e
             if attempt < 3 and _is_retryable(e):
@@ -450,7 +459,7 @@ def _build_patch_context_note(translated_texts: list[str], source_lang: str, tar
     return ""
 
 
-def gemini_map_texts_call_note(prompt: str, payload: str, timeout: float | None = None) -> str:
+def gemini_map_texts_call_note(prompt: str, payload: str, timeout: float | None = None, cancelled_cb=None) -> str:
     """One-shot Gemini call for the patch context note (numbered lines in, prose out)."""
     from app.services.retry_utils import gemini_call_rotating, genai_generate_content_factory
 
@@ -466,6 +475,7 @@ def gemini_map_texts_call_note(prompt: str, payload: str, timeout: float | None 
             "temperature": 0.2,
         },
         _timeout=timeout,
+        _cancelled_cb=cancelled_cb,
     )
     return response.text.strip()
 
@@ -673,7 +683,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
     # Accumulated translation context keeps names/honorifics/terminology consistent
-    patch_context = load_translation_context(video_id)
+    patch_context = load_translation_context(video_id) or ""
     if patch_context:
         logger.info("Using accumulated translation context (%d chars)", len(patch_context))
 
@@ -688,14 +698,50 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     translated_entries = []
     total_batches = (len(entries) + batch_size - 1) // batch_size
 
+    # Do not include the mutable accumulated context in the identity: restore
+    # its exact snapshot from this run instead, without appending notes twice.
+    identity = fingerprint({"version": 1, "srt": content, "source": source_lang,
+                            "target": target_lang, "model": settings.gemini_model,
+                            "batch_size": batch_size,
+                            "system": SYSTEM_INSTRUCTION, "patch_prompt": PATCH_CONTEXT_PROMPT,
+                            "prompt": _build_base_prompt(source_lang, target_lang, video_id, batch_size)})
+    checkpoint_dir = settings.temp_dir / "translated" / video_id / "checkpoints" / identity
+    initial = read_json(checkpoint_dir / "initial.json")
+    if not isinstance(initial, dict) or not isinstance(initial.get("context"), str):
+        initial = {"context": patch_context}
+        atomic_json(checkpoint_dir / "initial.json", initial)
+    patch_context = initial["context"]
+
     for bi, batch_start in enumerate(range(0, len(entries), batch_size)):
         if cancelled_cb is not None and cancelled_cb():
             raise JobCancelled()
         batch = entries[batch_start:batch_start + batch_size]
         texts = [e.text for e in batch]
-
-        if progress_callback:
-            progress_callback(bi + 1, total_batches)
+        checkpoint_path = checkpoint_dir / f"{bi:06d}.json"
+        saved = read_json(checkpoint_path)
+        valid = (isinstance(saved, dict) and saved.get("context_before") == patch_context
+                 and isinstance(saved.get("texts"), list) and len(saved["texts"]) == len(batch)
+                 and all(isinstance(t, str) and t.strip() for t in saved["texts"])
+                 and isinstance(saved.get("context_after"), str))
+        if valid:
+            translated_entries.extend(SrtEntry(
+                index=b.index, start=b.start, end=b.end,
+                startLabel=b.startLabel, endLabel=b.endLabel, text=t,
+            ) for b, t in zip(batch, saved["texts"]))
+            patch_context = saved["context_after"]
+            if not saved.get("note_done"):
+                note = _build_patch_context_note(saved["texts"], source_lang, target_lang,
+                                                 cancelled_cb=cancelled_cb)
+                if note:
+                    patch_context = (patch_context + "\n\n" + note) if patch_context else note
+                saved.update(context_after=patch_context, note_done=True)
+                atomic_json(checkpoint_path, saved)
+            if log_fn:
+                log_fn(f"Khôi phục checkpoint dịch batch {bi + 1}/{total_batches} — không dịch lại batch đã lưu.")
+            if progress_callback:
+                progress_callback(bi + 1, total_batches)
+            continue
+        context_before = patch_context
 
         instruction = _build_base_prompt(source_lang, target_lang, video_id, len(texts))
         if patch_context:
@@ -715,6 +761,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             system_instruction=SYSTEM_INSTRUCTION,
             temperature=0.3,
             log_fn=log_fn,
+            cancelled_cb=cancelled_cb,
         )
 
         # Zip 1:1 back onto the ORIGINAL entries — timeline untouched by design.
@@ -735,6 +782,13 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
                 text=new_text or b.text.strip(),
             ))
         translated_entries.extend(out_batch)
+        # Persist the costly translation BEFORE asking for a context note.
+        # Pausing during note generation must not lose a successful batch.
+        atomic_json(checkpoint_path, {"texts": [e.text for e in out_batch],
+                                     "context_before": context_before,
+                                     "context_after": patch_context, "note_done": False})
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
 
         if changed == 0 and len(texts) > 0:
             logger.warning("Batch %d-%d: Gemini echoed input without translating", bi + 1, bi + len(batch))
@@ -752,6 +806,7 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
             log_fn(f"  Batch {bi + 1}: đang tạo ngữ cảnh cho batch tiếp theo...")
         note = _build_patch_context_note(
             [e.text for e in out_batch], source_lang, target_lang,
+            cancelled_cb=cancelled_cb,
         )
         if note:
             patch_context = (patch_context + "\n\n" + note) if patch_context else note
@@ -762,6 +817,14 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
         elif log_fn:
             # note == "" có thể do timeout/lỗi Gemini — đã log warning ở callee, chỉ báo bỏ qua.
             log_fn(f"  Batch {bi + 1}: bỏ qua cập nhật ngữ cảnh (Gemini không phản hồi/timeout) — vẫn tiếp tục batch sau.", level="warning")
+        atomic_json(checkpoint_path, {"texts": [e.text for e in out_batch],
+                                     "context_before": context_before,
+                                     "context_after": patch_context, "note_done": True})
+        if progress_callback:
+            progress_callback(bi + 1, total_batches)
+
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
 
     # Save translated SRT, named by target language so multiple translations
     # (zh / en / vi) can coexist per video.
@@ -769,13 +832,19 @@ def translate_srt(video_id: str, source_lang: str = "zh", target_lang: str = "vi
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"subtitles_{target_lang}.srt"
     out_content = entries_to_srt(translated_entries)
-    out_path.write_text(out_content, encoding="utf-8")
 
     # Multi-voice: ask Gemini to assign a CapCut voice to each line → voice_map.json
     if multi_voice:
         if log_fn:
             log_fn("Bật nhiều giọng nói — tạo voice_map.json ngay trong bước Dịch Gemini...")
-        generate_voice_map(video_id, translated_entries, log_fn=log_fn, target_lang=target_lang)
+        generate_voice_map(video_id, translated_entries, log_fn=log_fn, target_lang=target_lang,
+                           cancelled_cb=cancelled_cb)
+
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
+    # Only publish a final SRT when the whole translation step has completed.
+    atomic_bytes(_translation_context_path(video_id), patch_context.encode("utf-8"))
+    atomic_bytes(out_path, out_content.encode("utf-8"))
 
     logger.info("Translation complete: %d entries saved to %s", len(translated_entries), out_path)
     if log_fn:
@@ -820,6 +889,9 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
             progress_callback=_progress,
             cancelled_cb=lambda: bool(jobs.get(job_id, {}).get("cancelled")),
         )
+
+        if job.get("cancelled"):
+            raise JobCancelled()
 
         job["progress"] = 100
         job["phase"] = "done"

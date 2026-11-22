@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import UploadPage from "@/components/UploadPage";
 import RegionSelector from "@/components/RegionSelector";
@@ -9,6 +9,9 @@ import PageHeader from "@/components/layout/PageHeader";
 import { OCR_LANGS, OCR_TYPES } from "@/lib/api";
 import type { Region, OcrLang, OcrType } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import OcrDecoderSelector from "@/components/OcrDecoderSelector";
+import { savedOcrDecoder, type OcrDecoder } from "@/lib/ocr-decoder";
+import { listVideos, saveVideoSettings } from "@/lib/api";
 
 type Step = "upload" | "select" | "result";
 
@@ -166,6 +169,8 @@ export default function ExtractPage() {
   const [region, setRegion] = useState<Region | null>(null);
   const [lang, setLang] = useState<OcrLang>("ch");
   const [ocrType, setOcrType] = useState<OcrType>("paddle");
+  const [decoder, setDecoder] = useState<OcrDecoder>("nvdec");
+  const decoderTouched = useRef(false);
   const [startTime, setStartTime] = useState<number | undefined>(undefined);
   const [autoContext, setAutoContext] = useState(true);
 
@@ -175,6 +180,12 @@ export default function ExtractPage() {
       setVideoId(v);
       setRegion(null);
       setStep("select");
+      setDecoder("ffmpeg_cpu");
+      listVideos().then((videos) => {
+        if (!decoderTouched.current) {
+          setDecoder(savedOcrDecoder(videos.find((video) => video.video_id === v)?.pipeline_settings?.ocrDecoder));
+        }
+      }).catch(() => {});
     }
   }, []);
 
@@ -203,6 +214,8 @@ export default function ExtractPage() {
           <UploadPage
             onUploaded={(id) => {
               setVideoId(id);
+              decoderTouched.current = true;
+              setDecoder("nvdec");
               setStep("select");
             }}
           />
@@ -211,12 +224,17 @@ export default function ExtractPage() {
           <>
             <EngineSelector value={ocrType} onChange={setOcrType} />
             <LangSelector value={lang} onChange={setLang} />
+            <div className="mb-4"><OcrDecoderSelector value={decoder} onChange={(value) => {
+              decoderTouched.current = true;
+              setDecoder(value);
+            }} hint /></div>
 
             <RegionSelector
               videoId={videoId}
               onConfirmed={(r, st) => {
                 setRegion(r);
                 setStartTime(st);
+                saveVideoSettings(videoId, { ocrDecoder: decoder }).catch(() => {});
                 setStep("result");
               }}
             />
@@ -228,6 +246,7 @@ export default function ExtractPage() {
             region={region}
             lang={lang}
             ocrType={ocrType}
+            decoder={decoder}
             startTime={startTime}
             onReset={() => {
               setVideoId("");

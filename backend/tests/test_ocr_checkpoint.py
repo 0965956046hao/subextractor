@@ -164,18 +164,13 @@ class OCRCheckpointTests(unittest.TestCase):
 
 class OCRChunkBoundaryTests(unittest.TestCase):
     def test_frame_reader_stops_at_end_instead_of_decoding_rest_of_video(self):
-        from app.services.video_processor import stream_frames_generator
+        from app.services.frame_decoder import selected_indices, decoder_command
 
-        cap = MagicMock()
-        cap.isOpened.return_value = True
-        import cv2
-        cap.get.side_effect = lambda prop: 10 if prop == cv2.CAP_PROP_FPS else 1000
-        cap.read.return_value = (True, object())
-        with patch("app.services.video_processor.cv2.VideoCapture", return_value=cap):
-            frames = list(stream_frames_generator("test.mp4", 10, start_time=3, end_time=4))
-        self.assertEqual(len(frames), 10)
-        self.assertEqual(cap.read.call_count, 10)
-        cap.release.assert_called_once()
+        indices, start = selected_indices(1000, 10, 10, 3, 4)
+        self.assertEqual(list(indices), list(range(30, 40)))
+        command = decoder_command("test.mp4", "h264", "ffmpeg_cpu", 10, start, 1, len(indices))
+        self.assertEqual(command[command.index("-frames:v") + 1], "10")
+        self.assertEqual(command[command.index("-ss") + 1], "3.000000000")
 
     def test_stable_subtitle_at_chunk_tail_is_not_dropped(self):
         from app.services.subtitle_generator import generate_srt_entries
@@ -186,16 +181,22 @@ class OCRChunkBoundaryTests(unittest.TestCase):
         self.assertEqual(entries, [(0.0, 9.0, "你好世界")])
 
     def test_early_decode_error_is_not_treated_as_completed_chunk(self):
-        from app.services.video_processor import stream_frames_generator
+        import io
+        from app.services import frame_decoder
 
         cap = MagicMock()
         cap.isOpened.return_value = True
         import cv2
-        cap.get.side_effect = lambda prop: 10 if prop == cv2.CAP_PROP_FPS else 1000
-        cap.read.return_value = (False, None)
-        with patch("app.services.video_processor.cv2.VideoCapture", return_value=cap):
-            with self.assertRaisesRegex(RuntimeError, "Cannot decode"):
-                list(stream_frames_generator("test.mp4", 10, end_time=4))
+        cap.get.side_effect = lambda prop: {cv2.CAP_PROP_FPS: 10, cv2.CAP_PROP_FRAME_COUNT: 1000,
+                                          cv2.CAP_PROP_FRAME_WIDTH: 2, cv2.CAP_PROP_FRAME_HEIGHT: 2}[prop]
+        process = MagicMock()
+        process.stdout = io.BytesIO(b"")
+        process.poll.return_value = None
+        with patch.object(frame_decoder, "probe_source", return_value={"codec_name": "h264"}), patch.object(
+            frame_decoder.cv2, "VideoCapture", return_value=cap,
+        ), patch.object(frame_decoder.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(RuntimeError, "thiếu frame"):
+                list(frame_decoder.stream_ffmpeg_frames("test.mp4", 10, end_time=4, decoder="ffmpeg_cpu"))
         cap.release.assert_called_once()
 
 

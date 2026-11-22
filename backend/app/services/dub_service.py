@@ -21,8 +21,9 @@ from app.services.media_utils import (
     _merge_audio_path,
 )
 from app.services.job_utils import notify_ws_sync, job_log_sync, JobCancelled
-from app.services.tts_service import synthesize_srt, synthesize_srt_capcut, synthesize_srt_capcut_multi
 from app.services.translation_service import load_voice_map, generate_voice_map
+from app.services.dub_checkpoint import dub_identity, synthesize_checkpointed
+from app.services.checkpoint import atomic_json, read_json, fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -506,6 +507,8 @@ def build_full_audio(
     `mute_original` = False: giữ nguyên audio gốc, giảm âm lượng `original_gain_db` dB.
     `keep_ranges` = [{start,end}] (giây) — khi `mute_original`, giữ tiếng gốc trong các đoạn này (TTS vẫn đọc đè).
     """
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
     video_path = _video_path(video_id)
     out_dir = settings.temp_dir / "tts" / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -618,6 +621,7 @@ def build_full_audio(
     if cancelled_cb is not None and cancelled_cb():
         raise JobCancelled()
 
+    voice_map = {}
     if tts_engine == "capcut":
         if multi_voice:
             voice_map = load_voice_map(video_id)
@@ -631,6 +635,7 @@ def build_full_audio(
                     entries,
                     log_fn=log_fn,
                     target_lang=_voice_lang_from_name(voice_name),
+                    cancelled_cb=cancelled_cb,
                 )
                 voice_map = load_voice_map(video_id)
             if not voice_map:
@@ -642,30 +647,8 @@ def build_full_audio(
             else:
                 if log_fn:
                     log_fn(f"Nhiều giọng nói: đọc {len(voice_map)} dòng với giọng riêng...")
-                audio_files = synthesize_srt_capcut_multi(
-                    video_id,
-                    entries,
-                    voice_map,
-                    default_voice=voice_name,
-                    rate=settings.capcut_tts_default_rate,
-                    log_fn=log_fn,
-                )
-        else:
-            audio_files = synthesize_srt_capcut(
-                video_id,
-                progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-                voice_name=voice_name,
-                rate=settings.capcut_tts_default_rate,
-                log_fn=log_fn,
-            )
-    else:
-        audio_files = synthesize_srt(
-            video_id,
-            progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-            voice_name=voice_name,
-            log_fn=log_fn,
-        )
-    cb(75)
+    rate = settings.capcut_tts_default_rate if tts_engine == "capcut" else "1.0"
+    identity = dub_identity(entries, tts_engine, voice_name, rate, voice_map)
 
     full_voice = out_dir / "full_voice.mp3"
     full_voice_meta = out_dir / "full_voice.meta.json"
@@ -673,20 +656,20 @@ def build_full_audio(
     def _voice_matches() -> bool:
         try:
             m = json.loads(full_voice_meta.read_text(encoding="utf-8"))
-            return m.get("voice") == voice_name and m.get("engine") == tts_engine
+            return m.get("checkpoint_identity") == identity and not m.get("failed_indices")
         except FileNotFoundError:
-            # full_voice produced before the meta marker existed — keep legacy
-            # reuse behaviour (matches the old mtime-only check).
-            return True
+            # Legacy output has no provable text/voice/rate identity.
+            return False
         except Exception:
             return False
 
     # Only (re)synthesize when full_voice is missing/stale or the voice/engine
     # changed. Keeps re-runs of the dub step fast when per-entry mp3 cache was
     # cleaned up (e.g. a crashed run that already produced a full voice track).
-    voice_dir = out_dir / voice_name.replace("-", "_")
+    assigned_voices = {voice_name, *voice_map.values()}
     newest_mp3 = max(
-        (p.stat().st_mtime for p in (voice_dir.glob("*.mp3") if voice_dir.exists() else [])),
+        (p.stat().st_mtime for assigned in assigned_voices
+         for p in (out_dir / assigned.replace("-", "_")).glob("*.mp3")),
         default=0.0,
     )
     full_voice_ok = (
@@ -708,40 +691,33 @@ def build_full_audio(
                 )
             full_voice_ok = False
     if full_voice_ok:
-        if not full_voice_meta.exists():
-            full_voice_meta.write_text(
-                json.dumps({"voice": voice_name, "engine": tts_engine}, ensure_ascii=False),
-                encoding="utf-8",
-            )
         if log_fn:
             log_fn("Đã có full_voice.mp3 từ lần chạy trước — tái sử dụng (bỏ qua tổng hợp giọng).")
     else:
-        if tts_engine == "capcut":
-            audio_files = synthesize_srt_capcut(
-                video_id,
-                progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-                voice_name=voice_name,
-                rate=settings.capcut_tts_default_rate,
-                log_fn=log_fn,
-            )
-        else:
-            audio_files = synthesize_srt(
-                video_id,
-                progress_callback=lambda i, total: cb(40 + int((i / total) * 35)) if total else None,
-                voice_name=voice_name,
-                log_fn=log_fn,
-            )
+        audio_files = synthesize_checkpointed(
+            video_id, entries, tts_engine, voice_name, rate=rate, voice_map=voice_map,
+            progress_callback=lambda i, total: cb(40 + int(i / total * 35)) if total else None,
+            log_fn=log_fn, cancelled_cb=cancelled_cb,
+        )
+        from app.services.tts_service import _read_silence_kind
+        failed_indices = [i + 1 for i, path in enumerate(audio_files)
+                          if path is not None and _read_silence_kind(path) == "fail"]
         cb(75)
         if cancelled_cb is not None and cancelled_cb():
             raise JobCancelled()
         _ensure_free_space(8.0, "gộp giọng (dub)")
         if log_fn:
             log_fn(f"Gộp {len(audio_files)} đoạn giọng nói theo thời gian phụ đề...")
-        combine_tts_mp3(audio_files, entries, full_voice)
-        full_voice_meta.write_text(
-            json.dumps({"voice": voice_name, "engine": tts_engine}, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        temporary_voice = out_dir / "full_voice.partial.mp3"
+        try:
+            combine_tts_mp3(audio_files, entries, temporary_voice)
+            if cancelled_cb is not None and cancelled_cb():
+                raise JobCancelled()
+            temporary_voice.replace(full_voice)
+            atomic_json(full_voice_meta, {"voice": voice_name, "engine": tts_engine,
+                                          "checkpoint_identity": identity, "failed_indices": failed_indices})
+        finally:
+            temporary_voice.unlink(missing_ok=True)
         if log_fn:
             log_fn("Đã gộp giọng nói hoàn chỉnh (full_voice.mp3).")
     cb(85)
@@ -754,6 +730,14 @@ def build_full_audio(
         raise RuntimeError("full_voice.mp3 chưa được tạo — không thể trộn audio lồng tiếng.")
 
     full_audio = out_dir / "full_audio.m4a"
+    audio_meta = full_audio.with_suffix(".meta.json")
+    mix_identity = fingerprint({"voice": identity, "mute": mute_original,
+                                "voice_mtime": full_voice.stat().st_mtime_ns,
+                                "gain": original_gain_db, "keep": keep_ranges,
+                                "background_volume": background_volume,
+                                "background": str(background),
+                                "background_size": background.stat().st_size,
+                                "background_mtime": background.stat().st_mtime_ns})
     instrumental_mtime = instrumental.stat().st_mtime if instrumental.exists() else 0.0
     # Nền có thể là instrumental gốc HOẶC background.m4a đã trộn keep_ranges
     # → phải tính mtime của đúng file nền đang dùng để tránh tái dùng full_audio
@@ -761,6 +745,7 @@ def build_full_audio(
     background_mtime = background.stat().st_mtime if background.exists() else 0.0
     if (
         full_audio.exists() and full_audio.stat().st_size > 0
+        and read_json(audio_meta) == {"identity": mix_identity}
         and full_audio.stat().st_mtime >= full_voice.stat().st_mtime
         and full_audio.stat().st_mtime >= instrumental_mtime
         and full_audio.stat().st_mtime >= background_mtime
@@ -770,10 +755,18 @@ def build_full_audio(
     else:
         if log_fn:
             log_fn("Trộn nhạc nền + giọng nói → full_audio.m4a...")
-        _mix_background_with_voice(
-            background, full_voice, background_volume, full_audio,
-            dur=max(_get_audio_duration(instrumental), _get_audio_duration(full_voice)),
-        )
+        temporary_audio = out_dir / "full_audio.partial.m4a"
+        try:
+            _mix_background_with_voice(
+                background, full_voice, background_volume, temporary_audio,
+                dur=max(_get_audio_duration(instrumental), _get_audio_duration(full_voice)),
+            )
+            if cancelled_cb is not None and cancelled_cb():
+                raise JobCancelled()
+            temporary_audio.replace(full_audio)
+            atomic_json(audio_meta, {"identity": mix_identity})
+        finally:
+            temporary_audio.unlink(missing_ok=True)
         if log_fn:
             log_fn("Đã trộn xong audio lồng tiếng.")
     cb(100)

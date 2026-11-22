@@ -7,7 +7,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
-from app.services.video_processor import stream_frames_generator, crop_region, resolve_video_path
+from app.services.video_processor import crop_region, resolve_video_path
+from app.services.frame_decoder import stream_ffmpeg_frames
 from app.services.ocr_engine import BaseOCREngine
 from app.services.subtitle_generator import (
     generate_srt_entries,
@@ -92,6 +93,7 @@ def enqueue_job(
     start_time: float | None = None,
     end_time: float | None = None,
     skip_auto_context: bool = False,
+    decoder: str = "nvdec",
 ) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -102,6 +104,7 @@ def enqueue_job(
         "fps": fps,
         "lang": lang,
         "ocr_type": ocr_type,
+        "decoder": decoder,
         "start_time": start_time,
         "end_time": end_time,
         "skip_auto_context": skip_auto_context,
@@ -186,15 +189,16 @@ def _ocr_segment_entries(
     progress_cb,
     text_cb=None,
     collect_boxes: bool = False,
+    decoder: str = "ffmpeg_cpu",
+    cancelled_cb=None,
 ) -> tuple[list[tuple[float, float, str]], list[tuple[float, float, float, float]] | None]:
     """OCR a single time segment and return its (start, end, text) entries.
 
     Returns ``(entries, boxes)`` where ``boxes`` là list normalized (x1,y1,x2,y2)
     nếu ``collect_boxes=True``, hoặc ``None`` nếu ``collect_boxes=False``.
     """
-    frames = stream_frames_generator(
-        video_path, target_fps, start_time=start_time, end_time=end_time
-    )
+    frames = stream_ffmpeg_frames(video_path, target_fps, start_time, end_time,
+                                  decoder=decoder, cancelled_cb=cancelled_cb)
     crops = (
         (crop_region(frame, region), ts)
         for frame, ts in frames
@@ -246,6 +250,17 @@ def process_job_sync(
         raise ValueError("Không có khung hình trong khoảng thời gian OCR đã chọn")
     step = max(1, int(round(video_fps / target_fps))) if target_fps else 1
 
+    from app.services.frame_decoder import resolve_decoder
+    requested_decoder = job.get("requested_decoder", job.get("decoder", "ffmpeg_cpu"))
+    decoder = resolve_decoder(
+        video_path, requested_decoder,
+        lambda message: job_log(job, ws_clients, loop, message,
+                                "warning" if "fallback" in message else "info"),
+        cancelled_cb=lambda: bool(job.get("cancelled")),
+    )
+    job["requested_decoder"] = requested_decoder
+    job["decoder"] = decoder
+
     if start_time and start_time > 0:
         job_log(job, ws_clients, loop, f"Bắt đầu OCR từ giây {start_time:.1f}…")
     job_log(job, ws_clients, loop, "Đang đọc từng khung hình của video…")
@@ -279,6 +294,10 @@ def process_job_sync(
                         }) or key in {"similarity_threshold", "merge_similarity",
                                       "subtitle_flash_seconds", "det_db_thresh", "text_score"}},
     }
+    # Never reuse chunks created by the removed decoder: pixel conversion may
+    # differ. Existing FFmpeg CPU/NVDEC identities remain compatible.
+    identity["decoder"] = decoder
+    identity["decoder_version"] = 1
     checkpoint = OCRCheckpoint(
         settings.temp_dir / "srt" / job.get("video_id", job_id) / "ocr_checkpoints",
         identity,
@@ -304,9 +323,12 @@ def process_job_sync(
         })
 
     def run_segment(engine, start, end, callback):
+        options = {
+            "decoder": decoder, "cancelled_cb": lambda: bool(job.get("cancelled")),
+        }
         return _ocr_segment_entries(
             video_path, region, target_fps, engine, lang,
-            start, end, callback, text_cb,
+            start, end, callback, text_cb, **options,
         )
 
     job_log(job, ws_clients, loop,

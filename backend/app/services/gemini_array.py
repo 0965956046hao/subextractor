@@ -14,6 +14,7 @@ import logging
 import re
 
 from app.config import settings
+from app.services.job_utils import JobCancelled
 from app.services.retry_utils import (
     gemini_call_rotating,
     genai_generate_content_factory,
@@ -59,12 +60,13 @@ def gemini_map_texts(
     temperature: float = 0.3,
     max_attempts: int = 3,
     log_fn=None,
+    cancelled_cb=None,
 ) -> list[str]:
     """Map N source texts to N processed texts via Gemini.
 
     Sends the numbered payload with `instruction`, parses the numbered reply,
-    and retries only the MISSING positions (telling Gemini exactly which ones
-    it skipped). After `max_attempts` rounds any slot still unresolved keeps
+    and retries with the missing positions highlighted (the full input is
+    resent). After `max_attempts` rounds any slot still unresolved keeps
     its original text. Always returns a list of len(texts).
     """
     n = len(texts)
@@ -76,6 +78,8 @@ def gemini_map_texts(
     extra_note = ""
 
     for attempt in range(1, max_attempts + 1):
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
         prompt = (
             f"{instruction}\n\n{extra_note}\nInput lines ({n} total):\n\n{payload}"
             if extra_note
@@ -91,8 +95,11 @@ def gemini_map_texts(
                     "temperature": temperature,
                 },
                 _timeout=settings.gemini_timeout,
+                _cancelled_cb=cancelled_cb,
             )
             response_text = (response.text or "").strip()
+        except JobCancelled:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("gemini_map_texts attempt %d failed: %s", attempt, e)
             if log_fn:
@@ -114,7 +121,8 @@ def gemini_map_texts(
         if log_fn:
             log_fn(
                 f"  Lượt {attempt}: nhận {len(got)}/{n} dòng, thiếu vị trí "
-                f"{missing[:15]}{'…' if len(missing) > 15 else ''} — hỏi lại.",
+                f"{missing[:15]}{'…' if len(missing) > 15 else ''}"
+                + (" — hỏi lại." if attempt < max_attempts else " — hết lượt thử."),
                 level="warning",
             )
         preview = ", ".join(f"{texts[i][:40]}" for i in missing[:10])
@@ -125,4 +133,13 @@ def gemini_map_texts(
             f"For example their sources start with: {preview}"
         )
 
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
+    missing = [i for i in range(n) if i not in merged]
+    if missing:
+        warning = (f"Gemini còn thiếu {len(missing)}/{n} dòng sau {max_attempts} lượt; "
+                   f"giữ nguyên văn bản gốc tại vị trí (từ 0) {missing} và tiếp tục.")
+        logger.warning(warning)
+        if log_fn:
+            log_fn(warning, level="warning")
     return [merged.get(i) or texts[i] for i in range(n)]

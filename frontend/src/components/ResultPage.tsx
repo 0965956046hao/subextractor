@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { startProcess, getJobStatus, createWsUrl, cancelJob } from "@/lib/api";
 import type { Region, LogEntry, OcrLang, OcrType } from "@/lib/api";
+import type { OcrDecoder } from "@/lib/ocr-decoder";
 import { useI18n } from "@/lib/i18n";
 import TranscriptPlayer from "./TranscriptPlayer";
 
@@ -12,6 +13,7 @@ interface Props {
   region: Region;
   lang?: OcrLang;
   ocrType?: OcrType;
+  decoder?: OcrDecoder;
   startTime?: number;
   onReset: () => void;
   onDone?: () => void;
@@ -266,6 +268,7 @@ export default function ResultPage({
   region,
   lang = "ch",
   ocrType = "paddle",
+  decoder = "nvdec",
   startTime,
   onReset,
   onDone,
@@ -351,7 +354,7 @@ export default function ResultPage({
     (async () => {
       try {
         appendLog(t("result.sendingRequest"));
-        const job = await startProcess(videoId, region, lang, ocrType, undefined, startTime);
+        const job = await startProcess(videoId, region, lang, ocrType, undefined, startTime, undefined, decoder);
         jobIdRef.current = job.job_id;
         setPhase("queued");
         connectWs(job.job_id);
@@ -409,7 +412,7 @@ export default function ResultPage({
       wsRef.current?.close();
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [videoId, region, lang, ocrType, startTime, attempt, connectWs, appendLog, t]);
+  }, [videoId, region, lang, ocrType, decoder, startTime, attempt, connectWs, appendLog, t]);
 
   const handleRetry = useCallback(() => {
     wsRef.current?.close();

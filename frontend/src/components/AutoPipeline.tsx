@@ -35,6 +35,8 @@ import {
   type YouTubeChannelInfo,
 } from "@/lib/api";
 import RegionSelector from "@/components/RegionSelector";
+import OcrDecoderSelector from "@/components/OcrDecoderSelector";
+import { savedOcrDecoder, type OcrDecoder } from "@/lib/ocr-decoder";
 import WatermarkRegionSelector from "@/components/WatermarkRegionSelector";
 import KeepOriginalSelector from "@/components/KeepOriginalSelector";
 import SubtitlePreview from "@/components/SubtitlePreview";
@@ -297,6 +299,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   // Giữ File gốc để retry khi backend rớt mạng mà không cần chọn lại file.
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [regionMode, setRegionMode] = useState<"manual" | "auto">("manual");
+  const [ocrDecoder, setOcrDecoder] = useState<OcrDecoder>("nvdec");
   const [dubEngine, setDubEngine] = useState<"google" | "capcut">("capcut");
   const [voiceLang, setVoiceLang] = useState<"vi-VN" | "en-US">("vi-VN");
   const [dubVoice, setDubVoice] = useState("BV421_vivn_streaming");
@@ -677,6 +680,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateTarget,
       dubOn,
       playbackSpeed,
+      ocrDecoder,
     );
     setUrl("");
     setSelectedId(id);
@@ -739,6 +743,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
       translateTarget,
       dubOn,
       playbackSpeed,
+      ocrDecoder,
     });
     setUploaded(null);
     setSelectedId(id);
@@ -1147,6 +1152,9 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
                         ? tr("pipeline.regionAutoHint")
                         : tr("pipeline.regionManualHint")}
                     </p>
+                  </div>
+                  <div className="mt-4">
+                    <OcrDecoderSelector value={ocrDecoder} onChange={setOcrDecoder} hint />
                   </div>
                   <div className="mt-4 border-t border-white/[0.07] pt-4 flex items-center gap-3 flex-wrap">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink">
@@ -2667,6 +2675,12 @@ function DetailView({
               {tr("pipeline.delete")}
             </button>
           </div>
+        </div>
+
+        <div className="mb-5 glass-panel rounded-xl p-3">
+          <OcrDecoderSelector value={savedOcrDecoder(p.ocrDecoder)}
+            onChange={(ocrDecoder) => updatePipeline(p.id, { ocrDecoder })}
+            disabled={!canRerun} hint />
         </div>
 
         {p.stage === "region" && p.videoId && (

@@ -13,6 +13,7 @@ from app.dependencies import get_jobs, get_pipeline_states, get_scheduler
 from app.services.video_processor import resolve_video_path
 from app.services.media_utils import _hardcoded_is_complete
 from app.services.processing_timing import stop_processing
+from app.services.checkpoint import read_json
 
 logger = logging.getLogger(__name__)
 
@@ -487,6 +488,23 @@ async def reset_video_from_step(video_id: str, body: dict):
                 # A completed SRT or explicit discard still means a fresh run.
                 for child in d.iterdir():
                     if child.name == "ocr_checkpoints":
+                        continue
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        child.unlink(missing_ok=True)
+                continue
+            voice_meta = read_json(d / "full_voice.meta.json") if name == "tts" else None
+            tts_has_failures = isinstance(voice_meta, dict) and bool(voice_meta.get("failed_indices"))
+            if (name in ("translated", "tts") and (d / "checkpoints").is_dir()
+                    and not body.get("discard_checkpoint", False)
+                    and ((name == "translated" and not any(d.glob("subtitles_*.srt")))
+                         or (name == "tts" and (not (d / "full_audio.m4a").exists()
+                             or tts_has_failures)))):
+                # Retry an interrupted step without discarding costly API work.
+                # Content/config fingerprints prevent reuse after input changes.
+                for child in d.iterdir():
+                    if child.name == "checkpoints":
                         continue
                     if child.is_dir():
                         shutil.rmtree(child, ignore_errors=True)

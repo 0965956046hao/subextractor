@@ -41,6 +41,7 @@ async def start_processing(
         fps=req.fps,
         lang=req.lang,
         ocr_type=req.ocr_type,
+        decoder=req.decoder,
         start_time=req.start_time,
         end_time=req.end_time,
         skip_auto_context=req.skip_auto_context,

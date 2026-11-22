@@ -27,6 +27,7 @@ class OCRRegionTests(unittest.TestCase):
                     patch.object(settings, "temp_dir", Path(temp_dir)),
                     patch.object(worker, "video_identity", return_value={"path": "video.mp4"}),
                     patch("cv2.VideoCapture", return_value=cap),
+                    patch("app.services.frame_decoder.resolve_decoder", return_value="ffmpeg_cpu"),
                     patch.object(worker, "_ocr_segment_entries", return_value=([(0.5, 1.0, "字幕")], None)) as ocr,
                     patch.object(worker, "job_log"),
                     patch.object(worker, "_notify_sync"),

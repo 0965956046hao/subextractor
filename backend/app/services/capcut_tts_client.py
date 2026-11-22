@@ -23,6 +23,8 @@ from typing import List, Optional
 import httpx
 
 from app.config import settings
+from app.services.job_utils import JobCancelled
+from app.services.checkpoint import atomic_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ def poll_job(
     timeout: Optional[float] = None,
     poll_interval: float = 1.0,
     log_fn=None,
+    cancelled_cb=None,
 ) -> dict:
     """Poll a TTS job until done/error/cancelled; returns the final job dict.
 
@@ -101,9 +104,23 @@ def poll_job(
     deadline = time.time() + (timeout if timeout is not None else settings.capcut_tts_timeout)
     seen_logs = 0
     while time.time() < deadline:
+        if cancelled_cb is not None and cancelled_cb():
+            try:
+                httpx.post(f"{_base_url()}/api/tts/{job_id}/cancel", timeout=5)
+            except Exception:
+                pass
+            raise JobCancelled()
         try:
             r = httpx.get(f"{_base_url()}/api/tts/{job_id}", timeout=15)
             r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                # Service restart loses its in-memory jobs. Let the caller
+                # resubmit only missing lines instead of polling for hours.
+                raise CapCutTTSError(f"CapCut job {job_id} không còn tồn tại (service đã restart)") from e
+            logger.warning("Poll CapCut TTS job %s failed: %s", job_id, e)
+            time.sleep(poll_interval)
+            continue
         except Exception as e:
             logger.warning("Poll CapCut TTS job %s failed: %s", job_id, e)
             time.sleep(poll_interval)
@@ -131,7 +148,9 @@ def download_audio(job_id: str, filename: str, out_path: Path) -> Path:
         r = httpx.get(url, timeout=60)
         r.raise_for_status()
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(r.content)
+        if not r.content:
+            raise CapCutTTSError("Empty audio response")
+        atomic_bytes(out_path, r.content)
         return out_path
     except Exception as e:
         raise CapCutTTSError(f"Không tải được audio CapCut {filename}: {e}") from e
@@ -146,6 +165,8 @@ def generate_segments_to_dir(
     progress_callback=None,
     log_fn=None,
     indices: Optional[List[int]] = None,
+    cancelled_cb=None,
+    on_download=None,
 ) -> List[Path]:
     """Submit one batch job for all texts, then download each MP3 into out_dir.
 
@@ -160,6 +181,8 @@ def generate_segments_to_dir(
     lets a resume run submit only the still-missing lines while keeping the
     line numbering stable on disk.
     """
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
     segments = [{"text": t, "start": 0.0, "end": 0.0} for t in texts]
     job_id = submit_job(segments, voice, rate, prefix)
     logger.info("capcut tts job %s submitted (%d segments, voice=%s)", job_id, len(segments), voice)
@@ -167,7 +190,7 @@ def generate_segments_to_dir(
     # First-time voice synthesis is slow (~3s/segment); scale the poll timeout
     # with the segment count so long videos don't hit the default ceiling.
     timeout = max(settings.capcut_tts_timeout, len(segments) * 10 + 120)
-    job = poll_job(job_id, timeout=timeout, log_fn=log_fn)
+    job = poll_job(job_id, timeout=timeout, log_fn=log_fn, cancelled_cb=cancelled_cb)
     status = job.get("status")
     if status != "done":
         raise CapCutTTSError(f"Job TTS CapCut {job_id} kết thúc với status={status}: {job.get('error', '')}")
@@ -177,8 +200,12 @@ def generate_segments_to_dir(
     done = 0
     expected = len(segments)
     for path_str in audio_files:
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
         filename = Path(path_str).name
         i = _index_from_filename(filename, prefix)
+        if not 1 <= i <= len(texts):
+            continue
         orig_idx = indices[i - 1] if indices and 1 <= i <= len(indices) else i
         target = out_dir / (f"{prefix}_{orig_idx:04d}.mp3" if prefix else f"{orig_idx:04d}.mp3")
         try:
@@ -192,6 +219,8 @@ def generate_segments_to_dir(
         done += 1
         if progress_callback:
             progress_callback(done, expected)
+        if target in written and on_download is not None:
+            on_download(orig_idx, target)
 
     return written
 

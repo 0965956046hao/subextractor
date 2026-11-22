@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { savedOcrDecoder, type OcrDecoder } from "@/lib/ocr-decoder";
 import type {
   Region,
   SubtitleStyle,
@@ -168,6 +169,7 @@ export interface Pipeline {
   failedStep: number | null;
   ocrEngine: string;
   ocrLang: string;
+  ocrDecoder?: OcrDecoder;
   srcLang: string;
   translateOn: boolean;
   translateTarget: string;
@@ -268,6 +270,7 @@ function settingsOf(p: Pipeline): PipelineVideoSettings {
     multiVoice: p.multiVoice,
     srcLang: p.srcLang,
     ocrLang: p.ocrLang,
+    ocrDecoder: savedOcrDecoder(p.ocrDecoder),
     translateOn: p.translateOn,
     translateTarget: p.translateTarget,
     dubOn: p.dubOn,
@@ -320,7 +323,7 @@ function applyVideoSettings(
   p: Pipeline,
   s: PipelineVideoSettings | null | undefined,
 ): Pipeline {
-  if (!s || typeof s !== "object") return p;
+  if (!s || typeof s !== "object") return { ...p, ocrDecoder: "ffmpeg_cpu" };
   const num = (v: unknown, fb: number) =>
     typeof v === "number" && isFinite(v) ? v : fb;
   const str = (v: unknown, fb: string) =>
@@ -343,6 +346,7 @@ function applyVideoSettings(
     multiVoice: bool(s.multiVoice, p.multiVoice),
     srcLang: str(s.srcLang, p.srcLang),
     ocrLang: str(s.ocrLang, p.ocrLang),
+    ocrDecoder: savedOcrDecoder(s.ocrDecoder),
     translateOn: bool(s.translateOn, p.translateOn),
     translateTarget: str(s.translateTarget, p.translateTarget),
     dubOn: bool(s.dubOn, p.dubOn),
@@ -385,6 +389,7 @@ interface PipelineState {
     translateTarget?: string,
     dubOn?: boolean,
     playbackSpeed?: number,
+    ocrDecoder?: OcrDecoder,
   ) => string;
   addPipelineFromUpload: (input: {
     videoId: string;
@@ -407,6 +412,7 @@ interface PipelineState {
     translateTarget?: string;
     dubOn?: boolean;
     playbackSpeed?: number;
+    ocrDecoder?: OcrDecoder;
   }) => string;
   importActive: (v: VideoMeta) => string;
   importDone: (v: ImportedDone) => string;
@@ -467,6 +473,7 @@ function newPipeline(
   translateTarget = "vi",
   dubOn = true,
   playbackSpeed = 1.0,
+  ocrDecoder: OcrDecoder = "nvdec",
 ): Pipeline {
   const d: DubOptions = { ...DEFAULT_DUB, ...dub };
   return {
@@ -496,6 +503,7 @@ function newPipeline(
     failedStep: null,
     ocrEngine: "",
     ocrLang: srcLang ? detectOcrLang(srcLang) : "",
+    ocrDecoder,
     srcLang,
     translateOn,
     translateTarget,
@@ -572,6 +580,7 @@ export const usePipelineStore = create<PipelineState>()(
         translateTarget = "vi",
         dubOn = true,
         playbackSpeed = 1.0,
+        ocrDecoder = "nvdec",
       ) => {
         const id = Math.random().toString(36).slice(2, 10);
         set((s) => ({
@@ -598,6 +607,7 @@ export const usePipelineStore = create<PipelineState>()(
               translateTarget,
               dubOn,
               playbackSpeed,
+              ocrDecoder,
             ),
           ],
         }));
@@ -628,6 +638,7 @@ export const usePipelineStore = create<PipelineState>()(
           input.translateTarget ?? "vi",
           input.dubOn ?? true,
           input.playbackSpeed ?? 1.0,
+          input.ocrDecoder ?? "nvdec",
         );
         // Uploaded file is already registered on the backend: skip resolve + merge
         // and start directly at region selection (step 2).
@@ -763,6 +774,7 @@ export const usePipelineStore = create<PipelineState>()(
             p.id === id ? { ...p, ...patch } : p,
           ),
         }));
+        if ("ocrDecoder" in patch) persistVideoSettings(id);
         schedulePersist();
       },
       removePipeline: (id) => {
@@ -2881,6 +2893,7 @@ async function runPipeline(id: string, startStep = 4) {
             region,
             lang: ocrLang,
             ocr_type: ocrType,
+            decoder: savedOcrDecoder(cur.ocrDecoder),
             // Pipeline có bước context riêng (bước 6) luôn chạy mới —
             // dặn worker không tự sinh ngữ cảnh sau OCR (tránh 2 lần Gemini).
             skip_auto_context: true,

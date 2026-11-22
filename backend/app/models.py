@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Region(BaseModel):
@@ -11,6 +11,7 @@ class Region(BaseModel):
 
 
 OcrType = Literal["paddle", "apple"]
+OcrDecoder = Literal["nvdec", "ffmpeg_cpu"]
 
 
 class ProcessRequest(BaseModel):
@@ -19,12 +20,18 @@ class ProcessRequest(BaseModel):
     fps: int | None = None
     lang: str = "ch"
     ocr_type: OcrType = "paddle"
+    decoder: OcrDecoder = "nvdec"
     start_time: float | None = None  # Skip frames before this timestamp (seconds)
     end_time: float | None = None    # Stop at this timestamp (seconds)
     # Pipeline có bước context riêng (bước 6) nên yêu cầu worker KHÔNG tự
     # sinh ngữ cảnh sau OCR — tránh gọi Gemini Vision 2 lần / video.
     # Extract flow (ResultPage) giữ mặc định False để vẫn auto như cũ.
     skip_auto_context: bool = False
+
+    @field_validator("decoder", mode="before")
+    @classmethod
+    def migrate_legacy_decoder(cls, value):
+        return "ffmpeg_cpu" if value == "opencv" else value
 
 
 class LogEntry(BaseModel):

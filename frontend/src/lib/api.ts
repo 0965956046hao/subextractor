@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { OcrDecoder } from "./ocr-decoder";
 import type { ProcessingTiming } from "./processing-timing";
 
 const api = axios.create({
@@ -123,6 +124,7 @@ export interface PipelineVideoSettings {
   multiVoice?: boolean;
   srcLang?: string;
   ocrLang?: string;
+  ocrDecoder?: OcrDecoder;
   translateOn?: boolean;
   translateTarget?: string;
   dubOn?: boolean;
@@ -267,6 +269,7 @@ export async function startProcess(
   signal?: AbortSignal,
   startTime?: number | null,
   endTime?: number | null,
+  decoder: OcrDecoder = "nvdec",
 ): Promise<JobStatus> {
   const res = await api.post<JobStatus>(
     "/process",
@@ -275,6 +278,7 @@ export async function startProcess(
       region,
       lang,
       ocr_type: ocrType,
+      decoder,
       ...(startTime != null && startTime > 0 ? { start_time: startTime } : {}),
       ...(endTime != null && endTime > 0 ? { end_time: endTime } : {}),
     },
