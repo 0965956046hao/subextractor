@@ -2729,7 +2729,7 @@ function DetailView({
           </div>
         )}
 
-        {p.stage === "watermark_region" && p.videoId && (
+        {p.stage === "watermark_region" && (p.resumeStep ?? 4) <= 4 && p.videoId && (
           <div className="mb-5">
             <WatermarkRegionSelector
               videoId={p.videoId}
