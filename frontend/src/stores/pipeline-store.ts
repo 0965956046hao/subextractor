@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { savedOcrDecoder, type OcrDecoder } from "@/lib/ocr-decoder";
+import { readApiJson } from "@/lib/api-response";
 import type {
   Region,
   SubtitleStyle,
@@ -19,6 +20,7 @@ import {
   saveVideoSettings,
   resetVideoFromStep,
   prioritizeJob,
+  cancelJob,
 } from "@/lib/api";
 import { translate } from "@/lib/i18n";
 import { processingElapsed, receivedTiming, type ProcessingTiming, type StepProcessingTiming } from "@/lib/processing-timing";
@@ -160,7 +162,7 @@ export interface Pipeline {
   audioUrl: string | null;
   videoId: string | null;
   startedAt: number | null;
-  // Prep is unrestricted; only admission to OCR and later consumes a slot.
+  // Tracks entry into OCR and later steps; not a global concurrency limit.
   processingAdmitted?: boolean;
   finishedAt: number | null;
   stepStarts: (number | null)[];
@@ -429,6 +431,8 @@ interface PipelineState {
   removePipeline: (id: string) => void;
   clearFinished: () => void;
   rerunPipeline: (id: string, step: number) => Promise<void>;
+  /** Retry a failed step without deleting outputs, checkpoints or review decisions. */
+  retryFailedPipeline: (id: string) => void;
   confirmRegion: (id: string, region: Region) => void;
   confirmSubtitleStyle: (id: string, style: Partial<SubtitleStyle>) => void;
   cancelPipeline: (id: string) => void;
@@ -893,6 +897,23 @@ export const usePipelineStore = create<PipelineState>()(
           patch(id, { regionMode: "manual", region: null });
         }
         enqueue(id, step);
+      },
+      retryFailedPipeline: (id) => {
+        const s = get().pipelines.find((p) => p.id === id);
+        if (!s || s.status !== "error") return;
+        const fromStep = s.failedStep ?? pipelineResumeStep(s);
+        if (!Number.isInteger(fromStep) || fromStep < 0 || fromStep >= STEPS.length) return;
+        bumpGen(id);
+        abortDelogo(id);
+        queue = queue.filter((q) => q.id !== id);
+        patch(id, {
+          paused: false, status: "queued", error: "", failedStep: null,
+          finishedAt: null, resumeStep: fromStep,
+        });
+        appendLog(id, `Thử tiếp từ bước "${STEPS[fromStep]?.label}" — giữ kết quả và checkpoint đã lưu, không xóa output.`);
+        // Deliberately do NOT call resetVideoFromStep. Each runner reuses its
+        // existing outputs; translation re-enters final repair/remaining tracks.
+        enqueueFront(id, fromStep);
       },
       confirmRegion: (id, region) => {
         const s = get().pipelines.find((p) => p.id === id);
@@ -1615,10 +1636,8 @@ async function pollYoutubeUpload(jobId: string, onTick: (t: JobTick) => void) {
 
 // ── Queue ──────────────────────────────────────────────────────────────────
 
-// Tối đa 3 pipeline từ OCR trở đi (có thể cấu hình về 2). Prep không chiếm slot; pipeline đã vào
-// xử lý nặng giữ slot khi chờ gate thủ công, nhưng pause chủ động sẽ nhả slot.
-// NEXT_PUBLIC_* is read at frontend build/start time, not from backend/.env.
-const MAX_ACTIVE_PIPELINES = process.env.NEXT_PUBLIC_MAX_ACTIVE_PIPELINES === "2" ? 2 : 3;
+// No global video limit: the backend owns FIFO per-step queues and shared
+// GPU/Gemini/CPU guards. NEXT_PUBLIC_MAX_ACTIVE_PIPELINES is no longer used.
 
 // Các bước cuối luôn bị tắt theo yêu cầu: meta (10), thumbnail (11),
 // upload YouTube (12). Pipeline kết thúc sau hardcode (bước 9).
@@ -1636,6 +1655,7 @@ type QueueEntry = {
   priority?: boolean;
 };
 let queue: QueueEntry[] = [];
+// Legacy name retained for lifecycle bookkeeping, not a capacity limit.
 const occupiedSlots = new Set<string>();
 const priorityPipelines = new Set<string>();
 const abortedPipelines = new Set<string>();
@@ -2010,6 +2030,7 @@ function enqueueFront(id: string, startStep = 4) {
 }
 
 function releaseSlot(id: string) {
+  // Legacy lifecycle helper; releasing tracking never changes backend capacity.
   if (occupiedSlots.delete(id)) processQueue();
 }
 
@@ -2036,8 +2057,8 @@ async function prioritizeIfNeeded(id: string, jobId: string | undefined | null, 
 }
 
 function processQueue() {
-  // Prep (steps 1–4) is unrestricted. Only OCR onward needs a processing
-  // processing slots; admitted pipelines retain it at later manual gates.
+  // Submit every ready pipeline. Backend lanes, not a frontend video count,
+  // decide when each step can run; manual waits never block other videos.
   for (let i = 0; i < queue.length; ) {
     const entry = queue[i];
     const pipeline = usePipelineStore
@@ -2049,7 +2070,7 @@ function processQueue() {
       continue;
     }
     // Every path into OCR (new, restored, paused, priority resume) must finish
-    // watermark selection first. This manual gate must not occupy an OCR slot.
+    // watermark selection first. This manual gate stays in the prep runner.
     if (entry.phase === "heavy" && entry.startStep === 4 &&
         pipeline.removeWatermarkEnabled && !(pipeline.removeWatermarkRegions?.length)) {
       entry.phase = "prep";
@@ -2058,17 +2079,6 @@ function processQueue() {
       occupiedSlots.delete(entry.id);
       queue.splice(i, 1);
       launchEntry(entry);
-      continue;
-    }
-    if (occupiedSlots.has(entry.id)) {
-      // Pipeline đã có slot (handoff prep → heavy, hoặc rerun khi runner cũ
-      // còn sống): chạy tiếp mà không chiếm thêm slot.
-      queue.splice(i, 1);
-      launchEntry(entry);
-      continue;
-    }
-    if (occupiedSlots.size >= MAX_ACTIVE_PIPELINES) {
-      i += 1;
       continue;
     }
     queue.splice(i, 1);
@@ -2084,7 +2094,7 @@ function launchEntry(entry: QueueEntry) {
       ? runPrep(entry.id, entry.startStep)
       : runPipeline(entry.id, entry.startStep);
   void run.catch(() => {
-    // Runner tự bắt lỗi; đây chỉ là lưới an toàn để slot không kẹt.
+    // Runner tự bắt lỗi; đây chỉ là lưới an toàn để dọn tracking.
     releaseSlot(entry.id);
   });
 }
@@ -2320,7 +2330,7 @@ function markStepSkipped(id: string, i: number, cached = false) {
 }
 
 // ── Prep runner (interactive: resolve → merge → region → subtitle style) ──
-// Steps 1–4 run without a processing slot, including their manual gates.
+// Prep and its manual gates run independently of backend processing queues.
 async function runPrep(id: string, startStep = 0) {
   const cur = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (!cur) return;
@@ -2723,7 +2733,7 @@ async function runPrep(id: string, startStep = 0) {
       }
     }
 
-    // Prep complete: queue for admission to OCR, without reserving a slot.
+    // Prep complete: submit OCR to its backend lane without a global video gate.
     // OCR (bước 4) chạy xong → delogo (bước 5) dùng vùng đã chọn ở trên,
     // không dừng hỏi lại.
     liveRunners.delete(id);
@@ -2745,7 +2755,7 @@ async function runPrep(id: string, startStep = 0) {
       finishedAt: Date.now(),
     });
     reportPipeline(id, true);
-    // Terminal error frees the slot; pause/cancel release it in their actions.
+    // Terminal error clears tracking; pause/cancel clear it in their actions.
     releaseSlot(id);
   } finally {
     if (!handedOff && !isStaleRun(id, gen)) liveRunners.delete(id);
@@ -2764,9 +2774,7 @@ async function runSrtAutoChecks(id: string, videoId: string | null, lang = "vi")
       method: "POST",
       headers: JSON_HEADERS,
     });
-    const dedupData = await dedupRes.json();
-    if (!dedupRes.ok)
-      throw new Error(dedupData.detail || "Gộp phụ đề trùng thất bại");
+    const dedupData = await readApiJson(dedupRes, "Gộp phụ đề trùng thất bại");
     const changes: {
       index: number;
       merged_into: number;
@@ -2801,9 +2809,7 @@ async function runSrtAutoChecks(id: string, videoId: string | null, lang = "vi")
       method: "POST",
       headers: JSON_HEADERS,
     });
-    const fixData = await fixRes.json();
-    if (!fixRes.ok)
-      throw new Error(fixData.detail || "Tự động sửa overlap thất bại");
+    const fixData = await readApiJson(fixRes, "Tự động sửa overlap thất bại");
     const fixes: { index: number; from: string; to: string }[] =
       fixData.fixes ?? [];
     if (fixes.length > 0) {
@@ -2826,7 +2832,7 @@ async function runSrtAutoChecks(id: string, videoId: string | null, lang = "vi")
 }
 
 // ── Heavy runner (OCR → context → translate → dub → hardcode → meta → thumb → youtube) ──
-// Up to MAX_ACTIVE_PIPELINES runners overlap; one shared backend lane per step.
+// Runners may overlap without a video cap; one shared backend lane per step.
 async function runPipeline(id: string, startStep = 4) {
   const beforeOcr = usePipelineStore.getState().pipelines.find((x) => x.id === id);
   if (beforeOcr && startStep <= 4 && beforeOcr.removeWatermarkEnabled &&
@@ -3371,8 +3377,7 @@ async function runPipeline(id: string, startStep = 4) {
               multi_voice: cur.multiVoice && (!cur.bilingualSubs || translateTarget === "vi"),
             }),
           });
-          const td = await tr.json();
-          if (!tr.ok) throw new Error(td.detail || "Dịch thất bại");
+          const td = await readApiJson(tr, "Không gửi được job dịch Gemini");
           await prioritizeIfNeeded(id, td.job_id, gen);
           const ts = await pollJob(td.job_id, (t) => tick(7)({
             ...t, progress: Math.round((targetIndex * 100 + t.progress) / targets.length),
@@ -3419,9 +3424,7 @@ async function runPipeline(id: string, startStep = 4) {
             headers: JSON_HEADERS,
             body: JSON.stringify({ content: srtText, source_track: sourceTrack }),
           });
-          const cmpData = await cmpRes.json();
-          if (!cmpRes.ok)
-            throw new Error(cmpData.detail || "Đối chiếu thất bại");
+          const cmpData = await readApiJson(cmpRes, "Đối chiếu phụ đề thất bại");
           const missing: { from: string; to: string; duration: number }[] =
             cmpData.missing_ranges ?? [];
           if (missing.length > 0) {
@@ -3456,14 +3459,32 @@ async function runPipeline(id: string, startStep = 4) {
                   source_lang: trackSourceLang,
                   target_lang: translateTarget,
                   source_track: sourceTrack,
+                  background: true,
                 }),
               });
-              const retData = await retRes.json();
-              if (!retRes.ok)
-                throw new Error(retData.detail || "Dịch lại thất bại");
-              if (retData.updated && retData.content) {
+              const retData = await readApiJson(retRes, "Không gửi được job dịch lại");
+              if (retData.job_id) {
+                if (isStaleRun(id, gen)) {
+                  // Pause may have happened before the submission returned,
+                  // so the normal pause action might not have seen this job.
+                  await cancelJob(retData.job_id).catch(() => {});
+                  return;
+                }
+                await prioritizeIfNeeded(id, retData.job_id, gen);
+                const repaired = await pollJob(retData.job_id, (t) => {
+                  if (!isStaleRun(id, gen) && t.logs) appendBackendLogs(id, t.logs);
+                });
+                if (isStaleRun(id, gen)) return;
+                if (repaired.status !== "done") throw new Error(repaired.error || "Dịch lại thất bại");
+                const repairedResponse = await fetch(`/api/download/translated/${videoId}?lang=${translateTarget}`);
+                if (!repairedResponse.ok) await readApiJson(repairedResponse, "Không tải được bản dịch sau khi vá");
+                const repairedText = await repairedResponse.text();
+                appendLog(id, repairedText !== srtText ? "Đã cập nhật bản dịch sau lượt rà soát cuối." : "Không có dòng nào được cập nhật thêm.");
+                srtText = repairedText;
+              } else if (retData.updated && retData.content) {
+                // Backward compatibility while the backend is being upgraded.
                 srtText = retData.content;
-                appendLog(id, "Đã dịch lại xong các dòng chưa dịch.");
+                appendLog(id, "Đã cập nhật bản dịch sau lượt rà soát cuối.");
               } else {
                 appendLog(id, "Không có dòng nào được cập nhật thêm.");
               }
@@ -3473,6 +3494,7 @@ async function runPipeline(id: string, startStep = 4) {
                 `Dịch lại thất bại: ${e instanceof Error ? e.message : "lỗi"}`,
               );
             }
+            if (isStaleRun(id, gen)) return;
           } else {
             appendLog(
               id,
@@ -4060,21 +4082,21 @@ async function runPipeline(id: string, startStep = 4) {
     if (!isStaleRun(id, gen)) liveRunners.delete(id);
     const after = usePipelineStore.getState().pipelines.find((x) => x.id === id);
     if (!after) {
-      // Cancel/delete đã gỡ pipeline → trả slot ngay.
+      // Cancel/delete đã gỡ pipeline → dọn tracking ngay.
       releaseSlot(id);
     } else if (!isStaleRun(id, gen)) {
       if (after.status === "done" || after.status === "error") {
-        // Runner hiện tại kết thúc → trả slot.
+        // Runner hiện tại kết thúc → dọn tracking.
         releaseSlot(id);
       } else if (after.paused) {
         releaseSlot(id);
       } else {
         // Cùng generation nhưng chưa terminal: runner đã enqueue bước kế
-        // (handoff) → giữ slot cho runner mới, chạy tiếp queue.
+        // (handoff) → giữ tracking cho runner mới, chạy tiếp queue.
         processQueue();
       }
     }
-    // Stale do rerun (không paused): runner mới đã/đang thay thế, giữ slot.
+    // Stale do rerun (không paused): runner mới đã/đang thay thế, giữ tracking.
   }
 }
 
@@ -4095,10 +4117,10 @@ async function runRestorePaused() {
   restoreRunning = true;
   try {
     const pipes = usePipelineStore.getState().pipelines;
-    // Restore only processing slots, never reserve slots for prep or for
-    // videos waiting to enter OCR. Step timestamps support older saved state.
+    // Restore lifecycle tracking for every admitted video, without a cap.
+    // Step timestamps support older saved state. This does not reserve backend
+    // resources or prevent other pipelines from submitting their next step.
     for (const p of pipes) {
-      if (occupiedSlots.size >= MAX_ACTIVE_PIPELINES) break;
       const admitted = p.processingAdmitted ?? p.stepStarts.slice(4).some((v) => v != null);
       if (!p.paused && admitted && (p.status === "running" || p.status === "queued")) {
         occupiedSlots.add(p.id);
@@ -4216,7 +4238,9 @@ async function resumeHeavy(
     if (previousJob?.status === "done") {
       applyJobTiming(id, stepIdx, previousJob.job_id, previousJob.processing_timing);
       markStepEnd(id, stepIdx);
-      enqueue(id, stepIdx + 1);
+      // Translation jobs include the final repair pass. Re-enter the cached
+      // translation workflow to finish review/remaining languages after F5.
+      enqueue(id, stepIdx === 7 ? 7 : stepIdx + 1);
       return;
     }
     if (previousJob && (previousJob.status === "processing" || previousJob.status === "queued")) {
@@ -4323,7 +4347,9 @@ async function attachHeavyJob(
     }
     liveRunners.delete(id);
     handedOff = true;
-    enqueue(id, jobIdx + 1);
+    // Do not skip English or the post-translation checks when F5 happens
+    // while a translation/repair job is running. Existing SRTs are reused.
+    enqueue(id, jobIdx === 7 ? 7 : jobIdx + 1);
   } finally {
     // Handoff may already have started a new runner in the same generation.
     // Only clear the follower marker if no handoff was made.

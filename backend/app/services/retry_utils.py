@@ -7,12 +7,14 @@ Two layers:
 2. `gemini_call_rotating` — same idea but ALSO rotates through every configured
    Gemini API key (round-robin). When a key reports usage exhausted / quota /
    rate-limit, the call is retried with the next key. Falls back to `gemini_retry`
-   behavior when only one key is configured.
+   behavior when only one key is configured. Quota exhaustion on
+   gemini-3.5-flash-lite can fall back to gemini-3.1-flash-lite.
 """
 
 import logging
 import os
 import random
+import re
 import threading
 import time
 
@@ -108,6 +110,53 @@ def configured_gemini_keys() -> list[str]:
 _key_lock = threading.Lock()
 _key_index = 0
 
+# Per-key/model cooldowns, shared by all jobs in this backend process. Keep the
+# configured model unchanged so switching does not invalidate saved batches.
+_QUOTA_FALLBACKS = {"gemini-3.5-flash-lite": "gemini-3.1-flash-lite"}
+_quota_lock = threading.Lock()
+_quota_cooldowns: dict[tuple[str, str], float] = {}
+
+
+def _is_quota_exhausted(error: Exception) -> bool:
+    message = str(error).lower()
+    code = getattr(error, "code", None) or getattr(error, "status_code", None)
+    if code is not None and str(code) != "429":
+        return False
+    exhausted = str(code) == "429" or "resource_exhausted" in message or "quota_exceeded" in message
+    return exhausted and "quota" in message and ("exceed" in message or "exhaust" in message)
+
+
+def _quota_retry_seconds(error: Exception) -> float:
+    # google-genai includes structured RetryInfo in response_json; str(error)
+    # includes the same object for older SDK versions/wrapped exceptions.
+    payload = getattr(error, "response_json", None)
+    if isinstance(payload, dict):
+        body = payload.get("error")
+        body = body if isinstance(body, dict) else payload
+        details = body.get("details") or []
+        details = details if isinstance(details, list) else []
+        for detail in details:
+            if isinstance(detail, dict):
+                delay = str(detail.get("retryDelay", ""))
+                if re.fullmatch(r"\d+(?:\.\d+)?s", delay):
+                    return max(1.0, float(delay[:-1]))
+    match = re.search(r"retryDelay[\"']?\s*:\s*[\"']?(\d+(?:\.\d+)?)s", str(error))
+    if match:
+        return max(1.0, float(match.group(1)))
+    # No server reset hint: avoid hammering exhausted daily quotas every batch,
+    # but retry short-term limits sooner. Nothing is persisted to disk.
+    message = str(error).lower()
+    return 3600.0 if "perday" in message or "per day" in message else 60.0
+
+
+def _available_quota_keys(keys: list[str], model: str) -> list[str]:
+    now = time.monotonic()
+    with _quota_lock:
+        for identity, until in list(_quota_cooldowns.items()):
+            if until <= now:
+                del _quota_cooldowns[identity]
+        return [key for key in keys if _quota_cooldowns.get((model, key), 0) <= now]
+
 
 def _next_key(keys: list[str]) -> str:
     global _key_index
@@ -151,7 +200,7 @@ def genai_generate_content_factory(key: str, timeout: float | None = None):
     return _call
 
 
-def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: float | None = None, _cancelled_cb=None, **kwargs):
+def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: float | None = None, _cancelled_cb=None, _log_fn=None, **kwargs):
     """Call a Gemini API with automatic key rotation on quota/rate-limit errors.
 
     `fn_factory(api_key: str, timeout: float | None)` must return the bound
@@ -162,32 +211,65 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
       and retry, up to `_max_attempts` total (each attempt uses a fresh key).
     - Non-retryable errors are raised immediately.
     - `_timeout` (seconds) is forwarded to each `generate_content` call.
+    - Quota on gemini-3.5-flash-lite: rotate available keys, then fall back to
+      gemini-3.1-flash-lite. Quota-exhausted key/model pairs respect RetryInfo.
+      Transient 503/timeouts never trigger model switching.
     """
     keys = configured_gemini_keys()
     if not keys:
         raise ValueError("GEMINI_API_KEY not set. Vào Settings (⚙️) để nhập key.")
 
-    last_err: Exception | None = None
-    for i in range(_max_attempts):
+    def check_cancelled():
         if _cancelled_cb is not None and _cancelled_cb():
             from app.services.job_utils import JobCancelled
             raise JobCancelled()
-        key = _next_key(keys)
-        try:
-            fn = fn_factory(key, timeout=_timeout)
-            return fn(*args, **kwargs)
-        except Exception as e:
-            last_err = e
-            if not _should_retry(e):
-                raise
-            if i < _max_attempts - 1:
+
+    requested_model = kwargs.get("model")
+    fallback = _QUOTA_FALLBACKS.get(requested_model)
+    models = [requested_model, fallback] if fallback else [requested_model]
+    last_err: Exception | None = None
+    for model in models:
+        announced = False
+        for i in range(max(1, _max_attempts)):
+            check_cancelled()
+            available = _available_quota_keys(keys, model) if fallback else keys
+            if not available:
+                break
+            if model != requested_model and not announced:
+                message = f"Gemini: {requested_model} hết quota trên các key vừa thử; chuyển sang {model}."
+                logger.warning(message)
+                if _log_fn:
+                    _log_fn(message, level="warning")
+                announced = True
+            key = _next_key(available)
+            call_kwargs = {**kwargs, "model": model} if model is not None else kwargs
+            try:
+                fn = fn_factory(key, timeout=_timeout)
+                return fn(*args, **call_kwargs)
+            except Exception as e:
+                check_cancelled()
+                last_err = e
+                if fallback and _is_quota_exhausted(e):
+                    delay = _quota_retry_seconds(e)
+                    with _quota_lock:
+                        _quota_cooldowns[(model, key)] = time.monotonic() + delay
+                    logger.warning("Gemini quota: model %s, key %s — bỏ qua trong %.0fs", model, _mask(key), delay)
+                    # Trying the same exhausted model/key after a 2-second sleep
+                    # cannot fix a daily quota. Try a different key/model now.
+                    continue
+                if not _should_retry(e):
+                    raise
+                if i >= max(1, _max_attempts) - 1:
+                    raise
                 delay = random.uniform(2, 8)
                 logger.info(
                     "Gemini call failed on key %s (attempt %d/%d): %s — rotating key, backoff %.1fs",
                     _mask(key), i + 1, _max_attempts, e, delay,
                 )
                 time.sleep(delay)
-    raise last_err  # type: ignore[misc]
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("Cả gemini-3.5-flash-lite và gemini-3.1-flash-lite đang hết quota; chờ quota được cấp lại hoặc đổi API key/project.")
 
 
 def upload_audio_to_gemini(audio_path, mime_type: str = "audio/wav", timeout: float | None = None) -> tuple[str, str]:

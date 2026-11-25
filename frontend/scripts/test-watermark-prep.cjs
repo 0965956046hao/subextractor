@@ -9,7 +9,7 @@ const ts = require("typescript");
 const source = fs.readFileSync(path.join(__dirname, "../src/stores/pipeline-store.ts"), "utf8");
 const ast = ts.createSourceFile("pipeline-store.ts", source, ts.ScriptTarget.Latest, true);
 const names = new Set([
-  "MAX_ACTIVE_PIPELINES", "STEP_STAGE", "queue", "occupiedSlots", "priorityPipelines",
+  "STEP_STAGE", "queue", "occupiedSlots", "priorityPipelines",
   "enqueue", "enqueuePrep", "enqueueFront", "releaseSlot", "processQueue", "launchEntry",
   "runPrep", "runRestorePaused", "restoreRunning",
 ]);
@@ -85,16 +85,14 @@ async function test() {
   assert.deepEqual(heavy, [["p", 4]]);
   assert.equal(pipeline.removeWatermarkRegions.length, 1);
 
-  // Direct queue/priority resume also passes the gate, even when OCR slots are full.
+  // Existing processing videos do not block prep or backend OCR submission.
   for (const enqueue of ['enqueue("p", 4)', 'enqueueFront("p", 4)']) {
     reset({ stage: "processing" });
-    run('for (let i = 0; i < MAX_ACTIVE_PIPELINES; i++) occupiedSlots.add(`busy-${i}`)');
+    run('for (let i = 0; i < 10; i++) occupiedSlots.add(`busy-${i}`)');
     run(enqueue);
     assertWaiting();
     run(`confirmWatermarkRegionsAction("p", ${JSON.stringify(regions)})`);
     await flush();
-    assert.equal(heavy.length, 0, "confirmed video waits for an OCR slot");
-    run('releaseSlot("busy-0")');
     assert.deepEqual(heavy, [["p", 4]]);
   }
 

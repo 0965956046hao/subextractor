@@ -70,4 +70,9 @@ context.resumeHeavy("p", "video", 4, "processing", [], [{ job_id: "ocr", job_typ
   assert.equal(jobs.length, 1); // exact saved job identity may finish during reload
   assert.equal(pipeline.stepTimings[4].elapsedMs, 40000);
   console.log("Reload attempt matching: ignores old pre-reset jobs, recovers the exact submitted job OK");
+  return context.resumeHeavy("p", "video", 7, "translating", [], [{ job_id: "repair", job_type: "translate",
+    status: "done", phase: "done", processing_timing: finalTiming }]);
+}).then(() => {
+  assert.equal(queuedSteps.at(-1), 7, "F5 after repair must finish remaining language/review, not jump to dub");
+  console.log("Translation restore: reuses saved SRTs and finishes remaining languages after repair OK");
 }).catch((error) => { console.error(error); process.exitCode = 1; });

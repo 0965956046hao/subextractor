@@ -277,7 +277,7 @@ class DubCheckpointTests(unittest.TestCase):
             self.assertEqual(call.call_count, 2)
             self.assertEqual([c.kwargs["indices"] for c in call.call_args_list], [[1, 3], [2]])
 
-    def test_capcut_exhausted_retries_insert_silence_and_retry_whole_batch(self):
+    def test_capcut_three_attempts_commit_failure_silence_and_reuse_on_resume(self):
         import json
 
         logs = []
@@ -298,7 +298,8 @@ class DubCheckpointTests(unittest.TestCase):
         ) as silent:
             paths = self.run_tts(engine="capcut", log_fn=lambda text, **kw: logs.append((text, kw)),
                                  progress_callback=lambda done, total: progress.append((done, total)))
-            self.assertEqual(call.call_count, 4)
+            self.assertEqual(call.call_count, 3)
+            self.assertEqual([c.kwargs["indices"] for c in call.call_args_list], [[1, 2, 3], [2, 3], [2, 3]])
             self.assertEqual(silent.call_count, 2)
             self.assertEqual(progress[-1], (3, 3))
             self.assertEqual(paths[0].read_bytes(), b"real voice")
@@ -307,6 +308,7 @@ class DubCheckpointTests(unittest.TestCase):
             metadata = [json.loads(p.read_text()) for p in (self.root / "tts/video/checkpoints").rglob("batch.json")]
             self.assertEqual(metadata[0]["files"]["2"]["silence_kind"], "fail")
             self.assertEqual(metadata[0]["failed_indices"], [2, 3])
+            self.assertTrue(any("sau 3 lượt" in text for text, _ in logs))
 
         def finish(texts, out_dir, indices, on_download, **kwargs):
             for index in indices:
@@ -315,22 +317,27 @@ class DubCheckpointTests(unittest.TestCase):
                 on_download(index, path)
 
         with patch.object(capcut, "generate_segments_to_dir", side_effect=finish) as call:
-            recovered = self.run_tts(engine="capcut")
-            self.assertEqual(call.call_args.kwargs["indices"], [1, 2, 3])
-            self.assertEqual([tts._read_silence_kind(p) for p in recovered], [None, None, None])
+            restored = self.run_tts(engine="capcut")
+            self.assertEqual([tts._read_silence_kind(p) for p in restored], [None, "fail", "fail"])
+            self.assertEqual([p.read_bytes() for p in restored], [b"real voice", b"silence", b"silence"])
             self.run_tts(engine="capcut")
-            self.assertEqual(call.call_count, 1, "recovered batch becomes a reusable checkpoint")
+            call.assert_not_called()
 
     def test_multi_voice_failed_lines_keep_assignment_and_insert_silence(self):
         def silence(path, duration, kind="fail"):
             path.write_bytes(b"silence")
 
-        with patch.object(capcut, "generate_segments_to_dir", side_effect=RuntimeError("no audio")), patch.object(
+        with patch.object(capcut, "generate_segments_to_dir", side_effect=RuntimeError("no audio")) as call, patch.object(
             tts, "_create_silence", side_effect=silence,
         ):
             paths = self.run_tts(engine="capcut", voice_map={1: "A", 2: "B", 3: "A"})
+            self.assertEqual(call.call_count, 6, "three attempts per voice group")
         self.assertEqual([p.parent.name for p in paths], ["A", "B", "A"])
         self.assertTrue(all(tts._read_silence_kind(p) == "fail" for p in paths))
+        with patch.object(capcut, "generate_segments_to_dir") as call:
+            restored = self.run_tts(engine="capcut", voice_map={1: "A", 2: "B", 3: "A"})
+            call.assert_not_called()
+            self.assertTrue(all(tts._read_silence_kind(p) == "fail" for p in restored))
 
     @staticmethod
     def capcut_finish(texts, out_dir, indices, on_download, **kwargs):
@@ -466,7 +473,7 @@ class DubCheckpointTests(unittest.TestCase):
             self.assertEqual(silence.call_count, 2)
             self.assertEqual(call.call_count, 1)
 
-    def test_capcut_failed_batch_does_not_invalidate_other_completed_batches(self):
+    def test_capcut_all_completed_batches_are_reused_including_failure_silence(self):
         def fail_last(*args, **kwargs):
             if kwargs["indices"] == [151]:
                 raise RuntimeError("unavailable")
@@ -481,9 +488,9 @@ class DubCheckpointTests(unittest.TestCase):
             paths = self.run_tts(engine="capcut", entries=entries(151))
             self.assertEqual(tts._read_silence_kind(paths[-1]), "fail")
         with patch.object(capcut, "generate_segments_to_dir", side_effect=self.capcut_finish) as call:
-            self.run_tts(engine="capcut", entries=entries(151))
-            self.assertEqual(call.call_count, 1)
-            self.assertEqual(call.call_args.kwargs["indices"], [151])
+            restored = self.run_tts(engine="capcut", entries=entries(151))
+            call.assert_not_called()
+            self.assertEqual(tts._read_silence_kind(restored[-1]), "fail")
 
     def test_pause_is_not_converted_to_failure_silence(self):
         with patch.object(capcut, "generate_segments_to_dir", side_effect=JobCancelled), patch.object(
@@ -492,6 +499,68 @@ class DubCheckpointTests(unittest.TestCase):
             with self.assertRaises(JobCancelled):
                 self.run_tts(engine="capcut")
             silence.assert_not_called()
+
+    def test_resume_skips_failed_committed_batch_and_restarts_only_interrupted_batch(self):
+        import json
+
+        def pause_after_failed_batch(*args, **kwargs):
+            if kwargs["indices"] == [151]:
+                raise JobCancelled()
+            raise RuntimeError("CapCut unavailable")
+
+        def silence(path, duration, kind="fail"):
+            path.write_bytes(b"silence")
+
+        with patch.object(capcut, "generate_segments_to_dir", side_effect=pause_after_failed_batch) as call, patch.object(
+            tts, "_create_silence", side_effect=silence,
+        ):
+            with self.assertRaises(JobCancelled):
+                self.run_tts(engine="capcut", entries=entries(151))
+            self.assertEqual(call.call_count, 4, "three failed attempts then pause in the next batch")
+        manifest = next((self.root / "tts/video/checkpoints").rglob("batch.json"))
+        saved = manifest.read_bytes()
+        self.assertEqual(len(json.loads(saved)["failed_indices"]), 150)
+        with patch.object(capcut, "generate_segments_to_dir", side_effect=self.capcut_finish) as call:
+            paths = self.run_tts(engine="capcut", entries=entries(151))
+            self.assertEqual(call.call_count, 1)
+            self.assertEqual(call.call_args.kwargs["indices"], [151])
+            self.assertTrue(all(tts._read_silence_kind(p) == "fail" for p in paths[:150]))
+            self.assertIsNone(tts._read_silence_kind(paths[150]))
+            self.assertEqual(manifest.read_bytes(), saved, "old manifests are reused without migration")
+
+    def test_corrupt_failure_silence_is_not_reused_as_a_valid_checkpoint(self):
+        def silence(path, duration, kind="fail"):
+            path.write_bytes(b"silence")
+
+        with patch.object(capcut, "generate_segments_to_dir", side_effect=RuntimeError("unavailable")), patch.object(
+            tts, "_create_silence", side_effect=silence,
+        ):
+            self.run_tts(engine="capcut")
+        next((self.root / "tts/video/checkpoints").rglob("0002.mp3")).write_bytes(b"corrupt")
+        with patch.object(capcut, "generate_segments_to_dir", side_effect=self.capcut_finish) as call:
+            restored = self.run_tts(engine="capcut")
+            self.assertEqual(call.call_args.kwargs["indices"], [1, 2, 3])
+            self.assertEqual(call.call_count, 1)
+            self.assertTrue(all(tts._read_silence_kind(p) is None for p in restored))
+
+    def test_manual_voice_edit_of_failure_silence_keeps_other_failure_markers(self):
+        import json
+
+        def silence(path, duration, kind="fail"):
+            path.write_bytes(b"silence")
+
+        with patch.object(capcut, "generate_segments_to_dir", side_effect=RuntimeError("unavailable")), patch.object(
+            tts, "_create_silence", side_effect=silence,
+        ):
+            paths = self.run_tts(engine="capcut")
+        paths[1].write_bytes(b"manually generated voice")
+        with patch.object(capcut, "generate_segments_to_dir") as call:
+            restored = self.run_tts(engine="capcut")
+            call.assert_not_called()
+            self.assertEqual([tts._read_silence_kind(p) for p in restored], ["fail", None, "fail"])
+            self.assertEqual(restored[1].read_bytes(), b"manually generated voice")
+        manifest = next((self.root / "tts/video/checkpoints").rglob("batch.json"))
+        self.assertEqual(json.loads(manifest.read_text())["failed_indices"], [1, 3])
 
     def test_duplicate_silence_remains_a_reusable_success(self):
         def silence(path, duration, kind="fail"):
@@ -616,7 +685,7 @@ class ApiCheckpointClientTests(unittest.TestCase):
 
 
 class DubCheckpointIntegrationTests(unittest.TestCase):
-    def test_full_voice_with_failed_silence_does_not_hide_retry(self):
+    def test_full_voice_with_failed_silence_is_reused_without_automatic_repair(self):
         import json
         from app.services import dub_service as dub
 
@@ -639,9 +708,6 @@ class DubCheckpointIntegrationTests(unittest.TestCase):
 
             def synthesize(*args, **kwargs):
                 attempts.append(True)
-                if len(attempts) > 1:
-                    marker.unlink()
-                    audio_files[1].write_bytes(b"recovered voice")
                 return audio_files
 
             def combine(files, captions, target):
@@ -665,11 +731,12 @@ class DubCheckpointIntegrationTests(unittest.TestCase):
                 meta = root / "tts/video/full_voice.meta.json"
                 self.assertEqual(json.loads(meta.read_text())["failed_indices"], [2])
                 dub.build_full_audio("video", voice_name="voice", tts_engine="capcut", mute_original=False)
-                self.assertEqual(json.loads(meta.read_text())["failed_indices"], [])
-                self.assertEqual(len(attempts), 2)
-                self.assertEqual(mixed.call_count, 2)
+                self.assertEqual(json.loads(meta.read_text())["failed_indices"], [2])
+                self.assertEqual(len(attempts), 1)
+                self.assertEqual(mixed.call_count, 1)
                 dub.build_full_audio("video", voice_name="voice", tts_engine="capcut", mute_original=False)
-                self.assertEqual(len(attempts), 2, "fully recovered aggregate is reusable")
+                self.assertEqual(len(attempts), 1, "failure metadata must not force a repair pass")
+                self.assertEqual(marker.read_text(), "fail")
 
     def test_resume_after_combine_failure_does_not_regenerate_tts(self):
         from app.services import dub_service as dub

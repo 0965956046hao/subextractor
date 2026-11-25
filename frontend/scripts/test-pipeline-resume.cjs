@@ -14,7 +14,7 @@ const selected = ast.statements.filter((node) =>
 ).map((node) => node.getText(ast).replace(/^export /, "")).join("\n");
 const actions = {};
 function findActions(node) {
-  if (ts.isPropertyAssignment(node) && ["pausePipeline", "resumePipeline"].includes(node.name.getText(ast))) {
+  if (ts.isPropertyAssignment(node) && ["pausePipeline", "resumePipeline", "retryFailedPipeline"].includes(node.name.getText(ast))) {
     actions[node.name.getText(ast)] = node.initializer.getText(ast);
   }
   ts.forEachChild(node, findActions);
@@ -22,12 +22,14 @@ function findActions(node) {
 findActions(ast);
 let pipeline;
 const queued = [];
+let resets = 0;
 const context = vm.createContext({
   get: () => ({ pipelines: [pipeline] }),
   usePipelineStore: { getState: () => ({ pipelines: [pipeline] }) },
   set: (update) => { pipeline = update({ pipelines: [pipeline] }).pipelines[0]; },
   patch: (_id, update) => Object.assign(pipeline, update),
   enqueueFront: (id, step) => queued.push(step),
+  resetVideoFromStep: async () => { resets++; throw new Error("retry must not reset saved outputs"); },
   bumpGen() {}, abortDelogo() {}, appendLog() {}, resolvePauseWaiters() {},
   reportPipeline() {}, schedulePersist() {}, releaseSlot() {},
   refreshStepTimings: async () => [], runGen: new Map(), priorityPipelines: new Set(),
@@ -37,6 +39,7 @@ const context = vm.createContext({
 vm.runInContext(ts.transpileModule(`${selected}
 const pauseAction = ${actions.pausePipeline};
 const resumeAction = ${actions.resumePipeline};
+const retryAction = ${actions.retryFailedPipeline};
 let queue = [];`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, context);
 const run = (code) => vm.runInContext(code, context);
 function reset(stage, resumeStep, extra = {}) {
@@ -81,6 +84,40 @@ async function test() {
   reset("translating", 5);
   run('markStepStart("p", 7)');
   assert.equal(pipeline.resumeStep, 7, "starting a step updates the checkpoint");
+  reset("error", 4, {
+    status: "error", failedStep: 7, error: "Internal Server Error", finishedAt: 123,
+    reviewedSubtitleLangs: ["vi"], dubbedUrl: "/existing-audio", resultUrl: "/existing-video",
+  });
+  const oldProgress = pipeline.stepProgress;
+  const oldStarts = pipeline.stepStarts;
+  run('queue = [{ id: "p", startStep: 4 }, { id: "other", startStep: 8 }]');
+  run('retryAction("p")');
+  assert.deepEqual(queued, [7], "retry uses the failed translation step, not a stale resumeStep");
+  assert.equal(pipeline.status, "queued");
+  assert.equal(pipeline.paused, false);
+  assert.equal(pipeline.failedStep, null);
+  assert.equal(pipeline.error, "");
+  assert.equal(pipeline.finishedAt, null);
+  assert.equal(pipeline.resumeStep, 7);
+  assert.deepEqual(pipeline.reviewedSubtitleLangs, ["vi"], "never clear approved tracks on non-destructive retry");
+  assert.equal(pipeline.dubbedUrl, "/existing-audio");
+  assert.equal(pipeline.resultUrl, "/existing-video");
+  assert.equal(pipeline.stepProgress, oldProgress);
+  assert.equal(pipeline.stepStarts, oldStarts, "earlier completed steps are untouched");
+  assert.equal(resets, 0, "no reset-from API call");
+  assert.equal(run('queue.some(q => q.id === "p")'), false, "remove stale queued copies before retry");
+  assert.equal(run('queue.some(q => q.id === "other")'), true);
+  run('retryAction("p")');
+  assert.deepEqual(queued, [7], "double-click cannot launch a second retry");
+  for (const status of ["running", "queued", "done"]) {
+    reset("translating", 7, { status });
+    run('retryAction("p")');
+    assert.deepEqual(queued, [], `do not retry a ${status} pipeline`);
+  }
+  reset("error", 8, { status: "error", failedStep: null });
+  run('retryAction("p")');
+  assert.deepEqual(queued, [8], "legacy errors fall back to the saved step");
   console.log("Pipeline resume: current step, legacy persisted state, manual gates, earlier outputs OK");
+  console.log("Non-destructive retry: failed step, preserved results/review decisions, no reset API, dedup and double-click guards OK");
 }
 test().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -213,8 +213,9 @@ def _synthesize_capcut_batches(video_id, entries, voice, rate, voice_map,
         manifest_path = directory / "batch.json"
         manifest = read_json(manifest_path)
         records = manifest.get("files") if isinstance(manifest, dict) else None
+        # Committed failure silence is a finished fallback, not unfinished work.
+        # Keep failure metadata for review, but never retry it just on resume.
         reusable = (isinstance(records, dict) and manifest.get("identity") == key
-                    and not manifest.get("failed_indices")
                     and set(records) == {str(row["index"]) for row in batch if row["text"]})
         if reusable:
             for record_index, record in records.items():
@@ -222,7 +223,7 @@ def _synthesize_capcut_batches(video_id, entries, voice, rate, voice_map,
                 path = directory / f"{int(record_index):04d}.mp3"
                 try:
                     valid = (isinstance(record, dict) and checksum(path) == record.get("sha256")
-                             and record.get("silence_kind") != "fail" and _get_audio_duration(path) > 0)
+                             and _get_audio_duration(path) > 0)
                 except OSError:
                     valid = False
                 if not valid:
@@ -262,7 +263,7 @@ def _synthesize_capcut_batches(video_id, entries, voice, rate, voice_map,
 
                 for assigned, group in groups.items():
                     remaining = group
-                    for attempt in range(4):
+                    for attempt in range(3):
                         check()
                         if not remaining:
                             break
@@ -288,8 +289,8 @@ def _synthesize_capcut_batches(video_id, entries, voice, rate, voice_map,
                         staged[index] = path
                         kinds[index] = "fail"
                         if log_fn:
-                            log_fn(f"Dòng {index}/{len(entries)}: CapCut lỗi sau 4 lượt — "
-                                   f"chèn khoảng lặng {duration:.2f}s, tiếp tục; lần chạy lại sẽ thử lại cả batch.",
+                            log_fn(f"Dòng {index}/{len(entries)}: CapCut lỗi sau 3 lượt — "
+                                   f"chèn khoảng lặng {duration:.2f}s, tiếp tục; batch đã lưu sẽ được dùng lại khi tiếp tục.",
                                    level="warning")
                 records = {}
                 for index, path in staged.items():
@@ -320,12 +321,14 @@ def _synthesize_capcut_batches(video_id, entries, voice, rate, voice_map,
             alias = root.parent.parent / row["voice"].replace("-", "_") / f"{index:04d}.mp3"
             marker = read_json(alias.with_suffix(".checkpoint.json"))
             # Preserve voice-review edits only for a fully reusable batch with
-            # matching provenance. A failed/partial batch must be retried whole.
+            # matching provenance. A partial/corrupt batch must be retried whole.
             if (reusable and isinstance(marker, dict) and marker.get("key") == key
                     and alias.exists() and checksum(alias) != marker.get("sha256")
                     and _get_audio_duration(alias) > 0):
                 atomic_bytes(cached, alias.read_bytes())
                 record.update(sha256=checksum(cached), silence_kind=None)
+                manifest["failed_indices"] = sorted(int(i) for i, rec in records.items()
+                                                    if rec.get("silence_kind") == "fail")
                 atomic_json(manifest_path, manifest)
             data = cached.read_bytes()
             if not alias.exists() or alias.read_bytes() != data:

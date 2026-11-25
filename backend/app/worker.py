@@ -755,6 +755,9 @@ async def run_translate_job(
         # run_translate_sync tự set status done/error + gửi WS. Chỉ thêm log
         # success + Telegram khi thực sự done (tránh ghi đè status=error).
         if job.get("status") == "done":
+            if job.get("operation") == "retranslate":
+                await job_log_async(job, ws_clients, "Đã hoàn tất lượt rà soát và vá phụ đề.", "success")
+                return
             await job_log_async(job, ws_clients, "Dịch hoàn tất! File SRT tiếng Việt đã sẵn sàng.", "success")
             now_str = datetime.now().strftime("%H:%M:%S")
             await _tg_notify(f"✅ <b>Dịch phụ đề xong!</b>\n🎬 {job['video_id']}\n🕐 {now_str}")

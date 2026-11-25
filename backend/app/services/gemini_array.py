@@ -96,6 +96,7 @@ def gemini_map_texts(
                 },
                 _timeout=settings.gemini_timeout,
                 _cancelled_cb=cancelled_cb,
+                _log_fn=log_fn,
             )
             response_text = (response.text or "").strip()
         except JobCancelled:

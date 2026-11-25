@@ -576,6 +576,8 @@ def retranslate_untranslated(
     target_lang: str = "vi",
     log_fn=None,
     source_track: str = "original",
+    cancelled_cb=None,
+    progress_callback=None,
 ) -> str:
     """Re-translate lines that were left in the original language.
 
@@ -613,24 +615,33 @@ def retranslate_untranslated(
     batch = [orig_by_idx[i] for i in untranslated_idx]
     texts = [b.text for b in batch]
 
-    base_prompt = _build_base_prompt(source_lang, target_lang, video_id, len(texts))
     patch_context = load_translation_context(video_id, target_lang)
-    if patch_context:
-        base_prompt = (
-            "PREVIOUS PATCH CONTEXT (keep character names, honorifics, terminology and tone "
-            f"CONSISTENT with these):\n{patch_context}\n\n{base_prompt}"
-        )
-
-    results = gemini_map_texts(
-        texts,
-        instruction=(
-            base_prompt
-            + "\nIMPORTANT: translate EVERY line below; replace all source-language text."
-        ),
-        system_instruction="You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
-        temperature=0.7,
-        log_fn=log_fn,
-    )
+    results = []
+    total_batches = (len(texts) + 49) // 50
+    for offset in range(0, len(texts), 50):
+        if cancelled_cb is not None and cancelled_cb():
+            raise JobCancelled()
+        current = texts[offset:offset + 50]
+        base_prompt = _build_base_prompt(source_lang, target_lang, video_id, len(current))
+        if patch_context:
+            base_prompt = (
+                "PREVIOUS PATCH CONTEXT (keep character names, honorifics, terminology and tone "
+                f"CONSISTENT with these):\n{patch_context}\n\n{base_prompt}"
+            )
+        if log_fn:
+            log_fn(f"Dịch lại batch {offset // 50 + 1}/{total_batches} ({len(current)} dòng)...")
+        results.extend(gemini_map_texts(
+            current,
+            instruction=(base_prompt + "\nIMPORTANT: translate EVERY line below; replace all source-language text."),
+            system_instruction="You are a professional subtitle translator. Always translate ALL text to the target language. Never output text in the source language.",
+            temperature=0.7,
+            log_fn=log_fn,
+            cancelled_cb=cancelled_cb,
+        ))
+        if progress_callback:
+            progress_callback(offset // 50 + 1, total_batches)
+    if cancelled_cb is not None and cancelled_cb():
+        raise JobCancelled()
 
     fixed_by_idx = dict(zip(untranslated_idx, results))
 
@@ -895,7 +906,9 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
     job["phase"] = "translating"
 
     try:
-        job_log_sync(loop, jobs, ws_clients, job_id, "Bắt đầu dịch với Gemini...")
+        job_log_sync(loop, jobs, ws_clients, job_id,
+                     "Bắt đầu dịch lại các dòng chưa dịch..." if job.get("operation") == "retranslate"
+                     else "Bắt đầu dịch với Gemini...")
         notify_ws_sync(loop, ws_clients, job_id, {
             "type": "progress",
             "progress": 10,
@@ -914,17 +927,25 @@ def run_translate_sync(loop, job_id: str, jobs: dict, ws_clients: dict, video_id
                 "phase": "translating",
             })
 
-        result = translate_srt(
-            video_id,
-            source_lang=job.get("source_lang", "zh"),
-            target_lang=job.get("target_lang", "vi"),
-            use_custom_srt=job.get("use_custom_srt", False),
-            multi_voice=job.get("multi_voice", False),
-            log_fn=_log,
-            progress_callback=_progress,
+        kwargs = dict(
+            source_lang=job.get("source_lang", "zh"), target_lang=job.get("target_lang", "vi"),
+            log_fn=_log, progress_callback=_progress,
             cancelled_cb=lambda: bool(jobs.get(job_id, {}).get("cancelled")),
             source_track=job.get("source_track", "original"),
         )
+        if job.get("operation") == "retranslate":
+            result = retranslate_untranslated(video_id, job["retranslate_content"], **kwargs)
+            if job.get("cancelled"):
+                raise JobCancelled()
+            if result != job["retranslate_content"]:
+                path = settings.temp_dir / "translated" / video_id / f"subtitles_{kwargs['target_lang']}.srt"
+                atomic_bytes(path, result.encode("utf-8"))
+            job["updated"] = result != job["retranslate_content"]
+        else:
+            result = translate_srt(
+                video_id, use_custom_srt=job.get("use_custom_srt", False),
+                multi_voice=job.get("multi_voice", False), **kwargs,
+            )
 
         if job.get("cancelled"):
             raise JobCancelled()

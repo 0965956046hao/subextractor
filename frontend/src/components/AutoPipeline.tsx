@@ -44,6 +44,8 @@ import TimelineCheckModal from "@/components/TimelineCheckModal";
 import VoiceCheckModal from "@/components/VoiceCheckModal";
 import PreviewModal from "@/components/PreviewModal";
 import { processingElapsed } from "@/lib/processing-timing";
+import { PipelineExecutionProvider, usePipelineExecution } from "@/components/PipelineExecutionStatus";
+import type { PipelineExecution } from "@/lib/pipeline-execution";
 import {
   usePipelineStore,
   STEPS,
@@ -253,8 +255,43 @@ function stepDetail(p: Pipeline, tr: TFunc): string {
   }
 }
 
-function pipelineElapsed(p: Pipeline, now: number): string {
-  if (p.status === "queued") return "—";
+function executionLabel(execution: PipelineExecution, tr: TFunc): string {
+  const step = execution.step != null && STEP_LABEL_KEYS[execution.step]
+    ? tr(STEP_LABEL_KEYS[execution.step]) : tr("pipeline.processing");
+  if (execution.kind === "manual" && execution.manual)
+    return tr(`pipeline.execution.manual.${execution.manual}`);
+  if (execution.kind === "queued" && execution.queuePosition != null)
+    return tr("pipeline.execution.queuedPosition", { step, position: execution.queuePosition });
+  if (execution.kind === "waiting_resources")
+    return tr("pipeline.execution.resources", { resources: (execution.resources ?? []).map((r) =>
+      r === "gemini" ? "Gemini" : r.toUpperCase()).join(", ") });
+  return tr(`pipeline.execution.${execution.kind}`, { step });
+}
+
+function executionMeta(execution: PipelineExecution) {
+  if (["running", "done", "error", "paused"].includes(execution.kind)) return STATUS_META[execution.kind];
+  return execution.kind === "checking" || execution.kind === "manual" || execution.kind === "preparing"
+    ? STATUS_META.paused : STATUS_META.queued;
+}
+
+function ExecutionBadge({ execution, tr }: { execution: PipelineExecution; tr: TFunc }) {
+  const meta = executionMeta(execution);
+  return <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ring-1 inline-flex items-center gap-1 ${meta.cls}`}>
+    {execution.kind === "running" && <IconSpinner className="w-3 h-3" />}
+    {executionLabel(execution, tr)}
+  </span>;
+}
+
+function pipelineElapsed(p: Pipeline, now: number, execution: PipelineExecution): string {
+  const timings = STEPS.map((_, i) => {
+    const timing = execution.step === i ? execution.timing ?? p.stepTimings?.[i] : p.stepTimings?.[i];
+    return processingElapsed(timing, now,
+      execution.kind === "running" && execution.step === i && (!execution.jobId || timing?.jobId === execution.jobId));
+  });
+  if (timings.some((value) => value != null)) return fmtElapsed(timings.reduce<number>((sum, value) => sum + (value ?? 0), 0));
+  // Legacy finished videos may not have executor timing. Never count queue or
+  // manual-wait wall time as active processing on an in-flight video.
+  if (p.status !== "done" && p.status !== "error") return "—";
   if (!p.startedAt) return "—";
   const end = p.status === "done" || p.status === "error" ? p.finishedAt : now;
   if (!end) return "—";
@@ -829,7 +866,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
   };
 
   return (
-    <>
+    <PipelineExecutionProvider>
       <div>
         <PageHeader
           title={tr("pipeline.title")}
@@ -2010,7 +2047,7 @@ export default function AutoPipeline({ initialUrl }: { initialUrl?: string }) {
           </div>
         </div>
       )}
-    </>
+    </PipelineExecutionProvider>
   );
 }
 
@@ -2027,7 +2064,8 @@ function PipelineRow({
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
-  const meta = p.paused ? STATUS_META.paused : (STATUS_META[p.status] ?? STATUS_META.queued);
+  const execution = usePipelineExecution(p, now);
+  const meta = executionMeta(execution);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const stepLabel = (() => {
     if (p.status === "error" && p.failedStep != null) {
@@ -2077,51 +2115,9 @@ function PipelineRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${meta.dot}`} />
-          <span
-            className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ring-1 ${meta.cls}`}
-          >
-            {tr(meta.labelKey)}
-          </span>
-          {p.status === "queued" && (
-            <span className="text-[10px] text-warn/80 flex items-center gap-1">
-              <svg
-                className="w-3 h-3"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              {tr("pipeline.waiting")}
-            </span>
-          )}
-          {p.status === "running" && !p.paused && (
-            <span className="text-[10px] text-accent/80 flex items-center gap-1">
-              <IconSpinner className="w-3 h-3" />
-              {tr("pipeline.running")}
-            </span>
-          )}
-          {p.paused && (
-            <span className="text-[10px] text-ink-muted flex items-center gap-1">
-              <svg
-                className="w-3 h-3"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-              >
-                <rect x="6" y="4" width="4" height="16" rx="1" />
-                <rect x="14" y="4" width="4" height="16" rx="1" />
-              </svg>
-              {tr("pipeline.status.paused")}
-            </span>
-          )}
+          <ExecutionBadge execution={execution} tr={tr} />
           <span className="ml-auto text-[10px] font-mono text-ink-light tabular-nums">
-            {pipelineElapsed(p, now)}
+            {pipelineElapsed(p, now, execution)}
           </span>
         </div>
         <p className="text-[12px] font-medium text-ink truncate">
@@ -2186,6 +2182,18 @@ function PipelineRow({
             <rect x="6" y="4" width="4" height="16" rx="1" />
             <rect x="14" y="4" width="4" height="16" rx="1" />
           </svg>
+        </button>
+      )}
+      {p.status === "error" && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            usePipelineStore.getState().retryFailedPipeline(p.id);
+          }}
+          title={tr("pipeline.retryKeepResultsHint")}
+          className="btn-island btn-island-secondary px-2.5 py-1 text-[11px] flex-shrink-0"
+        >
+          {tr("pipeline.retryContinue")}
         </button>
       )}
       {p.paused && (
@@ -2548,14 +2556,16 @@ function DetailView({
 }) {
   const { t } = useI18n();
   const tr = makeT(t);
+  const execution = usePipelineExecution(p, now);
   const failedStep = p.status === "error" ? p.failedStep : null;
   const activeStep =
     p.status === "done"
       ? STEPS.length
       : failedStep != null
         ? failedStep
-        : (STEP_STAGE[p.stage] ?? 0);
+        : (execution.step ?? STEP_STAGE[p.stage] ?? 0);
   const rerunPipeline = usePipelineStore((s) => s.rerunPipeline);
+  const retryFailedPipeline = usePipelineStore((s) => s.retryFailedPipeline);
   const confirmRegion = usePipelineStore((s) => s.confirmRegion);
   const confirmSubtitleStyle = usePipelineStore((s) => s.confirmSubtitleStyle);
   const confirmWatermarkRegions = usePipelineStore((s) => s.confirmWatermarkRegions);
@@ -2599,53 +2609,13 @@ function DetailView({
               <p className="text-sm font-semibold text-ink truncate">
                 {p.title || tr("pipeline.analyzing")}
               </p>
-              {p.status === "queued" && (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-warn-muted ring-1 ring-warn/20 text-warn flex items-center gap-1">
-                  <svg
-                    className="w-3 h-3"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                  {tr("pipeline.queuedInQueue")}
-                </span>
-              )}
-              {p.status === "running" && (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-accent-muted ring-1 ring-accent/20 text-accent flex items-center gap-1">
-                  <IconSpinner className="w-3 h-3" />
-                  {tr("pipeline.processing")}
-                </span>
-              )}
-              {p.status === "error" && (
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-danger-muted ring-1 ring-danger/20 text-danger flex items-center gap-1">
-                  <svg
-                    className="w-3 h-3"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                  {tr("pipeline.errorAtStep", {
-                    step: failedStep != null ? failedStep + 1 : "?",
-                  })}
-                </span>
-              )}
+              <ExecutionBadge execution={execution} tr={tr} />
             </div>
             <p className="text-[11px] text-ink-light font-mono truncate">
               {p.url}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setPreviewOpen(true)}
               title={tr("pipeline.previewMedia")}
@@ -2659,6 +2629,15 @@ function DetailView({
                 className="px-3 py-1.5 rounded-full text-[11px] font-medium bg-white/[0.04] ring-1 ring-white/[0.09] text-ink-muted hover:bg-white/[0.08] hover:text-ink transition-colors cursor-pointer"
               >
                 {tr("pipeline.pauseProcess")}
+              </button>
+            )}
+            {p.status === "error" && (
+              <button
+                onClick={() => retryFailedPipeline(p.id)}
+                title={tr("pipeline.retryKeepResultsHint")}
+                className="btn-island btn-island-primary px-3 py-1.5 text-[11px]"
+              >
+                {tr("pipeline.retryKeepResults")}
               </button>
             )}
             {p.paused && (
@@ -2887,6 +2866,7 @@ function DetailView({
               const isFailed =
                 p.status === "error" && failedStep != null && i === failedStep;
               const active = i === activeStep && p.status !== "done" && !isFailed;
+              const executing = active && execution.kind === "running";
               const start = p.stepStarts[i];
               const end = p.stepEnds[i];
               const skipped = p.stepSkipped[i];
@@ -2894,8 +2874,9 @@ function DetailView({
               let stepTime: string | null = null;
               if (skipped) stepTime = p.stepCached?.[i] ? "Đã có kết quả" : tr("pipeline.skipped");
               else if ([4, 5, 6, 7, 8, 9].includes(i)) {
-                const elapsed = processingElapsed(p.stepTimings?.[i], now,
-                  active && p.status === "running" && !p.paused);
+                const timing = active ? execution.timing ?? p.stepTimings?.[i] : p.stepTimings?.[i];
+                const elapsed = processingElapsed(timing, now,
+                  executing && (!execution.jobId || timing?.jobId === execution.jobId));
                 stepTime = elapsed != null ? fmtElapsed(elapsed) : active && !p.paused
                   ? tr("pipeline.waiting") : null;
               }
@@ -2913,9 +2894,11 @@ function DetailView({
                         ? "bg-danger-muted text-danger"
                         : done
                           ? "bg-success/15 text-success"
-                          : active
-                            ? "bg-accent-muted text-accent"
-                            : "bg-white/[0.05] text-ink-light"
+                          : active && !executing
+                            ? "bg-warn-muted text-warn"
+                            : active
+                              ? "bg-accent-muted text-accent"
+                              : "bg-white/[0.05] text-ink-light"
                       }`}
                   >
                     {skipped ? (
@@ -2935,8 +2918,12 @@ function DetailView({
                       </svg>
                     ) : done ? (
                       <IconCheck className="w-3.5 h-3.5" />
-                    ) : active ? (
+                    ) : executing ? (
                       <IconSpinner className="w-3.5 h-3.5" />
+                    ) : active ? (
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+                      </svg>
                     ) : (
                       <span className="text-[11px] font-mono">{i + 1}</span>
                     )}
@@ -2964,7 +2951,7 @@ function DetailView({
                           ? "—"
                           : isFailed
                             ? tr("pipeline.errorLabel")
-                            : `${stepPct}%`}
+                            : active && !executing ? tr("pipeline.waiting") : `${stepPct}%`}
                       </span>
                     </div>
                     <p className="text-[11px] text-ink-light">
@@ -2974,6 +2961,9 @@ function DetailView({
                           ? tr(STEP_DETAIL_KEYS[i])
                           : s.detail}
                     </p>
+                    {active && <p className={`text-[11px] mt-1 ${executing ? "text-accent" : "text-warn"}`}>
+                      {executionLabel(execution, tr)}
+                    </p>}
                     {i === 11 && p.autoUploadYoutube && (active || done) && (
                       <div className="mt-2 flex items-center gap-2 flex-wrap">
                         <span className="text-[11px] text-ink-light flex-shrink-0">

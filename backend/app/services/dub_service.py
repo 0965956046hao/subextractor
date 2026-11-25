@@ -656,7 +656,10 @@ def build_full_audio(
     def _voice_matches() -> bool:
         try:
             m = json.loads(full_voice_meta.read_text(encoding="utf-8"))
-            return m.get("checkpoint_identity") == identity and not m.get("failed_indices")
+            # CapCut failure silence is an intentional completed fallback.
+            # Do not trigger an implicit repair pass when resuming/reusing it.
+            return (m.get("checkpoint_identity") == identity
+                    and (tts_engine == "capcut" or not m.get("failed_indices")))
         except FileNotFoundError:
             # Legacy output has no provable text/voice/rate identity.
             return False

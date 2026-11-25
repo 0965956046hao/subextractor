@@ -401,26 +401,51 @@ async def retranslate_srt(video_id: str, request: Request):
     target_lang = body.get("target_lang", "vi")
     if target_lang not in ("vi", "en", "zh"):
         raise HTTPException(400, "Unsupported target language")
+    source_track = body.get("source_track", "original")
+    if source_track not in ("original", "vi") or (source_track == "vi" and (target_lang != "en" or source_lang != "vi")):
+        raise HTTPException(400, "Invalid translation source")
+    if body.get("background"):
+        try:
+            translation_source_path(video_id, source_track)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(404, str(e))
+        jobs = get_jobs(request)
+        job_id = uuid.uuid4().hex[:12]
+        jobs[job_id] = {
+            "job_id": job_id, "video_id": video_id, "job_type": "translate",
+            "operation": "retranslate", "retranslate_content": content,
+            "source_lang": source_lang, "target_lang": target_lang, "source_track": source_track,
+            "status": "queued", "phase": "translate", "progress": 0,
+            "error": None, "cancelled": False,
+        }
+        # Uses the existing translate lane + Gemini gate. Return before any
+        # model request so the frontend proxy never waits for translation.
+        await get_job_queue(request).put(job_id)
+        return {"job_id": job_id, "status": "queued"}
     scheduler = get_scheduler(request)
     try:
         # Unique key per request: the gate treats a repeated id as re-entrant
         # (same owner), which would let a double-click run two Gemini calls.
         async with scheduler.guard("gemini", f"retranslate:{video_id}:{uuid.uuid4().hex[:8]}"):
-            updated = retranslate_untranslated(
+            updated = await asyncio.to_thread(retranslate_untranslated,
                 video_id,
                 content,
                 source_lang=source_lang,
                 target_lang=target_lang,
-                source_track=body.get("source_track", "original"),
+                source_track=source_track,
             )
     except ValueError as e:
         raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.exception("Retranslation failed for %s", video_id)
+        raise HTTPException(502, f"Dịch lại thất bại: {e}")
     # Ghi luôn bản đã vá lên file SRT cuối (bản dịch) để các dòng chưa dịch
     # không bị rớt mất — trước đây chỉ trả về content mà không lưu.
     if updated != content:
         out_path = settings.temp_dir / "translated" / video_id / f"subtitles_{target_lang}.srt"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(updated, encoding="utf-8")
+        from app.services.checkpoint import atomic_bytes
+        atomic_bytes(out_path, updated.encode("utf-8"))
     return {
         "video_id": video_id,
         "content": updated,
