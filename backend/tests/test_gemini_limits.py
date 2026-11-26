@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import httpx
+
 from app.config import settings
 from app.models import SrtEntry
 from app.services import gemini_array, job_utils, retry_utils, translation_service
@@ -18,6 +20,46 @@ from app.services.srt_utils import entries_to_srt, parse_srt
 
 class RateLimitError(Exception):
     code = 429
+
+
+class GeminiNetworkRetryTests(unittest.TestCase):
+    def test_transient_connection_errors_are_retryable(self):
+        errors = [
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+            httpx.ConnectError("connection failed"), httpx.ReadError("read failed"),
+            httpx.WriteError("write failed"), httpx.CloseError("close failed"),
+            httpx.ConnectTimeout(""), httpx.ReadTimeout(""), httpx.WriteTimeout(""),
+            httpx.PoolTimeout(""), httpx.ProxyError("proxy disconnected"),
+            ConnectionResetError("reset"), ConnectionAbortedError("aborted"),
+            BrokenPipeError("pipe closed"), TimeoutError(),
+        ]
+        for error in errors:
+            with self.subTest(error=type(error).__name__):
+                self.assertTrue(retry_utils._is_retryable(error))
+
+    def test_wrapped_transport_error_and_disconnect_message_are_retryable(self):
+        wrapped = RuntimeError("SDK request failed")
+        wrapped.__cause__ = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        self.assertTrue(retry_utils._is_retryable(wrapped))
+        self.assertTrue(retry_utils._is_retryable(Exception("Server disconnected without sending a response.")))
+
+    def test_invalid_requests_credentials_and_cancellation_do_not_retry(self):
+        request = httpx.Request("POST", "https://example.test")
+        for status in (400, 401, 403):
+            error = httpx.HTTPStatusError("Invalid request", request=request, response=httpx.Response(status))
+            error.__cause__ = httpx.ConnectError("earlier connection failure")
+            with self.subTest(status=status):
+                self.assertFalse(retry_utils._is_retryable(error))
+        for error in (ValueError("invalid request"), httpx.InvalidURL("bad URL"),
+                      httpx.LocalProtocolError("invalid header"), httpx.UnsupportedProtocol("invalid scheme"),
+                      JobCancelled("cancelled during timeout")):
+            with self.subTest(error=type(error).__name__):
+                self.assertFalse(retry_utils._is_retryable(error))
+
+    def test_exception_cause_cycle_does_not_loop(self):
+        error = RuntimeError("permanent failure")
+        error.__cause__ = error
+        self.assertFalse(retry_utils._is_retryable(error))
 
 
 class GeminiGateTests(unittest.TestCase):
@@ -318,6 +360,56 @@ class GeminiModelRotationTests(unittest.TestCase):
             warnings = [call for call in log.call_args_list if call.kwargs.get("level") == "warning"]
             self.assertEqual(len(warnings), 0 if isinstance(error, JobCancelled) else 1)
 
+    def test_disconnect_retries_next_model_and_keeps_warning_when_translation_succeeds(self):
+        log = Mock()
+        request = Mock(side_effect=[
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+            SimpleNamespace(text="0|Translated text"),
+        ])
+        with patch.object(gemini_array, "genai_generate_content_factory", return_value=request):
+            result = gemini_array.gemini_map_texts(["原文"], "translate", "translator", require_complete=True, log_fn=log)
+        self.assertEqual(result, ["Translated text"])
+        self.assertEqual([call.kwargs["model"] for call in request.call_args_list], self.models)
+        warnings = [call.args[0] for call in log.call_args_list if call.kwargs.get("level") == "warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Server disconnected", warnings[0])
+        self.assertIn("thử tổ hợp key/model tiếp theo", warnings[0])
+
+    def test_exhausted_network_retries_report_real_reason_and_actual_attempt_count(self):
+        error = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        request = Mock(side_effect=error)
+        with patch.object(gemini_array, "genai_generate_content_factory", return_value=request):
+            with self.assertRaises(RuntimeError) as caught:
+                gemini_array.gemini_map_texts(["原文"], "translate", "translator", require_complete=True)
+        message = str(caught.exception)
+        self.assertEqual(request.call_count, 5)
+        self.assertIn("sau 5 lần gọi API", message)
+        self.assertIn("Server disconnected without sending a response.", message)
+        self.assertIn("checkpoint", message)
+        self.assertNotIn("429", message)
+        self.assertNotIn("quota", message)
+        self.assertIs(caught.exception.__cause__, error)
+
+    def test_permanent_error_summary_shows_one_attempt_and_redacts_key(self):
+        request = Mock(side_effect=ValueError("Invalid API key key-a"))
+        with patch.object(gemini_array, "genai_generate_content_factory", return_value=request):
+            with self.assertRaises(RuntimeError) as caught:
+                gemini_array.gemini_map_texts(["原文"], "translate", "translator", require_complete=True)
+        self.assertEqual(request.call_count, 1)
+        self.assertIn("sau 1 lần gọi API", str(caught.exception))
+        self.assertIn("Invalid API key", str(caught.exception))
+        self.assertNotIn("key-a", str(caught.exception))
+        self.assertNotIn("429", str(caught.exception))
+
+    def test_quota_advice_is_preserved_for_actual_rate_limit_failure(self):
+        request = Mock(side_effect=RateLimitError("429 RESOURCE_EXHAUSTED"))
+        with patch.object(gemini_array, "genai_generate_content_factory", return_value=request):
+            with self.assertRaises(RuntimeError) as caught:
+                gemini_array.gemini_map_texts(["原文"], "translate", "translator", require_complete=True)
+        self.assertEqual(request.call_count, 5)
+        self.assertIn("sau 5 lần gọi API", str(caught.exception))
+        self.assertIn("Kiểm tra quota", str(caught.exception))
+
 
 class TranslationCheckpointTests(unittest.TestCase):
     def setUp(self):
@@ -381,6 +473,28 @@ class TranslationCheckpointTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 translation_service.translate_srt("video")
         self.assertEqual(self.output.read_text(), "existing completed translation")
+
+    def test_disconnect_exhaustion_preserves_checkpoint_and_resume_skips_completed_batch(self):
+        request = Mock(side_effect=[
+            SimpleNamespace(text="\n".join(f"{i}|Translated {i}" for i in range(50))),
+            *[httpx.RemoteProtocolError("Server disconnected without sending a response.") for _ in range(5)],
+            SimpleNamespace(text="0|Last translated line"),
+        ])
+        with patch.object(retry_utils, "configured_gemini_keys", return_value=["test-key"]), \
+                patch.object(retry_utils.random, "uniform", return_value=0), \
+                patch.object(gemini_array, "genai_generate_content_factory", return_value=request):
+            with self.assertRaisesRegex(RuntimeError, "sau 5 lần gọi API"):
+                translation_service.translate_srt("video")
+            self.assertEqual(request.call_count, 6)
+            self.assertFalse(self.output.exists())
+            self.assertEqual(len(json.loads(self.checkpoint.read_text())["texts"]), 50)
+            content = translation_service.translate_srt("video")
+        self.assertEqual(request.call_count, 7)
+        self.assertIn("原文50", request.call_args.kwargs["contents"])
+        self.assertNotIn("原文0", request.call_args.kwargs["contents"])
+        self.assertEqual(len(parse_srt(content)), 51)
+        self.assertEqual(self.source.read_text(), self.content)
+        self.assertFalse(self.checkpoint.exists())
 
 
 if __name__ == "__main__":

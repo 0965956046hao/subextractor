@@ -18,6 +18,8 @@ from app.services.job_utils import JobCancelled
 from app.services.retry_utils import (
     gemini_call_rotating,
     genai_generate_content_factory,
+    gemini_error_detail,
+    _is_rate_limited,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,13 +106,22 @@ def gemini_map_texts(
         except JobCancelled:
             raise
         except Exception as e:  # noqa: BLE001
-            logger.warning("gemini_map_texts attempt %d failed: %s", attempt, e)
+            detail = gemini_error_detail(e)
+            logger.warning("gemini_map_texts attempt %d failed: %s", attempt, detail)
             if log_fn:
-                log_fn(f"  Lượt {attempt}: lỗi Gemini ({e})", level="warning")
+                log_fn(f"  Lượt {attempt}: lỗi Gemini ({detail})", level="warning")
             if require_complete:
-                # Transport retries are already exhausted by the shared helper.
-                # Never turn a failed translation request into source text.
-                raise RuntimeError("Gemini không dịch được batch sau các lần thử. Nếu lỗi 429 tiếp diễn, kiểm tra quota của project Gemini rồi chạy tiếp bước dịch.") from e
+                api_attempts = getattr(e, "_gemini_attempts", None)
+                count = f" sau {api_attempts} lần gọi API" if api_attempts else ""
+                advice = (
+                    " Kiểm tra quota của project Gemini nếu lỗi 429 tiếp diễn."
+                    if _is_rate_limited(e) else ""
+                )
+                raise RuntimeError(
+                    f"Gemini không dịch được batch{count}. Lỗi gốc: {detail.rstrip('.')}."
+                    f"{advice} Batch này chưa được lưu là bản dịch hoàn tất; "
+                    "các batch trước đã có checkpoint có thể dùng lại khi chạy tiếp bước dịch."
+                ) from e
             continue
 
         got = parse_numbered_response(response_text, n)

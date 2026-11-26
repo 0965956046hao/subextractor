@@ -13,6 +13,8 @@ import re
 from contextlib import contextmanager
 from functools import wraps
 
+import httpx
+
 from tenacity import (
     retry,
     retry_if_exception,
@@ -43,19 +45,49 @@ _RETRYABLE_HINTS = (
 
 
 def _is_retryable(e: Exception) -> bool:
-    # Timeout / network stall cũng retry (trước đây chỉ retry 429/503 → treo 40p không được retry).
-    if isinstance(e, TimeoutError):
-        return True
-    if _is_rate_limited(e):
-        return True
-    msg = str(e).lower()
-    if "timeout" in msg or "timed out" in msg or "deadline" in msg:
-        return True
-    code = getattr(e, "code", None) or getattr(e, "status_code", None) or getattr(e, "status", None)
-    if isinstance(code, int) and code in _RETRYABLE_CODES:
-        return True
-    name = type(e).__name__.lower()
-    return any(hint in name for hint in _RETRYABLE_HINTS)
+    # google-genai can expose httpx errors directly or wrap them as a cause.
+    # In particular, RemoteProtocolError("Server disconnected ...") has no
+    # HTTP status and must not be treated as a permanent request failure.
+    current = e
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, JobCancelled):
+            return False
+        code = (getattr(current, "code", None) or getattr(current, "status_code", None)
+                or getattr(current, "status", None))
+        if code is None:
+            code = getattr(getattr(current, "response", None), "status_code", None)
+        if isinstance(code, (int, str)) and str(code).isdigit():
+            status = int(code)
+            if status in _RETRYABLE_CODES:
+                return True
+            if 400 <= status < 500:
+                # Bad credentials / invalid prompts are not repaired by retry,
+                # even if their exception context contains an earlier net error.
+                return False
+        if isinstance(current, (TimeoutError, ConnectionError, httpx.NetworkError,
+                                httpx.TimeoutException, httpx.RemoteProtocolError, httpx.ProxyError)):
+            return True
+        if _is_rate_limited(current):
+            return True
+        msg = str(current).lower()
+        if any(hint in msg for hint in (
+            "timeout", "timed out", "deadline", "server disconnected",
+            "connection reset", "connection aborted", "remote end closed connection",
+            "peer closed connection", "incomplete chunked read",
+        )):
+            return True
+        name = type(current).__name__.lower()
+        if any(hint in name for hint in (*_RETRYABLE_HINTS, "remoteprotocolerror", "connecterror", "readerror", "writeerror")):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def gemini_error_detail(error: Exception) -> str:
+    """Use the redacted root message recorded by the actual API retry loop."""
+    return getattr(error, "_gemini_error_detail", None) or str(error) or type(error).__name__
 
 
 # Trả về True nếu muốn retry (lỗi quá tải), False nếu fail dứt điểm.
@@ -331,6 +363,13 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
             raise
         except Exception as e:
             last_err = e
+            error_text = str(e) or type(e).__name__
+            for secret in keys:
+                error_text = error_text.replace(secret, "[API key đã ẩn]")
+            # Preserve exception types for existing callers, while letting the
+            # translation layer report the actual attempt count and root cause.
+            e._gemini_attempts = i + 1
+            e._gemini_error_detail = error_text
             model_unavailable = bool(model) and _is_model_unavailable(e)
             retryable = model_unavailable or _should_retry(e)
             retrying = retryable and i < _max_attempts - 1 and (
@@ -338,9 +377,6 @@ def gemini_call_rotating(fn_factory, *args, _max_attempts: int = 5, _timeout: fl
             )
             delay = random.uniform(2, 8) if retrying else 0.0
             if _log_fn:
-                error_text = str(e)
-                for secret in keys:
-                    error_text = error_text.replace(secret, "[API key đã ẩn]")
                 action = (
                     f"Chờ {delay:.1f}s rồi thử tổ hợp key/model tiếp theo (vẫn tuân thủ cooldown nếu có)."
                     if retrying else "Đã hết lượt thử." if retryable else "Lỗi không thể tự thử lại."
